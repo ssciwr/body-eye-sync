@@ -1,32 +1,42 @@
+[project]
+name = "amgaze-tracklet-clustering"
+version = "0.1.0"
+description = "Cluster BoxMoT tracklets into per-person identities using body re-ID (OSNet) + face (InsightFace) embeddings."
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "boxmot>=19,<20",
+    "numpy",
+    "opencv-python",
+    "pillow",
+    "pyside6",
+    "qtpy",
+    "scikit-learn",
+    "tqdm",
+    "torch",
+    "torchvision",
+    "torchreid",
+    "ultralytics",
+    "gdown",
+    "insightface",
+    "onnxruntime-gpu",
+    "tensorboard>=2.20.0",
+]
+
+[project.scripts]
+amgaze = "amgaze.gui:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[project]
-name = "body-eye-sync"
-version = "0.0.1"
-dependencies = ["boxmot", "click"]
-authors = [
-    { name = "SSC" },
-]
-license = "MIT"
-license-files = ["LICENSE.md"]
-description = "Synchronize body and eye tracking data"
-readme = "README.md"
-requires-python = ">=3.10"
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "Operating System :: OS Independent",
-]
+[tool.hatch.build.targets.wheel]
+packages = ["src/amgaze"]
 
-[project.urls]
-Github = "https://github.com/ssciwr/body-eye-sync"
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128" }]
+torchvision = [{ index = "pytorch-cu128" }]
 
-[dependency-groups]
-dev = [
-    "pytest",
-    "pytest-cov",
-]
-
-[project.scripts]
-body-eye-sync = "body_eye_sync.__main__:main"
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
