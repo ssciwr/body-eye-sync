@@ -2,65 +2,76 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
-from typing import NamedTuple
+from typing import Callable
 
-# Hardcoded tracking parameters. These keep the public function simple for now;
-# they can be promoted to arguments once the pipeline needs to vary them.
-_DETECTOR = "yolov8n"
-_REID = "osnet_x0_25_msmt17"
-_TRACKER = "botsort"
-_DEVICE = "cpu"
+import numpy as np
+import pandas as pd
+from boxmot import track
+from boxmot.engine.workflows.support import (
+    build_detector_from_spec,
+    build_tracker_from_spec,
+    build_tracker_with_reid_spec,
+)
 
-
-class Detection(NamedTuple):
-    """A single tracked detection within a tracklet."""
-
-    frame: int
-    x: float
-    y: float
-    w: float
-    h: float
-    conf: float
+_COLUMNS = ["frame", "track_id", "x1", "y1", "x2", "y2", "conf"]
 
 
-def detect_tracklets(video_path: str | Path) -> dict[int, list[Detection]]:
-    """Track people in a video and return the detections grouped by tracklet.
+def detect_tracklets(
+    video_path: str | Path,
+    detector: str = "yolov8n",
+    reid: str = "osnet_x0_25_msmt17",
+    tracker: str = "botsort",
+    device: str = "cpu",
+    progress: Callable[[int], None] | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
+) -> pd.DataFrame:
+    """Track people in a video and return one row per tracked detection.
 
     Runs BoxMOT (person detection + ReID tracking) over every frame of
-    ``video_path`` and returns a mapping from track id to the list of
-    detections making up that tracklet, ordered by frame.
+    ``video_path``. Returns a :class:`pandas.DataFrame` with columns
+    ``frame, track_id, x1, y1, x2, y2, conf``, sorted by frame; the detections
+    sharing a ``track_id`` form a tracklet, and conf is the per-frame confidence
+    of the object detector.
+
+    If given, ``progress`` is called with the (1-based) frame index after each
+    frame is processed, and ``is_cancelled`` is polled before each frame; when it
+    returns ``True`` tracking stops early and the detections gathered so far are
+    returned.
     """
-    from boxmot import Boxmot
+    progress = progress or (lambda _frame_idx: None)
+    is_cancelled = is_cancelled or (lambda: False)
 
-    with tempfile.TemporaryDirectory() as workspace:
-        runner = Boxmot(
-            detector=_DETECTOR,
-            reid=_REID,
-            tracker=_TRACKER,
-            classes=[0],  # COCO class 0 == person
-            project=workspace,
-        )
-        result = runner.track(
-            source=str(video_path),
-            device=_DEVICE,
-            save_txt=True,
-            verbose=False,
-        )
-        return _parse_mot(Path(result.text_path))
+    object_classes = [0]  # only detect people
+    detector_runtime = build_detector_from_spec(
+        detector, classes=object_classes, device=device
+    )
+    tracker_runtime = build_tracker_from_spec(tracker, device=device)
+    reid_runtime = build_tracker_with_reid_spec(
+        tracker, tracker_runtime, reid, device=device
+    )
 
-
-def _parse_mot(path: Path) -> dict[int, list[Detection]]:
-    """Parse a BoxMOT MOT results file (``frame,id,x,y,w,h,conf,cls,det_ind``)."""
-    tracklets: dict[int, list[Detection]] = {}
-    for line in path.read_text().splitlines():
-        if not line.strip():
+    blocks = []
+    for frame_result in track(
+        str(video_path), detector_runtime, reid_runtime, tracker_runtime, verbose=False
+    ):
+        if is_cancelled():
+            break
+        progress(frame_result.frame_idx)
+        tracks = frame_result.tracks
+        if len(tracks) == 0:
             continue
-        frame, track_id, x, y, w, h, conf = line.split(",")[:7]
-        tracklets.setdefault(int(track_id), []).append(
-            Detection(int(frame), float(x), float(y), float(w), float(h), float(conf))
+        blocks.append(
+            np.column_stack(
+                [
+                    np.full(len(tracks), frame_result.frame_idx),
+                    tracks.id,
+                    tracks.xyxy,
+                    tracks.conf,
+                ]
+            )
         )
-    for detections in tracklets.values():
-        detections.sort(key=lambda d: d.frame)
-    return tracklets
+
+    data = np.vstack(blocks) if blocks else np.empty((0, len(_COLUMNS)))
+    df = pd.DataFrame(data, columns=_COLUMNS)
+    return df.astype({"frame": int, "track_id": int})

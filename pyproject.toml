@@ -5,7 +5,16 @@ build-backend = "hatchling.build"
 [project]
 name = "body-eye-sync"
 version = "0.0.1"
-dependencies = ["boxmot", "ultralytics", "click", "qtpy", "pyside6"]
+dependencies = [
+    "boxmot",
+    "ultralytics",
+    "click",
+    "numpy",
+    "opencv-python",
+    "pandas",
+    "qtpy",
+    "pyside6",
+]
 authors = [
     { name = "SSC" },
 ]
@@ -13,7 +22,7 @@ license = "MIT"
 license-files = ["LICENSE.md"]
 description = "Synchronize body and eye tracking data"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
@@ -26,6 +35,7 @@ Github = "https://github.com/ssciwr/body-eye-sync"
 dev = [
     "pytest",
     "pytest-cov",
+    "pytest-qt",
 ]
 build = [
     "pyinstaller",
