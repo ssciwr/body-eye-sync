@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "body-eye-sync"
 version = "0.0.1"
-dependencies = ["boxmot", "click", "qtpy", "pyside6"]
+dependencies = ["boxmot", "ultralytics", "click", "qtpy", "pyside6"]
 authors = [
     { name = "SSC" },
 ]
