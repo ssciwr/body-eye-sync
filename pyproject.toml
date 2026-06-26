@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "body-eye-sync"
 version = "0.0.1"
-dependencies = ["boxmot", "click"]
+dependencies = ["boxmot", "click", "qtpy", "pyside6"]
 authors = [
     { name = "SSC" },
 ]
@@ -30,3 +30,4 @@ dev = [
 
 [project.scripts]
 body-eye-sync = "body_eye_sync.__main__:main"
+body-eye-sync-cli = "body_eye_sync.cli:main"

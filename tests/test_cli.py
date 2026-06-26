@@ -1,4 +1,4 @@
-from body_eye_sync.__main__ import main
+from body_eye_sync.cli import main
 
 from click.testing import CliRunner
 

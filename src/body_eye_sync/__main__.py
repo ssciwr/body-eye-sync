@@ -1,9 +1,15 @@
-import click
+import sys
+
+from qtpy.QtWidgets import QApplication
+
+from body_eye_sync.gui import MainWindow
 
 
-@click.command()
 def main():
-    click.echo("This is body_eye_sync's command line interface.")
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

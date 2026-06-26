@@ -43,6 +43,12 @@ To run the GUI:
 uv run body-eye-sync
 ```
 
+To run the CLI:
+
+```
+uv run body-eye-sync-cli --help
+```
+
 To run the tests:
 
 ```
