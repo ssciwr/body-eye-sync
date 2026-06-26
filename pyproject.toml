@@ -37,9 +37,6 @@ dev = [
     "pytest-cov",
     "pytest-qt",
 ]
-build = [
-    "pyinstaller",
-]
 
 [project.scripts]
 body-eye-sync = "body_eye_sync.__main__:main"

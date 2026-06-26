@@ -26,23 +26,25 @@ jobs:
           verbose: true
 
   build-windows:
-    name: Build Windows exe
+    name: Build Windows installer
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.0.0
         with:
           python-version: "3.13"
-      - run: uv sync --group build
-      - run: >
-          uv run pyinstaller
-          --noconfirm
-          --windowed
-          --name body-eye-sync
-          --collect-all boxmot
-          src/body_eye_sync/__main__.py
+      - run: uv build --wheel --out-dir installer
+      - uses: conda-incubator/setup-miniconda@v4
+        with:
+          miniforge-version: latest
+      - name: Install constructor
+        shell: bash -el {0}
+        run: conda install -n base -y -c conda-forge constructor nsis
+      - name: Build installer
+        shell: bash -el {0}
+        run: conda run -n base constructor installer/ --output-dir installer-dist
       - uses: actions/upload-artifact@v7
         with:
-          name: body-eye-sync-windows
-          path: dist/body-eye-sync
+          name: body-eye-sync-windows-installer
+          path: installer-dist/*.exe
           if-no-files-found: error

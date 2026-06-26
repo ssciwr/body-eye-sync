@@ -10,6 +10,8 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+installer-dist/
+installer/*.whl
 develop-eggs/
 dist/
 downloads/

@@ -1,0 +1,52 @@
+# constructor configuration for the Windows installer.
+#
+# Strategy: the entire native/heavy stack (torch, opencv, ultralytics, ...) is
+# installed from conda-forge, where the binaries are built and dependency-
+# resolved correctly. Only the two pure-Python pieces that are not on
+# conda-forge -- our own package and boxmot -- are added on top with a
+# `--no-deps` pip step in post_install.bat (every boxmot dependency is already
+# provided by the conda specs below).
+#
+# Build with:  constructor installer/
+name: body-eye-sync
+version: 0.0.1
+installer_type: exe
+
+channels:
+  - conda-forge
+
+# Direct dependencies only; conda resolves their transitive dependencies.
+specs:
+  - python 3.11.*
+  - pip
+  - pytorch >=2.2
+  - torchvision
+  - opencv
+  - ultralytics
+  - pyside6
+  - qtpy
+  - click
+  - numpy
+  - pandas
+  - scikit-learn
+  - filterpy
+  - ftfy
+  - gdown
+  - yacs
+  - lap          # provides the `lap` import boxmot needs (pip name: lapx)
+  - huggingface_hub
+  - regex
+  - rich
+  - menuinst    # creates the Start-menu/desktop shortcut in post_install.bat
+
+# Our wheel is built in CI and copied next to this file before running
+# constructor; it is laid down in the install prefix and pip-installed by
+# post_install.bat.
+extra_files:
+  - body_eye_sync-0.0.1-py3-none-any.whl
+  - menu.json
+
+post_install: post_install.bat
+pre_uninstall: pre_uninstall.bat
+
+license_file: ../LICENSE.md

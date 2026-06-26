@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$id": "https://schemas.conda.org/menuinst-1.schema.json",
+  "menu_name": "body-eye-sync",
+  "menu_items": [
+    {
+      "name": "body-eye-sync",
+      "description": "Synchronize body and eye tracking data",
+      "command": ["{{ PREFIX }}/pythonw.exe", "-m", "body_eye_sync"],
+      "activate": true,
+      "platforms": {
+        "win": {
+          "desktop": true
+        }
+      }
+    }
+  ]
+}
