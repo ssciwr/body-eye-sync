@@ -2,16 +2,47 @@ name: body-eye-sync
 version: "{{ version }}"
 installer_type: exe
 
+company: SSC
+uninstall_name: body-eye-sync
+
 channels:
-  - "{{ local_channel }}"   # dir of the conda packages built from installer/recipes/
   - conda-forge
 
+# A minimal base: Python + pip + menuinst. The application and all of its
+# dependencies (including CUDA torch) are pip-installed by post_install.bat from
+# the shipped, fully-pinned, hashed lockfile - so they are NOT listed here.
 specs:
   - python 3.13.*
   - pip
   - menuinst
-  - body-eye-sync
 
+# This is a self-contained application, not a Python distribution: never offer to
+# register the installed Python as the system Python, run `conda init`, or record
+# the environment in the user's conda environment list.
+register_python: false
+initialize_conda: false
+register_envs: false
+
+# Drop the conda package cache from the install directory once installed.
+keep_pkgs: false
+
+# Copied into the install prefix for post_install.bat to consume (it deletes the
+# wheel + lockfile afterwards).
+extra_files:
+  - requirements-win.lock
+  - body_eye_sync-{{ version }}-py3-none-any.whl
+  - menu.json
+
+post_install: post_install.bat
+post_install_desc: "Downloading and installing components (PyTorch, OpenCV, ...) - this can take several minutes."
+pre_uninstall: pre_uninstall.bat
+
+conclusion_text: "body-eye-sync has been installed. Launch it from the Start menu or desktop shortcut."
+
+# Branding. welcome_image is the large image on the welcome/finish pages; the
+# small header banner is generated from text, since the square logo would distort
+# when squeezed into the 150x57 header.
+welcome_image: ../resources/icon.png
+header_image_text: body-eye-sync
 icon_image: ../src/body_eye_sync/resources/icon.ico
-
 license_file: ../LICENSE.md

@@ -32,35 +32,41 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: "3.13"
       - name: Export version from pyproject
         shell: bash
         run: |
           ver=$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)
           echo "BODY_EYE_SYNC_VERSION=$ver" >> "$GITHUB_ENV"
+      - name: Build app wheel
+        run: uv build --wheel --out-dir installer
+      # Fully pin + hash every runtime dependency for the Windows/py3.13 target.
+      # torch (and torchvision) come from the CUDA 12.6 PyTorch index; everything
+      # else from PyPI. The lockfile is shipped inside the installer and installed
+      # with --require-hashes by post_install.bat.
+      - name: Generate pinned hashed lockfile (CUDA torch)
+        shell: bash
+        run: |
+          uv pip compile pyproject.toml \
+            --python-version 3.13 \
+            --default-index https://pypi.org/simple \
+            --index pytorch=https://download.pytorch.org/whl/cu126 \
+            --generate-hashes --emit-index-url \
+            -o installer/requirements-win.lock
+      - name: Render construct.yaml
+        shell: bash
+        run: uv run --no-project --with jinja2 python installer/render_construct.py
       - uses: conda-incubator/setup-miniconda@v4
         with:
           miniforge-version: latest
-      - name: Install build tools
+      - name: Install constructor
         shell: bash -el {0}
-        run: conda install -n base -y -c conda-forge constructor nsis rattler-build jinja2
-      # Build boxmot (PyPI-only) and body-eye-sync as conda packages into a local
-      # channel, so constructor can install the whole app through conda alone.
-      - name: Build conda packages
-        shell: bash -el {0}
-        run: |
-          conda run -n base rattler-build build \
-            --recipe installer/recipes/boxmot/recipe.yaml \
-            --recipe installer/recipes/body-eye-sync/recipe.yaml \
-            --output-dir output \
-            --channel conda-forge \
-            --test skip \
-            --experimental   # for load_from_file() reading the version from pyproject.toml
-          echo "LOCAL_CHANNEL=file:///$(cygpath -m "$PWD")/output" >> "$GITHUB_ENV"
+        run: conda install -n base -y -c conda-forge constructor nsis
       - name: Build installer
         shell: bash -el {0}
-        run: |
-          conda run -n base python installer/render_construct.py
-          conda run -n base constructor installer/ --output-dir installer-dist
+        run: conda run -n base constructor installer/ --output-dir installer-dist
       - uses: actions/upload-artifact@v7
         with:
           name: body-eye-sync-windows-installer
