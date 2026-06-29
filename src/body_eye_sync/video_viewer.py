@@ -24,15 +24,34 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from ultralytics.utils.plotting import colors
-
 from body_eye_sync.state import BoundingBox
+
+_PALETTE = (
+    "042AFF",
+    "0BDBEB",
+    "F3F3F3",
+    "00DFB7",
+    "111F68",
+    "FF6FDD",
+    "FF444F",
+    "CCED00",
+    "00F344",
+    "BD00FF",
+    "00B4FF",
+    "DD00BA",
+    "00FFFF",
+    "26C000",
+    "01FFB3",
+    "7D24FF",
+    "7B0068",
+    "FF1B6C",
+    "FC6D2F",
+    "A2FF0B",
+)
 
 
 def _color_for_id(track_id: int) -> QColor:
-    """Pick a colour for a track id, matching BoxMOT's own palette."""
-    r, g, b = colors(int(track_id))  # ultralytics palette (RGB)
-    return QColor(r, g, b)
+    return QColor("#" + _PALETTE[int(track_id) % len(_PALETTE)])
 
 
 class VideoViewer(QWidget):
@@ -48,9 +67,6 @@ class VideoViewer(QWidget):
         self._frame_count = 0
         self._fps = 25.0
         self._current = 0
-        # Index the capture will return on the next read; lets us avoid an
-        # expensive seek when playing back sequentially.
-        self._next_read = 0
 
         # Overlay drawing: a provider maps a frame index -> boxes to draw, and
         # the viewer redraws them itself whenever the frame changes.
@@ -110,7 +126,6 @@ class VideoViewer(QWidget):
         self._cap = cap
         self._frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
         self._fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        self._next_read = 0
         self._timer.setInterval(int(1000 / self._fps))
 
         last = max(0, self._frame_count - 1)
@@ -174,20 +189,20 @@ class VideoViewer(QWidget):
     # Internals
     # ------------------------------------------------------------------
     def _read(self, index: int):
-        if index != self._next_read:
+        # The capture cursor sits at _current + 1 after the last read, so only
+        # seek (expensive) when the requested frame isn't the next one.
+        if index != self._current + 1:
             self._cap.set(cv2.CAP_PROP_POS_FRAMES, index)
         ok, frame = self._cap.read()
         if not ok:
             return None
-        self._next_read = index + 1
         return frame
 
     def _show(self, frame) -> None:
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        height, width = rgb.shape[:2]
+        height, width = frame.shape[:2]
         image = QImage(
-            rgb.data, width, height, rgb.strides[0], QImage.Format_RGB888
-        ).copy()  # copy so the QImage owns the buffer
+            frame.data, width, height, frame.strides[0], QImage.Format_BGR888
+        )
         self._pixmap_item.setPixmap(QPixmap.fromImage(image))
         self._scene.setSceneRect(0, 0, width, height)
 

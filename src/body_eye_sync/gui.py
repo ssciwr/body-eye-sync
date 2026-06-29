@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 
 from qtpy.QtCore import QObject, Signal, Slot
+from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -17,8 +18,9 @@ from qtpy.QtWidgets import (
 )
 
 from body_eye_sync.state import AppState
-from body_eye_sync.tracking import detect_tracklets
 from body_eye_sync.video_viewer import VideoViewer
+
+_ICON = Path(__file__).parent / "resources" / "icon.ico"
 
 
 class TrackingWorker(QObject):
@@ -40,6 +42,10 @@ class TrackingWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
+            # Imported here, not at module load, so the heavy boxmot/torch stack
+            # only loads when tracking is actually run (keeps GUI startup fast).
+            from body_eye_sync.tracking import detect_tracklets
+
             tracklets = detect_tracklets(
                 self._video_path,
                 progress=self.progress.emit,
@@ -58,6 +64,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("body-eye-sync")
+        self.setWindowIcon(QIcon(str(_ICON)))
 
         self.state = AppState()
         self._thread: threading.Thread | None = None

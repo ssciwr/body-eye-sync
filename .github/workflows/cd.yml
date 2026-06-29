@@ -34,6 +34,12 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv build --wheel --out-dir installer
+      - name: Export version from wheel
+        shell: bash
+        run: |
+          whl=$(basename installer/body_eye_sync-*.whl)
+          ver=${whl#body_eye_sync-}; ver=${ver%-py3-none-any.whl}
+          echo "BODY_EYE_SYNC_VERSION=$ver" >> "$GITHUB_ENV"
       - uses: conda-incubator/setup-miniconda@v4
         with:
           miniforge-version: latest
@@ -48,3 +54,11 @@ jobs:
           name: body-eye-sync-windows-installer
           path: installer-dist/*.exe
           if-no-files-found: error
+      - name: Install and test the built installer
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem installer-dist\*.exe)[0].FullName
+          Start-Process -Wait -FilePath $exe -ArgumentList '/S','/D=C:\bes'
+          C:\bes\python.exe -m pip install pytest pytest-qt
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          C:\bes\python.exe -m pytest tests

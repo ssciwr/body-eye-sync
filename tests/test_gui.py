@@ -14,6 +14,10 @@ def test_run_button_disabled_until_video_loaded(window):
     assert not window.run_button.isEnabled()
 
 
+def test_window_has_icon(window):
+    assert not window.windowIcon().isNull()
+
+
 def test_load_video_enables_run_button(window, data_dir):
     video = data_dir / "three-people.mp4"
     window._load_video(video)

@@ -68,7 +68,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "boxmot" },
+    { name = "boxmot", specifier = "==21.0.0" },
     { name = "click" },
     { name = "numpy" },
     { name = "opencv-python" },

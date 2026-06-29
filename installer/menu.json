@@ -7,6 +7,7 @@
       "name": "body-eye-sync",
       "description": "Synchronize body and eye tracking data",
       "command": ["{{ PREFIX }}/pythonw.exe", "-m", "body_eye_sync"],
+      "icon": "{{ PREFIX }}/Lib/site-packages/body_eye_sync/resources/icon.ico",
       "activate": true,
       "platforms": {
         "win": {
