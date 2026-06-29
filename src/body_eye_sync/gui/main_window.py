@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import threading
+from importlib.resources import as_file, files
 from pathlib import Path
 
-from qtpy.QtCore import QObject, Signal, Slot
+from qtpy.QtCore import Slot
 from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import (
     QFileDialog,
@@ -17,56 +18,19 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from body_eye_sync.state import AppState
-from body_eye_sync.video_viewer import VideoViewer
-
-_ICON = Path(__file__).parent / "resources" / "icon.ico"
-
-
-class TrackingWorker(QObject):
-    """Runs :func:`detect_tracklets` off the GUI thread."""
-
-    progress = Signal(int)
-    finished = Signal(object)
-    failed = Signal(str)
-    cancelled = Signal()
-
-    def __init__(self, video_path: str | Path) -> None:
-        super().__init__()
-        self._video_path = video_path
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
-
-    @Slot()
-    def run(self) -> None:
-        try:
-            # Imported here, not at module load, so the heavy boxmot/torch stack
-            # only loads when tracking is actually run (keeps GUI startup fast).
-            from body_eye_sync.tracking import detect_tracklets
-
-            tracklets = detect_tracklets(
-                self._video_path,
-                progress=self.progress.emit,
-                is_cancelled=self._cancel.is_set,
-            )
-        except Exception as exc:  # surface any failure to the GUI
-            self.failed.emit(str(exc))
-            return
-        if self._cancel.is_set():
-            self.cancelled.emit()
-        else:
-            self.finished.emit(tracklets)
+from body_eye_sync.experiment.video import Video
+from body_eye_sync.gui.tracking_worker import TrackingWorker
+from body_eye_sync.gui.video_viewer import VideoViewer
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("body-eye-sync")
-        self.setWindowIcon(QIcon(str(_ICON)))
+        with as_file(files(__package__) / "resources" / "icon.ico") as icon_path:
+            self.setWindowIcon(QIcon(str(icon_path)))
 
-        self.state = AppState()
+        self.video = Video()
         self._thread: threading.Thread | None = None
         self._worker: TrackingWorker | None = None
         self._in_setup = False
@@ -87,7 +51,6 @@ class MainWindow(QMainWindow):
         self.cancel_button.clicked.connect(self._cancel_tracking)
 
         self.video_viewer = VideoViewer()
-        self.video_viewer.set_box_provider(self.state.boxes_for_frame)
 
         top_bar = QHBoxLayout()
         top_bar.addWidget(self.open_button)
@@ -107,9 +70,6 @@ class MainWindow(QMainWindow):
         central.setLayout(layout)
         self.setCentralWidget(central)
 
-    # ------------------------------------------------------------------
-    # File selection
-    # ------------------------------------------------------------------
     def _choose_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -121,38 +81,33 @@ class MainWindow(QMainWindow):
             self._load_video(Path(path))
 
     def _load_video(self, path: Path) -> None:
+        self.video.set_video(path)
         try:
-            self.video_viewer.load(path)
+            self.video_viewer.load(self.video)
         except OSError as exc:
             QMessageBox.critical(self, "Could not open video", str(exc))
             return
-        # Only commit the new video to state once it has opened successfully.
-        # set_video() clears any previous tracklets, so refresh the overlays to
-        # drop boxes from the old video off the freshly displayed first frame.
-        self.state.set_video(path)
-        self.video_viewer.refresh_overlays()
         self.file_label.setText(str(path))
         self.run_button.setEnabled(True)
 
-    # ------------------------------------------------------------------
-    # Tracking
-    # ------------------------------------------------------------------
     def _start_tracking(self) -> None:
-        if self.state.video_path is None or self._thread is not None:
+        if self.video.video_path is None or self._thread is not None:
             return
 
+        self.video.clear()
         self._set_running(True)
         # Weights are built/downloaded before the first frame is processed, so
-        # show a busy bar until the first progress callback arrives.
+        # show a busy bar until the first frame arrives.
         self._in_setup = True
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setFormat("Downloading weights…")
 
-        # The worker lives in the GUI thread, so its signals are auto-queued to
-        # this thread when emitted from the background thread.
-        self._worker = TrackingWorker(self.state.video_path)
-        self._worker.progress.connect(self._on_progress)
+        # The worker writes tracked frames straight into our Video; its signals
+        # are auto-queued to this thread so we only redraw from the GUI thread.
+        self._worker = TrackingWorker(self.video)
+        self._worker.new_frame.connect(self._on_new_frame)
+        self._worker.new_frame.connect(self.video_viewer.show_live_frame)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.cancelled.connect(self._on_cancelled)
@@ -160,8 +115,8 @@ class MainWindow(QMainWindow):
         self._thread = threading.Thread(target=self._worker.run, daemon=True)
         self._thread.start()
 
-    @Slot(int)
-    def _on_progress(self, frame_idx: int) -> None:
+    @Slot(object)
+    def _on_new_frame(self, frame) -> None:
         total = self.video_viewer.frame_count
         if self._in_setup:
             # First frame processed: switch from the busy "downloading" bar to a
@@ -170,7 +125,7 @@ class MainWindow(QMainWindow):
             self.progress_bar.setRange(0, total)
             self.progress_bar.setFormat("%p%" if total else "Tracking…")
         if total:
-            self.progress_bar.setValue(frame_idx)
+            self.progress_bar.setValue(frame.frame_idx)
 
     def _cancel_tracking(self) -> None:
         if self._worker is not None:
@@ -178,40 +133,45 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self.cancel_button.setText("Cancelling…")
 
-    @Slot(object)
-    def _on_finished(self, tracklets) -> None:
-        self.state.set_tracklets(tracklets)
-        self.video_viewer.refresh_overlays()
+    @Slot()
+    def _on_finished(self) -> None:
+        # The worker has folded its results into the video and the viewer is
+        # already showing the last tracked frame; _set_running redraws that
+        # frame's boxes from the stored data.
+        data = self.video.data
         self.statusBar().showMessage(
-            f"Tracking finished: {tracklets['track_id'].nunique()} tracklets, "
-            f"{len(tracklets)} detections"
+            f"Tracking finished: {data['track_id'].nunique()} tracklets, "
+            f"{len(data)} detections"
         )
         self._set_running(False)
 
     @Slot(str)
     def _on_failed(self, message: str) -> None:
         QMessageBox.critical(self, "Tracking failed", message)
+        self.video.clear()
         self._set_running(False)
 
     @Slot()
     def _on_cancelled(self) -> None:
         self.statusBar().showMessage("Tracking cancelled")
+        self.video.clear()
         self._set_running(False)
 
     def _set_running(self, running: bool) -> None:
         if not running:
-            # The background thread has reported back; drop our references to it.
+            # background thread has reported back; drop our references to it.
             self._thread = None
             self._worker = None
-        self.run_button.setEnabled(not running and self.state.video_path is not None)
+            self.video_viewer.refresh_overlays()
+        self.run_button.setEnabled(not running and self.video.video_path is not None)
         self.open_button.setEnabled(not running)
+        self.video_viewer.enable_controls(not running)
         self.progress_bar.setVisible(running)
         self.cancel_button.setVisible(running)
         self.cancel_button.setEnabled(True)
         self.cancel_button.setText("Cancel")
 
     def closeEvent(self, event) -> None:
-        # Make sure a running tracking thread stops cleanly before we exit.
         if self._worker is not None:
             self._worker.cancel()
         if self._thread is not None:
