@@ -1,0 +1,17 @@
+name: body-eye-sync
+version: "{{ version }}"
+installer_type: exe
+
+channels:
+  - "{{ local_channel }}"   # dir of the conda packages built from installer/recipes/
+  - conda-forge
+
+specs:
+  - python 3.13.*
+  - pip
+  - menuinst
+  - body-eye-sync
+
+icon_image: ../src/body_eye_sync/resources/icon.ico
+
+license_file: ../LICENSE.md

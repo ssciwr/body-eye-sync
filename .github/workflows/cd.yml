@@ -18,7 +18,7 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.0.0
+      - uses: astral-sh/setup-uv@v8.1.0
       - run: uv build
       - if: github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/')
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -28,27 +28,39 @@ jobs:
   build-windows:
     name: Build Windows installer
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.0.0
-        with:
-          python-version: "3.13"
-      - run: uv build --wheel --out-dir installer
-      - name: Export version from wheel
+      - name: Export version from pyproject
         shell: bash
         run: |
-          whl=$(basename installer/body_eye_sync-*.whl)
-          ver=${whl#body_eye_sync-}; ver=${ver%-py3-none-any.whl}
+          ver=$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)
           echo "BODY_EYE_SYNC_VERSION=$ver" >> "$GITHUB_ENV"
       - uses: conda-incubator/setup-miniconda@v4
         with:
           miniforge-version: latest
-      - name: Install constructor
+      - name: Install build tools
         shell: bash -el {0}
-        run: conda install -n base -y -c conda-forge constructor nsis
+        run: conda install -n base -y -c conda-forge constructor nsis rattler-build jinja2
+      # Build boxmot (PyPI-only) and body-eye-sync as conda packages into a local
+      # channel, so constructor can install the whole app through conda alone.
+      - name: Build conda packages
+        shell: bash -el {0}
+        run: |
+          conda run -n base rattler-build build \
+            --recipe installer/recipes/boxmot/recipe.yaml \
+            --recipe installer/recipes/body-eye-sync/recipe.yaml \
+            --output-dir output \
+            --channel conda-forge \
+            --test skip \
+            --experimental   # for load_from_file() reading the version from pyproject.toml
+          echo "LOCAL_CHANNEL=file:///$(cygpath -m "$PWD")/output" >> "$GITHUB_ENV"
       - name: Build installer
         shell: bash -el {0}
-        run: conda run -n base constructor installer/ --output-dir installer-dist
+        run: |
+          conda run -n base python installer/render_construct.py
+          conda run -n base constructor installer/ --output-dir installer-dist
       - uses: actions/upload-artifact@v7
         with:
           name: body-eye-sync-windows-installer
@@ -62,3 +74,9 @@ jobs:
           C:\bes\python.exe -m pip install pytest pytest-qt
           $env:QT_QPA_PLATFORM = 'offscreen'
           C:\bes\python.exe -m pytest tests
+      - name: Publish installer to GitHub Release
+        if: github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer-dist/*.exe
+          fail_on_unmatched_files: true

@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "body-eye-sync"
 version = "0.0.1"
 dependencies = [
-    "boxmot==21.0.0", # if bumped, update installer/post_install.bat and re-sync the mirrored boxmot deps in installer/construct.yaml
+    "boxmot==21.0.0", # if bumped, update version + sha256 + run deps in installer/recipes/boxmot/recipe.yaml
     "ultralytics",
     "click",
     "numpy",
