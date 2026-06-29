@@ -1,3 +1,4 @@
 *.whl
-# generated from construct.yaml.j2 by render_construct.py
+# generated in CI
 construct.yaml
+requirements-win.lock
