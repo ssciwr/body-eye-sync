@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "body-eye-sync"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
     "boxmot>=21.0.0,<22.0.0",  # see pipeline/object_tracking.py
     "ultralytics",
@@ -14,6 +14,9 @@ dependencies = [
     "packaging",
     "pandas",
     "platformdirs",
+    "pyarrow",
+    "pydantic",
+    "pyyaml",
     "qtpy",
     "pyside6",
     "insightface",
@@ -41,6 +44,7 @@ dev = [
     "pytest-cov",
     "pytest-qt",
     "pytest-randomly",
+    "zensical>=0.0.46",
 ]
 
 [project.scripts]

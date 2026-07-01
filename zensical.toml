@@ -1,0 +1,34 @@
+[project]
+site_name = "Body Eye Sync"
+site_description = "Documentation for the Body Eye Sync Python GUI and batch pipeline."
+site_author = "SSC"
+site_url = "https://ssciwr.github.io/body-eye-sync/"
+copyright = "Copyright &copy; 2026 The authors"
+
+nav = [
+  { "Home" = "index.md" },
+  { "User Guide" = [
+    { "Installation" = "installation.md" },
+    { "Getting Started" = "getting-started.md" },
+    { "Experiments" = "experiments.md" },
+    { "Command Line" = "cli.md" },
+    { "Outputs" = "outputs.md" },
+  ] },
+  { "Development" = "development.md" },
+]
+
+[project.theme]
+language = "en"
+logo = "assets/images/icon.png"
+favicon = "assets/images/icon.png"
+features = [
+  "content.code.copy",
+  "navigation.footer",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+]
