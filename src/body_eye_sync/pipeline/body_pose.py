@@ -8,9 +8,12 @@ from typing import Iterable, Iterator, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
-from platformdirs import user_cache_path
 
-from body_eye_sync.pipeline.object_tracking import BoundingBox, default_device
+from body_eye_sync.pipeline.object_tracking import (
+    BoundingBox,
+    cached_model_path,
+    default_device,
+)
 
 #: Default Ultralytics pose weights. Resolved into the app cache before loading.
 DEFAULT_MODEL_NAME = "yolov8n-pose.pt"
@@ -168,21 +171,6 @@ def _as_array(value) -> np.ndarray:
     return np.asarray(value, dtype=float)
 
 
-def default_model_path(model_name: str = DEFAULT_MODEL_NAME) -> Path:
-    """Path for bundled/default pose weights in a cross-platform user cache."""
-    cache_dir = user_cache_path("body-eye-sync", "SSC") / "models"
-    return cache_dir / model_name
-
-
-def _resolve_model(model_name: str | Path) -> str:
-    """Resolve the built-in model name to cache; leave explicit paths untouched."""
-    if Path(model_name) == Path(DEFAULT_MODEL_NAME):
-        model_path = default_model_path()
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-        return str(model_path)
-    return str(model_name)
-
-
 def _detect_in_boxes(
     model,
     image,
@@ -249,7 +237,7 @@ def detect_body_poses(
     if device is None:
         device = default_device()
 
-    model = YOLO(_resolve_model(model_name))
+    model = YOLO(cached_model_path(model_name))
 
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():

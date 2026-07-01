@@ -40,8 +40,10 @@ def _media_foundation_missing() -> bool:
 
 
 @click.command()
+@click.argument("experiment", required=False)
 @click.version_option(package_name="body-eye-sync", prog_name="body-eye-sync")
-def main():
+def main(experiment):
+    """Launch the GUI, optionally opening the EXPERIMENT folder on startup."""
     from qtpy.QtWidgets import QApplication, QMessageBox
 
     app = QApplication(sys.argv)
@@ -57,6 +59,11 @@ def main():
 
     window = MainWindow()
     window.show()
+
+    # A folder passed on the command line is opened as an experiment; any problem
+    # (missing config, bad video path) is surfaced in the window, not on stderr.
+    if experiment is not None:
+        window.load_experiment(experiment)
 
     # Check GitHub for a newer version and, if found, offer to update.
     updater = AutoUpdater(window)

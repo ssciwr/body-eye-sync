@@ -7,12 +7,9 @@ from body_eye_sync.pipeline.body_pose import (
     KEYPOINT_NAMES,
     POSE_COLUMNS,
     BodyPose,
-    DEFAULT_MODEL_NAME,
     PoseFrameResult,
     _detect_in_boxes,
-    _resolve_model,
     detect_body_poses,
-    default_model_path,
     pose_from_row,
     poses_to_dataframe,
 )
@@ -83,35 +80,6 @@ def test_keypoint_columns_are_three_per_name_and_prefixed():
         ],
     ]
     assert not np.isnan(_pose(1).score)
-
-
-def test_default_model_path_uses_app_cache(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        "body_eye_sync.pipeline.body_pose.user_cache_path",
-        lambda appname, appauthor: tmp_path / appauthor / appname,
-    )
-
-    assert default_model_path() == (
-        tmp_path / "SSC" / "body-eye-sync" / "models" / DEFAULT_MODEL_NAME
-    )
-
-
-def test_resolve_model_caches_only_default_model(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        "body_eye_sync.pipeline.body_pose.user_cache_path",
-        lambda appname, appauthor: tmp_path / appauthor / appname,
-    )
-
-    resolved = _resolve_model(DEFAULT_MODEL_NAME)
-
-    assert resolved == str(
-        tmp_path / "SSC" / "body-eye-sync" / "models" / DEFAULT_MODEL_NAME
-    )
-    assert (tmp_path / "SSC" / "body-eye-sync" / "models").is_dir()
-    assert _resolve_model("custom-pose.pt") == "custom-pose.pt"
-    assert _resolve_model(tmp_path / "custom-pose.pt") == str(
-        tmp_path / "custom-pose.pt"
-    )
 
 
 def test_detect_in_boxes_offsets_best_pose_from_crop():

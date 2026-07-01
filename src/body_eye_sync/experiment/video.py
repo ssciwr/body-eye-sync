@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Mapping
 
 import numpy as np
 import pandas as pd
@@ -173,3 +174,31 @@ class Video:
         self._frames = []
         self._face_frames = []
         self._pose_frames = []
+
+    def to_parquet(
+        self, path: str | Path, metadata: Mapping[str, str] | None = None
+    ) -> None:
+        """Write the completed :attr:`data` to a Parquet file.
+
+        ``metadata`` is stored as string key/value pairs in the Parquet schema
+        (used to stamp the run's provenance), leaving the table columns untouched.
+        Raises :class:`ValueError` if there is no completed data to write.
+        """
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        if self._data is None:
+            raise ValueError("no data to write; run the pipeline first")
+        table = pa.Table.from_pandas(self._data, preserve_index=False)
+        if metadata:
+            existing = table.schema.metadata or {}
+            extra = {k.encode(): v.encode() for k, v in metadata.items()}
+            table = table.replace_schema_metadata({**existing, **extra})
+        pq.write_table(table, str(path))
+
+    @classmethod
+    def from_parquet(cls, path: str | Path) -> "Video":
+        """Load a :class:`Video` from a Parquet file written by :meth:`to_parquet`."""
+        video = cls()
+        video.set_data(pd.read_parquet(path))
+        return video
