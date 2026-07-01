@@ -53,9 +53,15 @@ def main():
         return
 
     from body_eye_sync.gui import MainWindow
+    from body_eye_sync.gui.autoupdate import AutoUpdater
 
     window = MainWindow()
     window.show()
+
+    # Check GitHub for a newer version and, if found, offer to update.
+    updater = AutoUpdater(window)
+    updater.start()
+
     sys.exit(app.exec())
 
 
