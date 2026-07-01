@@ -1,3 +1,4 @@
+import os
 import sys
 
 import click
@@ -10,6 +11,19 @@ _MEDIA_FEATURE_PACK_MESSAGE = (
     "Settings → Apps → Optional features → Add a feature "
     "→ Media Feature Pack"
 )
+
+
+def _ensure_standard_streams() -> None:
+    """Provide writable streams when Windows starts the GUI via pythonw.exe."""
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+        original_name = f"__{name}__"
+        if getattr(sys, original_name, None) is None:
+            setattr(sys, original_name, getattr(sys, name))
+
+
+_ensure_standard_streams()
 
 
 def _media_foundation_missing() -> bool:

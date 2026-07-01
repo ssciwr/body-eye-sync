@@ -6,6 +6,7 @@ import cv2
 from qtpy.QtCore import Qt, QTimer, Signal, Slot
 from qtpy.QtGui import QBrush, QImage, QPainter, QPen, QPixmap
 from qtpy.QtWidgets import (
+    QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
@@ -22,7 +23,8 @@ from qtpy.QtWidgets import (
 )
 
 from body_eye_sync.experiment.video import Video
-from body_eye_sync.pipeline.detection import BoundingBox, boxes_from_tracks
+from body_eye_sync.pipeline.object_tracking import BoundingBox, boxes_from_tracks
+from body_eye_sync.pipeline.face_detection import FaceBox
 from body_eye_sync.gui.utils import get_color
 
 
@@ -114,11 +116,27 @@ class VideoViewer(QWidget):
     def show_live_frame(self, frame) -> None:
         """Display a freshly tracked frame and draw its boxes directly.
 
-        Connected to the tracking worker's per-frame signal; ``frame`` is a
-        BoxMOT per-frame result with 1-based indexing.
+        Connected to the object tracking worker's per-frame signal; ``frame`` is
+        a BoxMOT per-frame result with 1-based indexing.
         """
         self._goto(frame.frame_idx - 1)
         self._draw_boxes(boxes_from_tracks(frame.tracks))
+
+    @Slot(object)
+    def show_live_face_frame(self, result) -> None:
+        """Display a freshly face-detected frame, with person boxes and faces.
+
+        Connected to the face-detection worker's per-frame signal; ``result`` is
+        a :class:`FaceFrameResult` with 0-based indexing. The person boxes come
+        from the already-tracked video, the faces straight from the result.
+        """
+        self._goto(result.frame_idx)
+        self._clear_overlays()
+        if self._video is not None:
+            for box in self._video.boxes_for_frame(self._current):
+                self._add_box(box)
+        for face in result.faces:
+            self._add_face(face)
 
     def enable_controls(self, enable: bool) -> None:
         """Enable or disable the play button and seek controls."""
@@ -130,11 +148,14 @@ class VideoViewer(QWidget):
         self._spinbox.setEnabled(enable and has_frames)
 
     def refresh_overlays(self) -> None:
-        """Redraw overlays for the current frame from the video's tracklets."""
-        boxes = []
-        if self._video is not None and self._current >= 0:
-            boxes = self._video.boxes_for_frame(self._current)
-        self._draw_boxes(boxes)
+        """Redraw the current frame's person boxes and any detected faces."""
+        self._clear_overlays()
+        if self._video is None or self._current < 0:
+            return
+        for box in self._video.boxes_for_frame(self._current):
+            self._add_box(box)
+        for face in self._video.faces_for_frame(self._current):
+            self._add_face(face)
 
     @property
     def current_frame(self) -> int:
@@ -223,11 +244,11 @@ class VideoViewer(QWidget):
             self._scene.removeItem(item)
         self._overlay_items.clear()
 
-    def _add_box(self, box: BoundingBox) -> None:
-        color = get_color(box.object_id)
-
+    def _add_rect(self, box: BoundingBox, style: Qt.PenStyle) -> None:
+        """Draw ``box`` as a rectangle coloured by its id, in the given pen style."""
         rect = QGraphicsRectItem(box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1)
-        pen = QPen(color)
+        pen = QPen(get_color(box.track_id))
+        pen.setStyle(style)
         # constant on-screen pen width regardless of zoom
         pen.setCosmetic(True)
         pen.setWidth(2)
@@ -235,13 +256,31 @@ class VideoViewer(QWidget):
         self._scene.addItem(rect)
         self._overlay_items.append(rect)
 
-        label = QGraphicsSimpleTextItem(str(box.object_id))
-        label.setBrush(QBrush(color))
+    def _add_box(self, box: BoundingBox) -> None:
+        self._add_rect(box, Qt.PenStyle.SolidLine)
+
+        label = QGraphicsSimpleTextItem(str(box.track_id))
+        label.setBrush(QBrush(get_color(box.track_id)))
         # constant on-screen label size regardless of zoom
         label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
         label.setPos(box.x1, box.y1)
         self._scene.addItem(label)
         self._overlay_items.append(label)
+
+    def _add_face(self, face: FaceBox) -> None:
+        # dashed, so the face box reads as distinct from its person box
+        self._add_rect(face.box, Qt.PenStyle.DashLine)
+
+        color = get_color(face.box.track_id)
+        for px, py in face.landmarks:
+            # a small constant-size dot regardless of zoom, centred on the point
+            dot = QGraphicsEllipseItem(-2.0, -2.0, 4.0, 4.0)
+            dot.setBrush(QBrush(color))
+            dot.setPen(QPen(Qt.PenStyle.NoPen))
+            dot.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+            dot.setPos(px, py)
+            self._scene.addItem(dot)
+            self._overlay_items.append(dot)
 
     def _advance(self) -> None:
         if self._current + 1 >= self._frame_count:
