@@ -82,7 +82,7 @@ jobs:
           C:\bes\python.exe -m pytest tests
       - name: Publish installer to GitHub Release
         if: github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: installer-dist/*.exe
           fail_on_unmatched_files: true
