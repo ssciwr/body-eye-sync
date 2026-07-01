@@ -14,6 +14,8 @@ dependencies = [
     "pandas",
     "qtpy",
     "pyside6",
+    "insightface",
+    "onnxruntime",
 ]
 authors = [
     { name = "SSC" },

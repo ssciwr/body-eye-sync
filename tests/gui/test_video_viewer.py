@@ -53,7 +53,7 @@ def test_video_viewer_load_clears_stale_overlays(qtbot, data_dir):
     widget.load(_video(data_dir, _one_box_on_first_frame()))
     assert len(widget._overlay_items) == 2
 
-    # Loading a video with no tracking results must drop those overlays.
+    # Loading a video with no object tracking results must drop those overlays.
     widget.load(_video(data_dir))
     assert widget._overlay_items == []
 
