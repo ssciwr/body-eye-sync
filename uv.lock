@@ -47,7 +47,7 @@ wheels = [
 
 [[package]]
 name = "body-eye-sync"
-version = "0.0.1"
+version = "0.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "boxmot" },
@@ -57,6 +57,7 @@ dependencies = [
     { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "onnxruntime" },
     { name = "opencv-python" },
+    { name = "packaging" },
     { name = "pandas" },
     { name = "pyside6" },
     { name = "qtpy" },
@@ -78,6 +79,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "onnxruntime" },
     { name = "opencv-python" },
+    { name = "packaging" },
     { name = "pandas" },
     { name = "pyside6" },
     { name = "qtpy" },

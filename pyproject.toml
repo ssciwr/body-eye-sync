@@ -4,13 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "body-eye-sync"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
-    "boxmot==21.0.0",
+    "boxmot>=21.0.0,<22.0.0",  # see pipeline/object_tracking.py
     "ultralytics",
     "click",
     "numpy",
     "opencv-python",
+    "packaging",
     "pandas",
     "qtpy",
     "pyside6",

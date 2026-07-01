@@ -108,6 +108,9 @@ def detect_tracklets(
     automatically. The detections sharing a track id form a tracklet, and
     ``conf`` is the per-frame confidence of the object detector.
     """
+    # To get lazy, per-frame results so the GUI can display tracking live,
+    # we can't use ``boxmot.Boxmot.track`` as this directly writes to a ``runs/`` directory.
+    # So we use these internal ``build_*_from_spec`` imports and pin the boxmot version.
     from boxmot import track
     from boxmot.engine.workflows.support import (
         build_detector_from_spec,
