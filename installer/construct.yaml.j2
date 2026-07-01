@@ -34,15 +34,11 @@ extra_files:
   - menu.json
 
 post_install: post_install.bat
-post_install_desc: "Downloading and installing components (PyTorch, OpenCV, ...) - this can take several minutes."
+post_install_desc: "Downloading and installing required components - this can take several minutes..."
 pre_uninstall: pre_uninstall.bat
 
 conclusion_text: "body-eye-sync has been installed. Launch it from the Start menu or desktop shortcut."
-
-# Branding. welcome_image is the large image on the welcome/finish pages; the
-# small header banner is generated from text, since the square logo would distort
-# when squeezed into the 150x57 header.
-welcome_image: ../resources/icon.png
-header_image_text: body-eye-sync
+welcome_image: ../resources/installer_image.png
+header_image: ../resources/header_image.png
 icon_image: ../src/body_eye_sync/gui/resources/icon.ico
 license_file: ../LICENSE.md
