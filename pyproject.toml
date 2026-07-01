@@ -13,6 +13,7 @@ dependencies = [
     "opencv-python",
     "packaging",
     "pandas",
+    "platformdirs",
     "qtpy",
     "pyside6",
     "insightface",
@@ -39,6 +40,7 @@ dev = [
     "pytest",
     "pytest-cov",
     "pytest-qt",
+    "pytest-randomly",
 ]
 
 [project.scripts]

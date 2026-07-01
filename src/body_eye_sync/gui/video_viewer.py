@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from math import isfinite
+
 import cv2
 from qtpy.QtCore import Qt, QTimer, Signal, Slot
 from qtpy.QtGui import QBrush, QImage, QPainter, QPen, QPixmap
 from qtpy.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
+    QGraphicsLineItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
     QGraphicsScene,
@@ -24,6 +27,7 @@ from qtpy.QtWidgets import (
 
 from body_eye_sync.experiment.video import Video
 from body_eye_sync.pipeline.object_tracking import BoundingBox, boxes_from_tracks
+from body_eye_sync.pipeline.body_pose import SKELETON, BodyPose
 from body_eye_sync.pipeline.face_detection import FaceBox
 from body_eye_sync.gui.utils import get_color
 
@@ -138,6 +142,22 @@ class VideoViewer(QWidget):
         for face in result.faces:
             self._add_face(face)
 
+    @Slot(object)
+    def show_live_pose_frame(self, result) -> None:
+        """Display a freshly pose-detected frame, with person boxes and poses.
+
+        Connected to the body-pose worker's per-frame signal; ``result`` is a
+        :class:`PoseFrameResult` with 0-based indexing. The person boxes come
+        from the already-tracked video, the poses straight from the result.
+        """
+        self._goto(result.frame_idx)
+        self._clear_overlays()
+        if self._video is not None:
+            for box in self._video.boxes_for_frame(self._current):
+                self._add_box(box)
+        for pose in result.poses:
+            self._add_pose(pose)
+
     def enable_controls(self, enable: bool) -> None:
         """Enable or disable the play button and seek controls."""
         if not enable:
@@ -154,6 +174,8 @@ class VideoViewer(QWidget):
             return
         for box in self._video.boxes_for_frame(self._current):
             self._add_box(box)
+        for pose in self._video.poses_for_frame(self._current):
+            self._add_pose(pose)
         for face in self._video.faces_for_frame(self._current):
             self._add_face(face)
 
@@ -274,6 +296,39 @@ class VideoViewer(QWidget):
         color = get_color(face.box.track_id)
         for px, py in face.landmarks:
             # a small constant-size dot regardless of zoom, centred on the point
+            dot = QGraphicsEllipseItem(-2.0, -2.0, 4.0, 4.0)
+            dot.setBrush(QBrush(color))
+            dot.setPen(QPen(Qt.PenStyle.NoPen))
+            dot.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+            dot.setPos(px, py)
+            self._scene.addItem(dot)
+            self._overlay_items.append(dot)
+
+    def _add_pose(self, pose: BodyPose) -> None:
+        color = get_color(pose.box.track_id)
+        pen = QPen(color)
+        pen.setCosmetic(True)
+        pen.setWidth(2)
+
+        visible = [
+            score > 0.0 and isfinite(px) and isfinite(py)
+            for px, py, score in pose.keypoints
+        ]
+        for start, end in SKELETON:
+            if start >= len(pose.keypoints) or end >= len(pose.keypoints):
+                continue
+            if not (visible[start] and visible[end]):
+                continue
+            x1, y1, _ = pose.keypoints[start]
+            x2, y2, _ = pose.keypoints[end]
+            line = QGraphicsLineItem(x1, y1, x2, y2)
+            line.setPen(pen)
+            self._scene.addItem(line)
+            self._overlay_items.append(line)
+
+        for px, py, score in pose.keypoints:
+            if not (score > 0.0 and isfinite(px) and isfinite(py)):
+                continue
             dot = QGraphicsEllipseItem(-2.0, -2.0, 4.0, 4.0)
             dot.setBrush(QBrush(color))
             dot.setPen(QPen(Qt.PenStyle.NoPen))

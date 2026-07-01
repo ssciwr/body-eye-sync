@@ -1,6 +1,37 @@
+import time
+from types import SimpleNamespace
+
+import numpy as np
 import pytest
 
 from body_eye_sync.gui import MainWindow
+
+
+def _tracks_frame(frame_idx):
+    # BoxMOT layout: x1, y1, x2, y2, id, conf, cls, det_ind.
+    # Boxes cover the three visible people in tests/data/three-people.mp4.
+    return SimpleNamespace(
+        frame_idx=frame_idx,
+        tracks=np.array(
+            [
+                [0.0, 55.0, 155.0, 310.0, 1, 0.9, 0, 0],
+                [310.0, 40.0, 460.0, 310.0, 2, 0.9, 0, 1],
+                [135.0, 35.0, 340.0, 310.0, 3, 0.9, 0, 2],
+            ]
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def fast_object_tracking(monkeypatch):
+    def detect_tracklets(video_path):
+        for frame_idx in range(1, 6):
+            time.sleep(0.01)
+            yield _tracks_frame(frame_idx)
+
+    monkeypatch.setattr(
+        "body_eye_sync.pipeline.object_tracking.detect_tracklets", detect_tracklets
+    )
 
 
 @pytest.fixture
@@ -24,6 +55,7 @@ def test_load_video_enables_run_button(window, data_dir):
 
     assert window.video_viewer.frame_count == 5
     assert window.run_button.isEnabled()
+    assert not window.pose_button.isEnabled()
     assert str(video) in window.file_label.text()
 
 
@@ -35,6 +67,7 @@ def test_run_object_tracking_populates_state_and_overlays(qtbot, window, data_di
 
     window._start_object_tracking()
     qtbot.waitUntil(lambda: window.video.data is not None, timeout=60000)
+    qtbot.waitUntil(lambda: window._thread is None, timeout=5000)
 
     assert window.video.data["track_id"].nunique() == 3
     # Object tracking drives the video, so it ends on the last frame with that frame's
@@ -42,7 +75,6 @@ def test_run_object_tracking_populates_state_and_overlays(qtbot, window, data_di
     assert window.video_viewer.current_frame == window.video_viewer.frame_count - 1
     assert len(window.video_viewer._overlay_items) == 6
     # Controls are restored and the worker thread is cleaned up once done.
-    qtbot.waitUntil(lambda: window._thread is None, timeout=5000)
     assert window.run_button.isEnabled()
     assert window.video_viewer._play_button.isEnabled()
     assert not window.progress_bar.isVisible()
@@ -53,10 +85,12 @@ def test_face_button_disabled_until_object_tracking_done(qtbot, window, data_dir
     window._load_video(data_dir / "three-people.mp4")
     # Face detection runs on tracked boxes, so it waits for object tracking.
     assert not window.face_button.isEnabled()
+    assert not window.pose_button.isEnabled()
 
     window._start_object_tracking()
     qtbot.waitUntil(lambda: window._thread is None, timeout=60000)
     assert window.face_button.isEnabled()
+    assert window.pose_button.isEnabled()
 
 
 def test_run_face_detection_populates_state_and_overlays(qtbot, window, data_dir):

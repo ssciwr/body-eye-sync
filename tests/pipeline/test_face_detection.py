@@ -6,6 +6,7 @@ from body_eye_sync.pipeline.face_detection import (
     LANDMARK_NAMES,
     FaceBox,
     FaceFrameResult,
+    detect_faces,
     face_box_from_row,
     faces_to_dataframe,
 )
@@ -69,3 +70,25 @@ def test_landmark_columns_are_two_per_name():
         *[f"{n}_{a}" for n in LANDMARK_NAMES for a in ("x", "y")],
     ]
     assert not np.isnan(_face(1).score)
+
+
+def test_detect_faces_finds_three_people_in_test_video(
+    data_dir, tracked_boxes_by_frame
+):
+    results = list(detect_faces(data_dir / "three-people.mp4", tracked_boxes_by_frame))
+
+    # example video has five frames, with three tracked people visible throughout
+    assert [result.frame_idx for result in results] == [0, 1, 2, 3, 4]
+    assert [len(result.faces) for result in results] == [3, 3, 3, 3, 3]
+    assert all(
+        len(face.landmarks) == len(LANDMARK_NAMES)
+        for result in results
+        for face in result.faces
+    )
+
+    df = faces_to_dataframe(results)
+    assert df["track_id"].nunique() == 3
+
+    all_frames = set(df["frame"])
+    frames_per_tracklet = df.groupby("track_id")["frame"].agg(set)
+    assert all(frames == all_frames for frames in frames_per_tracklet)

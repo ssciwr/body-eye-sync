@@ -19,6 +19,7 @@ from qtpy.QtWidgets import (
 )
 
 from body_eye_sync.experiment.video import Video
+from body_eye_sync.gui.body_pose_worker import BodyPoseWorker
 from body_eye_sync.gui.face_detection_worker import FaceDetectionWorker
 from body_eye_sync.gui.object_tracking_worker import ObjectTrackingWorker
 from body_eye_sync.gui.video_viewer import VideoViewer
@@ -33,7 +34,9 @@ class MainWindow(QMainWindow):
 
         self.video = Video()
         self._thread: threading.Thread | None = None
-        self._worker: ObjectTrackingWorker | FaceDetectionWorker | None = None
+        self._worker: (
+            ObjectTrackingWorker | FaceDetectionWorker | BodyPoseWorker | None
+        ) = None
         self._in_setup = False
 
         self.open_button = QPushButton("Open video…")
@@ -47,6 +50,10 @@ class MainWindow(QMainWindow):
         self.face_button = QPushButton("Run face detection")
         self.face_button.setEnabled(False)
         self.face_button.clicked.connect(self._start_face_detection)
+
+        self.pose_button = QPushButton("Run body pose")
+        self.pose_button.setEnabled(False)
+        self.pose_button.clicked.connect(self._start_body_pose_detection)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
@@ -64,6 +71,7 @@ class MainWindow(QMainWindow):
         bottom_bar = QHBoxLayout()
         bottom_bar.addWidget(self.run_button)
         bottom_bar.addWidget(self.face_button)
+        bottom_bar.addWidget(self.pose_button)
         bottom_bar.addWidget(self.progress_bar, stretch=1)
         bottom_bar.addWidget(self.cancel_button)
 
@@ -95,8 +103,9 @@ class MainWindow(QMainWindow):
             return
         self.file_label.setText(str(path))
         self.run_button.setEnabled(True)
-        # A fresh video has no object tracking results yet, so face detection waits.
+        # A fresh video has no object tracking results yet, so later passes wait.
         self.face_button.setEnabled(False)
+        self.pose_button.setEnabled(False)
 
     def _start_object_tracking(self) -> None:
         if self.video.video_path is None or self._thread is not None:
@@ -133,8 +142,27 @@ class MainWindow(QMainWindow):
         self._thread = threading.Thread(target=self._worker.run, daemon=True)
         self._thread.start()
 
+    def _start_body_pose_detection(self) -> None:
+        if self.video.data is None or self._thread is not None:
+            return
+
+        # Keep the tracked boxes and other later-pass columns; only previous
+        # body-pose columns are discarded.
+        self.video.begin_body_pose_detection()
+        self._begin_run()
+
+        self._worker = BodyPoseWorker(self.video)
+        self._worker.new_frame.connect(self._on_new_frame)
+        self._worker.new_frame.connect(self.video_viewer.show_live_pose_frame)
+        self._worker.finished.connect(self._on_pose_finished)
+        self._worker.failed.connect(self._on_failed)
+        self._worker.cancelled.connect(self._on_cancelled)
+
+        self._thread = threading.Thread(target=self._worker.run, daemon=True)
+        self._thread.start()
+
     def _begin_run(self) -> None:
-        """Shared start-up for object tracking and face detection runs."""
+        """Shared start-up for object tracking and later detection runs."""
         self._set_running(True)
         # Weights are built/downloaded before the first frame is processed, so
         # show a busy bar until the first frame arrives.
@@ -179,6 +207,15 @@ class MainWindow(QMainWindow):
         )
         self._set_running(False)
 
+    @Slot()
+    def _on_pose_finished(self) -> None:
+        data = self.video.data
+        n_poses = int(data["pose_score"].notna().sum())
+        self.statusBar().showMessage(
+            f"Body pose detection finished: {n_poses} poses over {len(data)} detections"
+        )
+        self._set_running(False)
+
     @Slot(str, str)
     def _on_failed(self, message: str, details: str) -> None:
         dialog = QMessageBox(self)
@@ -201,8 +238,9 @@ class MainWindow(QMainWindow):
             self._worker = None
             self.video_viewer.refresh_overlays()
         self.run_button.setEnabled(not running and self.video.video_path is not None)
-        # Face detection runs on the tracked boxes, so it needs object tracking results.
+        # Later passes run on the tracked boxes, so they need object tracking results.
         self.face_button.setEnabled(not running and self.video.data is not None)
+        self.pose_button.setEnabled(not running and self.video.data is not None)
         self.open_button.setEnabled(not running)
         self.video_viewer.enable_controls(not running)
         self.progress_bar.setVisible(running)

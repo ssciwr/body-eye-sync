@@ -6,6 +6,7 @@ import pandas as pd
 from body_eye_sync.experiment.video import Video
 from body_eye_sync.pipeline.object_tracking import BoundingBox
 from body_eye_sync.pipeline.face_detection import FaceBox, FaceFrameResult
+from body_eye_sync.pipeline.body_pose import BodyPose, PoseFrameResult
 
 
 def _face_result(frame_idx, *faces):
@@ -15,6 +16,15 @@ def _face_result(frame_idx, *faces):
         for tid, x1, y1, x2, y2, score in faces
     ]
     return FaceFrameResult(frame_idx, boxes)
+
+
+def _pose_result(frame_idx, *poses):
+    """A PoseFrameResult; each pose is ``(track_id, x1, y1, x2, y2, score)``."""
+    bodies = [
+        BodyPose(BoundingBox(x1, y1, x2, y2, tid), score, [(x1, y1, 0.9)] * 17)
+        for tid, x1, y1, x2, y2, score in poses
+    ]
+    return PoseFrameResult(frame_idx, bodies)
 
 
 def _data():
@@ -109,6 +119,19 @@ def test_discard_face_detection_keeps_tracked_boxes():
     assert video.faces_for_frame(0) == []
 
 
+def test_discard_body_pose_detection_keeps_tracked_boxes():
+    video = Video()
+    video.set_data(_data())
+    video.begin_body_pose_detection()
+    video.add_body_pose_frame(_pose_result(0, (1, 0.0, 0.0, 4.0, 4.0, 0.9)))
+    video.discard_body_pose_detection()
+
+    # The tracked boxes survive; the aborted pose pass merges nothing.
+    assert len(video.data) == 3
+    assert "pose_score" not in video.data.columns
+    assert video.poses_for_frame(0) == []
+
+
 def test_set_video_invalidates_tracklets():
     video = Video()
     video.set_data(_data())
@@ -151,10 +174,40 @@ def test_finish_face_detection_merges_onto_track_rows():
     assert [f.box.track_id for f in video.faces_for_frame(1)] == [1]
 
 
+def test_finish_body_pose_detection_merges_onto_track_rows():
+    video = Video()
+    video.set_data(_data())
+
+    # A pose for (frame 0, track 1) and (frame 1, track 1); (frame 0, track 2) none.
+    video.add_body_pose_frame(_pose_result(0, (1, 0.0, 0.0, 4.0, 4.0, 0.9)))
+    video.add_body_pose_frame(_pose_result(1, (1, 1.0, 1.0, 5.0, 5.0, 0.8)))
+    video.finish_body_pose_detection()
+
+    data = video.data
+    # Original rows preserved, pose columns added, the missing pose left as NaN.
+    assert len(data) == 3
+    assert "pose_score" in data.columns
+    assert data["pose_score"].notna().sum() == 2
+
+    poses0 = video.poses_for_frame(0)
+    assert [p.box.track_id for p in poses0] == [1]
+    assert poses0[0].score == 0.9
+    assert len(poses0[0].keypoints) == 17
+
+    # frame 1 track 1 has a pose; (frame 0, track 2) has none.
+    assert [p.box.track_id for p in video.poses_for_frame(1)] == [1]
+
+
 def test_faces_for_frame_empty_without_detection():
     video = Video()
     video.set_data(_data())
     assert video.faces_for_frame(0) == []
+
+
+def test_poses_for_frame_empty_without_detection():
+    video = Video()
+    video.set_data(_data())
+    assert video.poses_for_frame(0) == []
 
 
 def test_begin_face_detection_drops_previous_face_columns():
@@ -169,3 +222,17 @@ def test_begin_face_detection_drops_previous_face_columns():
     assert "face_score" not in video.data.columns
     assert len(video.data) == 3
     assert video.faces_for_frame(0) == []
+
+
+def test_begin_body_pose_detection_drops_previous_pose_columns():
+    video = Video()
+    video.set_data(_data())
+    video.add_body_pose_frame(_pose_result(0, (1, 0.0, 0.0, 4.0, 4.0, 0.9)))
+    video.finish_body_pose_detection()
+    assert "pose_score" in video.data.columns
+
+    video.begin_body_pose_detection()
+    # Tracks survive, the stale pose columns do not.
+    assert "pose_score" not in video.data.columns
+    assert len(video.data) == 3
+    assert video.poses_for_frame(0) == []

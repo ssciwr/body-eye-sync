@@ -15,6 +15,13 @@ from body_eye_sync.pipeline.face_detection import (
     face_box_from_row,
     faces_to_dataframe,
 )
+from body_eye_sync.pipeline.body_pose import (
+    POSE_COLUMNS,
+    BodyPose,
+    PoseFrameResult,
+    pose_from_row,
+    poses_to_dataframe,
+)
 
 
 class Video:
@@ -25,7 +32,7 @@ class Video:
     collapsed into that DataFrame once :meth:`finish_object_tracking` is called.
     Face detection runs as a later pass over those tracked boxes, accumulating
     per frame and folding its columns onto the matching rows in
-    :meth:`finish_face_detection`.
+    :meth:`finish_face_detection`. Body-pose detection follows the same pattern.
     """
 
     def __init__(self) -> None:
@@ -34,6 +41,7 @@ class Video:
         self._rows_by_frame: dict[int, np.ndarray] = {}
         self._frames: list[tuple[int, np.ndarray]] = []
         self._face_frames: list[FaceFrameResult] = []
+        self._pose_frames: list[PoseFrameResult] = []
 
     def set_video(self, path: str | Path) -> None:
         """Set the current video, invalidating any previous model outputs."""
@@ -63,7 +71,7 @@ class Video:
         self._frames = []
 
     def all_boxes_by_frame(self) -> dict[int, list[BoundingBox]]:
-        """Tracked person boxes grouped by frame, as face detection consumes them."""
+        """Tracked person boxes grouped by frame, as later passes consume them."""
         if self._data is None:
             return {}
         return {
@@ -106,6 +114,41 @@ class Video:
         rows = rows[rows["face_score"].notna()]
         return [face_box_from_row(r) for r in rows.itertuples(index=False)]
 
+    def begin_body_pose_detection(self) -> None:
+        """Drop any previous pose columns so a fresh pass starts clean."""
+        if self._data is not None:
+            present = [c for c in POSE_COLUMNS if c in self._data.columns]
+            if present:
+                self.set_data(self._data.drop(columns=present))
+        self._pose_frames = []
+
+    def add_body_pose_frame(self, result: PoseFrameResult) -> None:
+        """Accumulate one frame's detected body poses for the final merge."""
+        self._pose_frames.append(result)
+
+    def finish_body_pose_detection(self) -> None:
+        """Merge the streamed poses onto their ``(frame, track_id)`` rows."""
+        if self._data is None:
+            return
+        poses = poses_to_dataframe(self._pose_frames)
+        self.set_data(self._data.merge(poses, on=["frame", "track_id"], how="left"))
+        self._pose_frames = []
+
+    def discard_body_pose_detection(self) -> None:
+        """Drop a cancelled or failed pass; the tracked boxes are left intact."""
+        self._pose_frames = []
+
+    def poses_for_frame(self, frame_index: int) -> list[BodyPose]:
+        """Detected body poses for frame ``frame_index`` (0-based)."""
+        if self._data is None or "pose_score" not in self._data.columns:
+            return []
+        positions = self._rows_by_frame.get(frame_index)
+        if positions is None:
+            return []
+        rows = self._data.take(positions)
+        rows = rows[rows["pose_score"].notna()]
+        return [pose_from_row(r) for r in rows.itertuples(index=False)]
+
     @property
     def data(self) -> pd.DataFrame | None:
         """All tracked detections as a DataFrame, or ``None`` until complete."""
@@ -129,3 +172,4 @@ class Video:
         self._rows_by_frame = {}
         self._frames = []
         self._face_frames = []
+        self._pose_frames = []
