@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Iterable, Iterator, Sequence
 
 import numpy as np
 import pandas as pd
-from platformdirs import user_cache_path
+
+from body_eye_sync.pipeline.model_cache import cached_model_path
 
 if TYPE_CHECKING:
     from boxmot.engine.tracking.results import FrameResult
@@ -71,28 +72,6 @@ def tracks_to_dataframe(frames: Iterable[tuple[int, np.ndarray]]) -> pd.DataFram
     return pd.DataFrame(data, columns=_COLUMNS).astype({"frame": int, "track_id": int})
 
 
-def model_cache_dir() -> Path:
-    """Directory all downloaded model weights are cached in (cross-platform)."""
-    return user_cache_path("body-eye-sync", "SSC") / "models"
-
-
-def cached_model_path(model_ref: str | Path) -> str:
-    """Route a bare weights filename into the shared model cache.
-
-    Given only a bare name (e.g. ``yolo26m.pt``), Ultralytics downloads the
-    weights into the current working directory. Rewriting it to an absolute path
-    under :func:`model_cache_dir` makes the download land in the shared cache
-    instead. An explicit path (one with a directory part) or an already-existing
-    file is returned unchanged.
-    """
-    path = Path(model_ref)
-    if path.parent != Path(".") or path.exists():
-        return str(model_ref)
-    cache_dir = model_cache_dir()
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return str(cache_dir / path.name)
-
-
 def default_device() -> str:
     """Pick the fastest available device as a BoxMOT/Ultralytics device string."""
     try:
@@ -144,15 +123,15 @@ def detect_tracklets(
     if device is None:
         device = default_device()
 
-    # Pass an absolute cache path so the Ultralytics detector weights download
-    # into the shared cache rather than the current working directory. (BoxMOT
-    # already routes bare ReID names into its own weights dir.)
+    # Pass absolute cache paths so both the Ultralytics detector weights and the
+    # BoxMOT ReID weights download into the shared cache, rather than the current
+    # working directory (detector) or BoxMOT's own in-package models dir (ReID).
     detector_runtime = build_detector_from_spec(
         cached_model_path(detector), classes=list(object_classes), device=device
     )
     tracker_runtime = build_tracker_from_spec(tracker, device=device)
     reid_runtime = build_tracker_with_reid_spec(
-        tracker, tracker_runtime, reid, device=device
+        tracker, tracker_runtime, cached_model_path(reid), device=device
     )
 
     yield from track(

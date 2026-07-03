@@ -14,7 +14,21 @@ nav = [
     { "Command Line" = "cli.md" },
     { "Outputs" = "outputs.md" },
   ] },
-  { "Development" = "development.md" },
+  { "Development" = [
+    { "Overview" = "development.md" },
+    { "API Reference" = [
+      { "Overview" = "api/index.md" },
+      { "Experiment" = "api/experiment.md" },
+      { "Pipeline" = "api/pipeline.md" },
+      { "GUI" = "api/gui.md" },
+      { "CLI" = "api/cli.md" },
+    ] },
+  ] },
+]
+
+plugins = [
+  "search",
+  { "mkdocstrings" = { "handlers" = { "python" = { "paths" = ["src"], "options" = { "docstring_style" = "google", "show_source" = true, "show_root_heading" = true, "show_symbol_type_heading" = true, "show_symbol_type_toc" = true } } } } },
 ]
 
 [project.theme]

@@ -6,6 +6,7 @@ from body_eye_sync.pipeline.face_detection import (
     LANDMARK_NAMES,
     FaceBox,
     FaceFrameResult,
+    _ensure_model_available,
     detect_faces,
     face_box_from_row,
     faces_to_dataframe,
@@ -70,6 +71,33 @@ def test_landmark_columns_are_two_per_name():
         *[f"{n}_{a}" for n in LANDMARK_NAMES for a in ("x", "y")],
     ]
     assert not np.isnan(_face(1).score)
+
+
+def test_ensure_model_available_flattens_nested_pack(tmp_path):
+    # Mimic the antelopev2 zip, whose own top-level folder makes InsightFace
+    # extract the weights one level too deep for FaceAnalysis to find them.
+    nested = tmp_path / "models" / "antelopev2" / "antelopev2"
+    nested.mkdir(parents=True)
+    (nested / "det_10g.onnx").write_bytes(b"det")
+    (nested / "w600k_r50.onnx").write_bytes(b"rec")
+
+    _ensure_model_available("antelopev2", str(tmp_path))
+
+    model_dir = tmp_path / "models" / "antelopev2"
+    assert {p.name for p in model_dir.glob("*.onnx")} == {
+        "det_10g.onnx",
+        "w600k_r50.onnx",
+    }
+
+
+def test_ensure_model_available_leaves_flat_pack_untouched(tmp_path):
+    model_dir = tmp_path / "models" / "buffalo_l"
+    model_dir.mkdir(parents=True)
+    (model_dir / "det_10g.onnx").write_bytes(b"det")
+
+    _ensure_model_available("buffalo_l", str(tmp_path))
+
+    assert (model_dir / "det_10g.onnx").read_bytes() == b"det"
 
 
 def test_detect_faces_finds_three_people_in_test_video(

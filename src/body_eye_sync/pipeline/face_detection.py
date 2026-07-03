@@ -9,6 +9,7 @@ from typing import Iterable, Iterator, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from body_eye_sync.pipeline.model_cache import model_cache_dir
 from body_eye_sync.pipeline.object_tracking import BoundingBox
 
 #: The five InsightFace keypoints, in the order they appear in ``face.kps``.
@@ -98,6 +99,38 @@ def face_box_from_row(row) -> FaceBox:
     return FaceBox(box, float(row.face_score), landmarks)
 
 
+def _insightface_root() -> str:
+    """InsightFace ``root`` that lands model packs in the shared app cache.
+
+    InsightFace appends ``models/<name>`` to its ``root``, so pointing it at the
+    parent of :func:`model_cache_dir` keeps the face model packs alongside the
+    Ultralytics weights in one cross-platform cache, rather than scattering them
+    into ``~/.insightface``.
+    """
+    return str(model_cache_dir().parent)
+
+
+def _ensure_model_available(model_name: str, root: str) -> None:
+    """Download an InsightFace model pack and flatten any nested extraction.
+
+    The ``antelopev2`` release zip contains a top-level ``antelopev2/`` folder,
+    so InsightFace extracting it into a directory already named ``antelopev2``
+    leaves the ``.onnx`` files one level too deep (``antelopev2/antelopev2/*``).
+    :class:`FaceAnalysis` then globs only the outer directory, finds no models,
+    and fails its ``'detection' in self.models`` assertion. Trigger the download
+    here, then hoist any nested ``.onnx`` files up so the model directory matches
+    what :class:`FaceAnalysis` expects. Flat packs (e.g. ``buffalo_l``) are left
+    untouched.
+    """
+    from insightface.utils.storage import ensure_available
+
+    model_dir = Path(ensure_available("models", model_name, root=root))
+    if list(model_dir.glob("*.onnx")):
+        return
+    for onnx in sorted(model_dir.rglob("*.onnx")):
+        onnx.replace(model_dir / onnx.name)
+
+
 def default_providers() -> list[str]:
     """Pick onnxruntime execution providers, preferring CUDA when available."""
     try:
@@ -184,7 +217,9 @@ def detect_faces(
     if providers is None:
         providers = default_providers()
 
-    app = FaceAnalysis(name=model_name, providers=providers)
+    root = _insightface_root()
+    _ensure_model_available(model_name, root)
+    app = FaceAnalysis(name=model_name, providers=providers, root=root)
     ctx_id = 0 if providers[0].startswith("CUDA") else -1
     app.prepare(ctx_id=ctx_id, det_size=(det_size, det_size))
 

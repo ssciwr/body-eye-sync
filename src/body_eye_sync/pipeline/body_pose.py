@@ -9,9 +9,9 @@ from typing import Iterable, Iterator, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from body_eye_sync.pipeline.model_cache import cached_model_path
 from body_eye_sync.pipeline.object_tracking import (
     BoundingBox,
-    cached_model_path,
     default_device,
 )
 
