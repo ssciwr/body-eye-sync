@@ -37,6 +37,7 @@ classifiers = [
 
 [project.urls]
 Github = "https://github.com/ssciwr/body-eye-sync"
+Documentation = "https://ssciwr.github.io/body-eye-sync/"
 
 [dependency-groups]
 dev = [

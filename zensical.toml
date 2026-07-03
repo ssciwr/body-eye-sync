@@ -14,6 +14,7 @@ nav = [
     { "Command Line" = "cli.md" },
     { "Outputs" = "outputs.md" },
   ] },
+  { "Changelog" = "changelog.md" },
   { "Development" = [
     { "Overview" = "development.md" },
     { "API Reference" = [

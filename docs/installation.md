@@ -2,6 +2,13 @@
 
 Body Eye Sync requires Python 3.11 or newer.
 
+## Windows Installer
+
+On Windows the easiest option is the standalone installer, which bundles its own
+Python and all dependencies. Download
+[body-eye-sync.exe](https://github.com/ssciwr/body-eye-sync/releases/latest/download/body-eye-sync.exe)
+and run it, then launch Body Eye Sync from the Start menu or desktop shortcut.
+
 ## From Source
 
 Clone the repository and install the package:
