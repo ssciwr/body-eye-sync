@@ -1,24 +1,18 @@
 # Body Eye Sync
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/ssciwr/body-eye-sync/ci.yml?branch=main)](https://github.com/ssciwr/body-eye-sync/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/ssciwr/body-eye-sync/branch/main/graph/badge.svg)](https://codecov.io/gh/ssciwr/body-eye-sync)
+[![Documentation](https://img.shields.io/badge/docs-online-blue.svg)](https://ssciwr.github.io/body-eye-sync/)
 
 WIP
 
 ## User installation
 
-Clone this repository, e.g.
+If you already have Python and pip:
 
 ```
-git clone https://github.com/ssciwr/body-eye-sync.git
-cd body-eye-sync
-```
-
-Install the package:
-
-```
-pip install .
+pip install body-eye-sync
 ```
 
 Then launch the GUI:
@@ -26,6 +20,10 @@ Then launch the GUI:
 ```
 body-eye-sync
 ```
+
+## Windows installation
+
+Alternatively on Windows we also provide an executable installer.
 
 ## Developer setup
 
@@ -59,10 +57,4 @@ To preview the documentation:
 
 ```
 uv run zensical serve
-```
-
-To build the documentation:
-
-```
-uv run zensical build --clean
 ```
