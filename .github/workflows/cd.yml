@@ -67,6 +67,11 @@ jobs:
       - name: Build installer
         shell: bash -el {0}
         run: conda run -n base constructor installer/ --output-dir installer-dist
+      # Constructor names the output body-eye-sync-<version>-Windows-x86_64.exe.
+      # Rename to a stable, version-less filename so download links never break.
+      - name: Rename installer to a stable filename
+        shell: bash
+        run: mv installer-dist/*.exe installer-dist/body-eye-sync.exe
       - uses: actions/upload-artifact@v7
         with:
           name: body-eye-sync-windows-installer
