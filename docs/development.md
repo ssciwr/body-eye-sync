@@ -34,7 +34,8 @@ uv run pytest
 
 ## Documentation
 
-Zensical is installed as a development dependency. Preview the docs locally:
+Zensical and `mkdocstrings-python` are installed as development dependencies.
+Preview the docs locally:
 
 ```bash
 uv run zensical serve
@@ -48,3 +49,11 @@ uv run zensical build --clean
 
 The generated site is written to `site/`. The GitHub Actions documentation
 workflow publishes that directory to GitHub Pages on pushes to `main`.
+
+API reference pages live under `docs/api/` and use mkdocstrings directives:
+
+```md
+::: body_eye_sync.experiment.config
+```
+
+Add new public modules to the API pages and navigation in `zensical.toml`.

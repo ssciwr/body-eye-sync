@@ -40,6 +40,7 @@ Github = "https://github.com/ssciwr/body-eye-sync"
 
 [dependency-groups]
 dev = [
+    "mkdocstrings-python>=2.0.5",
     "pytest",
     "pytest-cov",
     "pytest-qt",
