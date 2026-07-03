@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "body-eye-sync"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
     "boxmot>=21.0.0,<22.0.0",  # see pipeline/object_tracking.py
     "ultralytics",
@@ -25,8 +25,8 @@ dependencies = [
 authors = [
     { name = "SSC" },
 ]
-license = "MIT"
-license-files = ["LICENSE.md"]
+license = "AGPL-3.0-only"
+license-files = ["LICENSE.md", "NOTICE.md"]
 description = "Synchronize body and eye tracking data"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -40,12 +40,12 @@ Github = "https://github.com/ssciwr/body-eye-sync"
 
 [dependency-groups]
 dev = [
-    "mkdocstrings-python>=2.0.5",
+    "mkdocstrings-python",
     "pytest",
     "pytest-cov",
     "pytest-qt",
     "pytest-randomly",
-    "zensical>=0.0.46",
+    "zensical",
 ]
 
 [project.scripts]
