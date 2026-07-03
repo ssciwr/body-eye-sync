@@ -37,12 +37,15 @@ class FaceBox:
 
     ``box`` is the face's bounding box, in video-pixel coordinates, carrying the
     tracked person's ``track_id``. ``landmarks`` holds the five ``(x, y)``
-    keypoints in :data:`LANDMARK_NAMES` order.
+    keypoints in :data:`LANDMARK_NAMES` order. ``embedding`` is the InsightFace
+    ArcFace recognition vector (L2-normalised), kept for later identity
+    clustering; ``None`` if the model pack has no recognition head.
     """
 
     box: BoundingBox
     score: float
     landmarks: list[tuple[float, float]] = field(default_factory=list)
+    embedding: np.ndarray | None = None
 
 
 @dataclass
@@ -144,7 +147,15 @@ def _detect_in_boxes(
         fx1, fy1, fx2, fy2 = (float(v) for v in best.bbox)
         landmarks = [(x0 + float(px), y0 + float(py)) for px, py in best.kps]
         box = BoundingBox(x0 + fx1, y0 + fy1, x0 + fx2, y0 + fy2, person.track_id)
-        faces.append(FaceBox(box, float(best.det_score), landmarks))
+        embedding = getattr(best, "normed_embedding", None)
+        faces.append(
+            FaceBox(
+                box,
+                float(best.det_score),
+                landmarks,
+                None if embedding is None else np.asarray(embedding),
+            )
+        )
     return faces
 
 

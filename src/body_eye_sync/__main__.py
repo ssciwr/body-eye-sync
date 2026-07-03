@@ -14,7 +14,7 @@ _MEDIA_FEATURE_PACK_MESSAGE = (
 
 
 def _ensure_standard_streams() -> None:
-    """Provide writable streams when Windows starts the GUI via pythonw.exe."""
+    """Ensure stdout/stderr exist (They aren't defined on Windows with pythonw.exe)."""
     for name in ("stdout", "stderr"):
         if getattr(sys, name) is None:
             setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
@@ -27,7 +27,6 @@ _ensure_standard_streams()
 
 
 def _media_foundation_missing() -> bool:
-    """True on Windows when Media Foundation (needed by OpenCV) is unavailable."""
     if sys.platform != "win32":
         return False
     import ctypes
@@ -40,8 +39,9 @@ def _media_foundation_missing() -> bool:
 
 
 @click.command()
+@click.argument("experiment", required=False)
 @click.version_option(package_name="body-eye-sync", prog_name="body-eye-sync")
-def main():
+def main(experiment):
     from qtpy.QtWidgets import QApplication, QMessageBox
 
     app = QApplication(sys.argv)
@@ -57,8 +57,9 @@ def main():
 
     window = MainWindow()
     window.show()
+    if experiment is not None:
+        window.load_experiment(experiment)
 
-    # Check GitHub for a newer version and, if found, offer to update.
     updater = AutoUpdater(window)
     updater.start()
 

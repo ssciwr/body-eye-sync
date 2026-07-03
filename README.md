@@ -54,3 +54,15 @@ To run the tests:
 ```
 uv run pytest
 ```
+
+To preview the documentation:
+
+```
+uv run zensical serve
+```
+
+To build the documentation:
+
+```
+uv run zensical build --clean
+```

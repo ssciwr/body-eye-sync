@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import heapq
+import itertools
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +26,74 @@ from body_eye_sync.pipeline.body_pose import (
 )
 
 
+#: Column layout of the embeddings table.
+_EMBEDDING_COLUMNS = ["track_id", "frame", "score", "embedding"]
+
+
+class _TrackTopK:
+    """Keeps the best-K embeddings per track id as ``float16``, ranked by score."""
+
+    def __init__(self, k: int) -> None:
+        self._k = k
+        self._heaps: dict[int, list] = {}
+        self._counter = itertools.count()
+
+    def add(self, track_id: int, frame: int, score: float, embedding) -> None:
+        if self._k <= 0 or embedding is None:
+            return
+        vec = np.asarray(embedding, dtype=np.float16)
+        # A per-track min-heap keyed by score keeps the K highest scoring; the
+        # counter breaks score ties so the arrays are never compared.
+        item = (float(score), next(self._counter), int(frame), vec)
+        heap = self._heaps.setdefault(int(track_id), [])
+        if len(heap) < self._k:
+            heapq.heappush(heap, item)
+        elif item[0] > heap[0][0]:
+            heapq.heapreplace(heap, item)
+
+    def to_frame(self) -> pd.DataFrame | None:
+        """Best-first table of the kept embeddings, or ``None`` if none were kept."""
+        rows = []
+        for track_id, heap in self._heaps.items():
+            for score, _, frame, vec in sorted(heap, key=lambda x: x[0], reverse=True):
+                rows.append((track_id, frame, score, vec))
+        if not rows:
+            return None
+        return pd.DataFrame(rows, columns=_EMBEDDING_COLUMNS)
+
+
+def _embeddings_path(path: str | Path, kind: str) -> Path:
+    """Companion embeddings file beside a main output, e.g. ``cam1.face_embeddings.parquet``."""
+    path = Path(path)
+    return path.with_name(f"{path.stem}.{kind}_embeddings.parquet")
+
+
+def _write_embeddings(path: Path, table: pd.DataFrame) -> None:
+    """Write a best-K embeddings table as fixed-size ``float16`` vectors."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    matrix = np.stack(table["embedding"].to_numpy())
+    _, dim = matrix.shape
+    values = pa.array(matrix.reshape(-1), type=pa.float16())
+    out = pa.table(
+        {
+            "track_id": pa.array(table["track_id"].to_numpy(), pa.int64()),
+            "frame": pa.array(table["frame"].to_numpy(), pa.int64()),
+            "score": pa.array(table["score"].to_numpy(), pa.float32()),
+            "embedding": pa.FixedSizeListArray.from_arrays(values, dim),
+        }
+    )
+    pq.write_table(out, str(path))
+
+
+def _read_embeddings(path: Path) -> pd.DataFrame:
+    """Load a companion embeddings file back into a table of ``float16`` vectors."""
+    import pyarrow.parquet as pq
+
+    return pq.read_table(str(path)).to_pandas()
+
+
 class Video:
     """Contains object tracking and vision model outputs for a video.
 
@@ -36,29 +106,58 @@ class Video:
     """
 
     def __init__(self) -> None:
+        # Persistent results.
         self.video_path: Path | None = None
         self._data: pd.DataFrame | None = None
         self._rows_by_frame: dict[int, np.ndarray] = {}
-        self._frames: list[tuple[int, np.ndarray]] = []
-        self._face_frames: list[FaceFrameResult] = []
-        self._pose_frames: list[PoseFrameResult] = []
+        self._body_embeddings: pd.DataFrame | None = None
+        self._face_embeddings: pd.DataFrame | None = None
+        # Per-pass scratch: accumulated while a pass runs, then collapsed into the
+        # results above and reset. ``_tmp_`` marks them as transient.
+        self._tmp_frames: list[tuple[int, np.ndarray]] = []
+        self._tmp_face_frames: list[FaceFrameResult] = []
+        self._tmp_pose_frames: list[PoseFrameResult] = []
+        self._tmp_body_topk = _TrackTopK(0)
+        self._tmp_face_topk = _TrackTopK(0)
 
     def set_video(self, path: str | Path) -> None:
         """Set the current video, invalidating any previous model outputs."""
         self.clear()
         self.video_path = Path(path)
 
-    def begin_object_tracking(self) -> None:
-        """Drop any previous model outputs."""
+    def begin_object_tracking(self, embeddings_per_track: int = 0) -> None:
+        """Drop any previous model outputs.
+
+        ``embeddings_per_track`` keeps that many best body-appearance (ReID)
+        embeddings per tracklet, ranked by detection confidence, for later
+        identity clustering; ``0`` keeps none.
+        """
         self.clear()
+        self._tmp_body_topk = _TrackTopK(embeddings_per_track)
 
     def add_object_tracking_frame(self, frame) -> None:
         """Accumulate a BoxMOT per-frame result, converting to 0-based indices"""
-        self._frames.append((frame.frame_idx - 1, np.asarray(frame.tracks)))
+        tracks = np.asarray(frame.tracks)
+        self._tmp_frames.append((frame.frame_idx - 1, tracks))
+        self._collect_body_embeddings(frame.frame_idx - 1, tracks, frame)
+
+    def _collect_body_embeddings(
+        self, frame_index: int, tracks: np.ndarray, frame
+    ) -> None:
+        """Feed this frame's ReID embeddings (if any) into the per-track top-K."""
+        embeddings = getattr(frame, "embeddings", None)
+        if embeddings is None:
+            return
+        embeddings = np.asarray(embeddings)
+        for row, vec in zip(tracks, embeddings):
+            if not np.any(np.isfinite(vec)):
+                continue  # predicted-only track with no detection this frame
+            self._tmp_body_topk.add(int(row[4]), frame_index, float(row[5]), vec)
 
     def finish_object_tracking(self) -> None:
         """Collapse the streamed frames into the stored :attr:`data` DataFrame."""
-        self.set_data(tracks_to_dataframe(self._frames))
+        self.set_data(tracks_to_dataframe(self._tmp_frames))
+        self._body_embeddings = self._tmp_body_topk.to_frame()
 
     def discard_object_tracking(self) -> None:
         """Drop a cancelled or failed run; its partial output is unusable."""
@@ -68,7 +167,7 @@ class Video:
         """Replace all results with a complete data DataFrame."""
         self._data = data
         self._rows_by_frame = data.groupby("frame").indices
-        self._frames = []
+        self._tmp_frames = []
 
     def all_boxes_by_frame(self) -> dict[int, list[BoundingBox]]:
         """Tracked person boxes grouped by frame, as later passes consume them."""
@@ -79,29 +178,42 @@ class Video:
             for frame in self._rows_by_frame
         }
 
-    def begin_face_detection(self) -> None:
-        """Drop any previous face columns so a fresh pass starts clean."""
+    def begin_face_detection(self, embeddings_per_track: int = 0) -> None:
+        """Drop any previous face columns so a fresh pass starts clean.
+
+        ``embeddings_per_track`` keeps that many best face embeddings per
+        tracklet, ranked by face score, for later identity clustering.
+        """
         if self._data is not None:
             present = [c for c in FACE_COLUMNS if c in self._data.columns]
             if present:
                 self.set_data(self._data.drop(columns=present))
-        self._face_frames = []
+        self._tmp_face_frames = []
+        self._tmp_face_topk = _TrackTopK(embeddings_per_track)
+        self._face_embeddings = None
 
     def add_face_detection_frame(self, result: FaceFrameResult) -> None:
         """Accumulate one frame's detected faces for the final merge."""
-        self._face_frames.append(result)
+        self._tmp_face_frames.append(result)
+        for face in result.faces:
+            self._tmp_face_topk.add(
+                face.box.track_id, result.frame_idx, face.score, face.embedding
+            )
 
     def finish_face_detection(self) -> None:
         """Merge the streamed faces onto their ``(frame, track_id)`` rows."""
         if self._data is None:
             return
-        faces = faces_to_dataframe(self._face_frames)
+        faces = faces_to_dataframe(self._tmp_face_frames)
         self.set_data(self._data.merge(faces, on=["frame", "track_id"], how="left"))
-        self._face_frames = []
+        self._tmp_face_frames = []
+        self._face_embeddings = self._tmp_face_topk.to_frame()
 
     def discard_face_detection(self) -> None:
         """Drop a cancelled or failed pass; the tracked boxes are left intact."""
-        self._face_frames = []
+        self._tmp_face_frames = []
+        self._tmp_face_topk = _TrackTopK(0)
+        self._face_embeddings = None
 
     def faces_for_frame(self, frame_index: int) -> list[FaceBox]:
         """Detected face boxes for frame ``frame_index`` (0-based)."""
@@ -114,29 +226,33 @@ class Video:
         rows = rows[rows["face_score"].notna()]
         return [face_box_from_row(r) for r in rows.itertuples(index=False)]
 
-    def begin_body_pose_detection(self) -> None:
-        """Drop any previous pose columns so a fresh pass starts clean."""
+    def begin_body_pose_detection(self, embeddings_per_track: int = 0) -> None:
+        """Drop any previous pose columns so a fresh pass starts clean.
+
+        ``embeddings_per_track`` is accepted for a uniform ``begin_*`` signature
+        across steps but ignored -- pose detection produces no embeddings.
+        """
         if self._data is not None:
             present = [c for c in POSE_COLUMNS if c in self._data.columns]
             if present:
                 self.set_data(self._data.drop(columns=present))
-        self._pose_frames = []
+        self._tmp_pose_frames = []
 
     def add_body_pose_frame(self, result: PoseFrameResult) -> None:
         """Accumulate one frame's detected body poses for the final merge."""
-        self._pose_frames.append(result)
+        self._tmp_pose_frames.append(result)
 
     def finish_body_pose_detection(self) -> None:
         """Merge the streamed poses onto their ``(frame, track_id)`` rows."""
         if self._data is None:
             return
-        poses = poses_to_dataframe(self._pose_frames)
+        poses = poses_to_dataframe(self._tmp_pose_frames)
         self.set_data(self._data.merge(poses, on=["frame", "track_id"], how="left"))
-        self._pose_frames = []
+        self._tmp_pose_frames = []
 
     def discard_body_pose_detection(self) -> None:
         """Drop a cancelled or failed pass; the tracked boxes are left intact."""
-        self._pose_frames = []
+        self._tmp_pose_frames = []
 
     def poses_for_frame(self, frame_index: int) -> list[BodyPose]:
         """Detected body poses for frame ``frame_index`` (0-based)."""
@@ -154,6 +270,16 @@ class Video:
         """All tracked detections as a DataFrame, or ``None`` until complete."""
         return self._data
 
+    @property
+    def body_embeddings(self) -> pd.DataFrame | None:
+        """Best-K body-appearance embeddings per tracklet, or ``None``."""
+        return self._body_embeddings
+
+    @property
+    def face_embeddings(self) -> pd.DataFrame | None:
+        """Best-K face embeddings per tracklet, or ``None``."""
+        return self._face_embeddings
+
     def boxes_for_frame(self, frame_index: int) -> list[BoundingBox]:
         """Object bounding boxes for frame ``frame_index`` (0-based)."""
         if self._data is None:
@@ -170,6 +296,52 @@ class Video:
     def clear(self) -> None:
         self._data = None
         self._rows_by_frame = {}
-        self._frames = []
-        self._face_frames = []
-        self._pose_frames = []
+        self._tmp_frames = []
+        self._tmp_face_frames = []
+        self._tmp_pose_frames = []
+        self._tmp_body_topk = _TrackTopK(0)
+        self._tmp_face_topk = _TrackTopK(0)
+        self._body_embeddings = None
+        self._face_embeddings = None
+
+    def to_parquet(self, path: str | Path) -> None:
+        """Write the completed :attr:`data` to a Parquet file.
+
+        Any collected embeddings are written to companion files beside ``path``
+        (``<stem>.body_embeddings.parquet`` / ``<stem>.face_embeddings.parquet``).
+        Raises :class:`ValueError` if there is no completed data to write.
+        """
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        if self._data is None:
+            raise ValueError("no data to write; run the pipeline first")
+        table = pa.Table.from_pandas(self._data, preserve_index=False)
+        pq.write_table(table, str(path))
+        if self._body_embeddings is not None:
+            _write_embeddings(_embeddings_path(path, "body"), self._body_embeddings)
+        if self._face_embeddings is not None:
+            _write_embeddings(_embeddings_path(path, "face"), self._face_embeddings)
+
+    def load_parquet(self, path: str | Path) -> None:
+        """Load results written by :meth:`to_parquet` into this video.
+
+        Replaces any current results with the table at ``path`` and its companion
+        embeddings files (``<stem>.body_embeddings.parquet`` /
+        ``<stem>.face_embeddings.parquet``), if present.
+        """
+        self.clear()
+        self.set_data(pd.read_parquet(path))
+        body_path = _embeddings_path(path, "body")
+        if body_path.exists():
+            self._body_embeddings = _read_embeddings(body_path)
+        face_path = _embeddings_path(path, "face")
+        if face_path.exists():
+            self._face_embeddings = _read_embeddings(face_path)
+
+    @classmethod
+    def from_parquet(cls, path: str | Path) -> "Video":
+        """A new :class:`Video` loaded from a Parquet file (see :meth:`load_parquet`)."""
+        video = cls()
+        video.load_parquet(path)
+        return video

@@ -1,12 +1,44 @@
 import numpy as np
 
+from body_eye_sync.experiment.video import Video
 from body_eye_sync.pipeline.object_tracking import (
     BoundingBox,
     boxes_from_tracks,
+    cached_model_path,
     default_device,
     detect_tracklets,
     tracks_to_dataframe,
 )
+
+
+def test_cached_model_path_routes_bare_names_into_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "body_eye_sync.pipeline.object_tracking.user_cache_path",
+        lambda appname, appauthor: tmp_path / appauthor / appname,
+    )
+    models_dir = tmp_path / "SSC" / "body-eye-sync" / "models"
+
+    # Any bare weights name (not just one special-cased default) goes to the cache.
+    assert cached_model_path("yolo26m.pt") == str(models_dir / "yolo26m.pt")
+    assert cached_model_path("custom-pose.pt") == str(models_dir / "custom-pose.pt")
+    assert models_dir.is_dir()
+
+
+def test_cached_model_path_leaves_explicit_paths_untouched(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "body_eye_sync.pipeline.object_tracking.user_cache_path",
+        lambda appname, appauthor: tmp_path / appauthor / appname,
+    )
+
+    # A path with a directory part is used as given.
+    explicit = tmp_path / "weights" / "custom-pose.pt"
+    assert cached_model_path(explicit) == str(explicit)
+
+    # An existing file in the cwd is not rewritten.
+    here = tmp_path / "local.pt"
+    here.write_bytes(b"")
+    monkeypatch.chdir(tmp_path)
+    assert cached_model_path("local.pt") == "local.pt"
 
 
 def _tracks_frame1():
@@ -88,3 +120,19 @@ def test_detect_tracklets_finds_three_people(data_dir):
     all_frames = set(df["frame"])
     frames_per_tracklet = df.groupby("track_id")["frame"].agg(set)
     assert all(frames == all_frames for frames in frames_per_tracklet)
+
+
+def test_detect_tracklets_populates_body_embeddings(data_dir):
+    # Feed real BoxMOT frames through Video to confirm it exposes and aligns the
+    # ReID appearance embeddings that identity clustering will later use.
+    video = Video()
+    video.begin_object_tracking(embeddings_per_track=2)
+    for frame in detect_tracklets(data_dir / "three-people.mp4"):
+        video.add_object_tracking_frame(frame)
+    video.finish_object_tracking()
+
+    emb = video.body_embeddings
+    assert emb is not None, "BoxMOT did not expose ReID embeddings"
+    assert emb.groupby("track_id").size().max() <= 2  # best-K bound honoured
+    assert emb["embedding"].iloc[0].dtype == np.float16
+    assert set(emb["track_id"]) <= set(video.data["track_id"])
