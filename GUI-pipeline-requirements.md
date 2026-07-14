@@ -18,7 +18,7 @@ Detect when two people (in a group) are looking at each other while talking
 Allow users to import multiple video files and optionally an audio file.
 Possible steps:
 
-1. User clicks "Import" button
+1. User clicks "Import" step
 2. Define number of tracked people (e.g. 4)
     * Assign each person a unique ID (e.g. 1, 2, 3, 4)
 3. For each person, select the corresponding video file (what they saw) and the tsv file (gaze direction estimation)
