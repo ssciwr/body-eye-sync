@@ -8,6 +8,9 @@ version = "0.0.4"
 dependencies = [
     "boxmot>=21.0.0,<22.0.0",  # see pipeline/object_tracking.py
     "ultralytics",
+    # Direct dependencies so uv can select the CUDA builds on Windows below.
+    "torch",
+    "torchvision",
     "click",
     "numpy",
     "opencv-python",
@@ -38,6 +41,19 @@ classifiers = [
 [project.urls]
 Github = "https://github.com/ssciwr/body-eye-sync"
 Documentation = "https://ssciwr.github.io/body-eye-sync/"
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu126", marker = "sys_platform == 'win32'" },
+]
+torchvision = [
+    { index = "pytorch-cu126", marker = "sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
 
 [dependency-groups]
 dev = [

@@ -42,19 +42,18 @@ jobs:
           echo "BODY_EYE_SYNC_VERSION=$ver" >> "$GITHUB_ENV"
       - name: Build app wheel
         run: uv build --wheel --out-dir installer
-      # Fully pin + hash every runtime dependency for the Windows/py3.13 target.
-      # torch (and torchvision) come from the CUDA 12.6 PyTorch index; everything
-      # else from PyPI. The lockfile is shipped inside the installer and installed
-      # with --require-hashes by post_install.bat.
-      - name: Generate pinned hashed lockfile (CUDA torch)
+      # Export the committed cross-platform lockfile for the installer. Its
+      # platform markers select the CUDA 12.6 torch wheels on Windows, while uv
+      # verifies every hash supplied by the package indexes during installation.
+      - name: Export pinned requirements
         shell: bash
         run: |
-          uv pip compile pyproject.toml \
-            --python-version 3.13 \
-            --default-index https://pypi.org/simple \
-            --index pytorch=https://download.pytorch.org/whl/cu126 \
-            --generate-hashes --emit-index-url \
-            -o installer/requirements-win.lock
+          uv export \
+            --locked \
+            --no-dev \
+            --no-emit-project \
+            --format requirements.txt \
+            --output-file installer/requirements-win.lock
       - name: Render construct.yaml
         shell: bash
         run: uv run --no-project --with jinja2 python installer/render_construct.py
