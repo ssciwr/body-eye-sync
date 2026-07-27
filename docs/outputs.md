@@ -5,11 +5,13 @@ Python analysis tools such as pandas, Polars, or PyArrow.
 
 ## Main Output
 
-Each input receives one main output:
+Each video input receives one main output:
 
 ```text
 outputs/<input-id>.parquet
 ```
+
+Audio inputs have no pipeline stages yet, so they produce no output.
 
 The core tracking columns are:
 

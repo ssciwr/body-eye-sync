@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, ClassVar, Literal, Union
+from typing import ClassVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -15,20 +15,50 @@ class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class VideoInput(_Model):
-    """A single video file to process, referenced by a stable ``id``.
+class _Input(_Model):
+    """Fields shared by every experiment input, whatever its type.
 
     ``path`` may be relative; it is resolved against the experiment folder by the
-    runtime :class:`Experiment`.
+    runtime :class:`Experiment`. Each input's type is given by which list of
+    :class:`ExperimentConfig` it appears in, so the specs carry no ``kind`` tag.
     """
 
-    kind: Literal["video"] = "video"
     id: str
     path: Path
+    time_offset: float = Field(
+        0.0,
+        description=(
+            "Seconds to add to this input's own clock to place it on the shared "
+            "experiment timeline."
+        ),
+    )
 
 
-# An experiment input - currently only VideoInput but e.g. AudioInput etc. can be added here in the future
-InputSpec = Annotated[Union[VideoInput], Field(discriminator="kind")]
+class GlassesVideoInput(_Input):
+    """Video recorded by a participant's glasses-mounted camera."""
+
+
+class FixedVideoInput(_Input):
+    """Video recorded by a camera at a fixed position in the room."""
+
+
+class AudioInput(_Input):
+    """Audio recorded on its own device, e.g. a directional microphone.
+
+    The video inputs carry their own audio, so this is for separately recorded
+    audio only.
+    """
+
+    glasses_video: str | None = Field(
+        None,
+        description=(
+            "Optional id of the glasses video worn by the participant this "
+            "recording captures"
+        ),
+    )
+
+
+InputSpec = Union[GlassesVideoInput, FixedVideoInput, AudioInput]
 
 
 class ObjectTrackingStep(_Model):
@@ -152,8 +182,13 @@ class BodyPoseStep(_Model):
 StepSpec = Union[ObjectTrackingStep, FaceDetectionStep, BodyPoseStep]
 
 
-class ExperimentConfig(_Model):
-    """The serialisable definition of an experiment: its inputs and the pipeline to run."""
+class VideoPipeline(_Model):
+    """The stages run over a video input.
+
+    Both video types use this same set of stages, but as independent blocks, so
+    e.g. a room camera can be tracked with a different detector than the glasses
+    cameras.
+    """
 
     # The pipeline step fields, in run order
     STEP_FIELDS: ClassVar[tuple[str, ...]] = (
@@ -162,12 +197,49 @@ class ExperimentConfig(_Model):
         "body_pose",
     )
 
-    version: int = CURRENT_VERSION
-    name: str
-    inputs: list[InputSpec]
     object_tracking: ObjectTrackingStep = Field(default_factory=ObjectTrackingStep)
     face_detection: FaceDetectionStep | None = None
     body_pose: BodyPoseStep | None = None
+
+    @property
+    def steps(self) -> list[StepSpec]:
+        """The pipeline stages that will run, in order."""
+        present = (getattr(self, name) for name in self.STEP_FIELDS)
+        return [step for step in present if step is not None]
+
+
+class AudioPipeline(_Model):
+    """The stages run over an audio input.
+
+    There are none yet: audio is currently only loaded and placed on the
+    timeline. Diarization and transcription stages belong here.
+    """
+
+    STEP_FIELDS: ClassVar[tuple[str, ...]] = ()
+
+    @property
+    def steps(self) -> list[StepSpec]:
+        """The pipeline stages that will run, in order."""
+        return []
+
+
+class Pipeline(_Model):
+    """What to run for each type of input."""
+
+    glasses_video: VideoPipeline = Field(default_factory=VideoPipeline)
+    fixed_video: VideoPipeline = Field(default_factory=VideoPipeline)
+    audio: AudioPipeline = Field(default_factory=AudioPipeline)
+
+
+class ExperimentConfig(_Model):
+    """The serialisable definition of an experiment: its inputs and the pipeline to run."""
+
+    version: int = CURRENT_VERSION
+    name: str
+    glasses_videos: list[GlassesVideoInput] = Field(default_factory=list)
+    fixed_videos: list[FixedVideoInput] = Field(default_factory=list)
+    audio: list[AudioInput] = Field(default_factory=list)
+    pipeline: Pipeline = Field(default_factory=Pipeline)
 
     @model_validator(mode="after")
     def _check(self) -> ExperimentConfig:
@@ -178,10 +250,22 @@ class ExperimentConfig(_Model):
         duplicates = {i for i in ids if ids.count(i) > 1}
         if duplicates:
             raise ValueError(f"duplicate input ids: {sorted(duplicates)}")
+
+        glasses_ids = {i.id for i in self.glasses_videos}
+        unknown = {
+            a.glasses_video
+            for a in self.audio
+            if a.glasses_video is not None and a.glasses_video not in glasses_ids
+        }
+        if unknown:
+            raise ValueError(f"unknown glasses video ids: {sorted(unknown)}")
         return self
 
     @property
-    def steps(self) -> list[StepSpec]:
-        """The pipeline stages that will run, in order."""
-        present = (getattr(self, name) for name in self.STEP_FIELDS)
-        return [step for step in present if step is not None]
+    def inputs(self) -> list[InputSpec]:
+        """Every input of every type, for the checks that span all of them.
+
+        Anything that acts on inputs of a particular type should go through that
+        type's own list instead, which keeps the type known.
+        """
+        return [*self.glasses_videos, *self.fixed_videos, *self.audio]

@@ -95,7 +95,10 @@ def _read_embeddings(path: Path) -> pd.DataFrame:
 
 
 class Video:
-    """Contains object tracking and vision model outputs for a video.
+    """A video input: its settings and the model outputs computed from it.
+
+    ``id`` names the input and its output files, and ``time_offset`` is the
+    seconds to add to this video's own clock to reach experiment time.
 
     Completed results live in a single numeric :attr:`data` DataFrame. While a
     run is in progress, each frame's BoxMOT ``tracks`` array is accumulated and
@@ -105,9 +108,16 @@ class Video:
     :meth:`finish_face_detection`. Body-pose detection follows the same pattern.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        id: str = "",
+        path: str | Path | None = None,
+        time_offset: float = 0.0,
+    ) -> None:
+        self.id = id
+        self.video_path = Path(path) if path is not None else None
+        self.time_offset = time_offset
         # Persistent results.
-        self.video_path: Path | None = None
         self._data: pd.DataFrame | None = None
         self._rows_by_frame: dict[int, np.ndarray] = {}
         self._body_embeddings: pd.DataFrame | None = None
@@ -345,3 +355,11 @@ class Video:
         video = cls()
         video.load_parquet(path)
         return video
+
+
+class GlassesVideo(Video):
+    """Video from a participant's glasses-mounted camera."""
+
+
+class FixedVideo(Video):
+    """Video from a camera at a fixed position in the room."""

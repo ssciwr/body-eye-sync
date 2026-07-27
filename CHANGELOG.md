@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- add `GlassesVideo`, `FixedVideo` and `Audio` input types [#31](https://github.com/ssciwr/body-eye-sync/pull/31)
+
 ## [0.0.4] - 2026-07-03
 
 - First PyPI pre-release.

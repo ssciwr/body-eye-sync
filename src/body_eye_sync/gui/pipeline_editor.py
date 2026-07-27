@@ -16,14 +16,14 @@ from qtpy.QtWidgets import QGroupBox, QHBoxLayout, QPushButton, QVBoxLayout, QWi
 
 from body_eye_sync.experiment.config import (
     BodyPoseStep,
-    ExperimentConfig,
     FaceDetectionStep,
     ObjectTrackingStep,
     StepSpec,
+    VideoPipeline,
 )
 from body_eye_sync.gui.pydantic_form import PydanticForm
 
-#: The pipeline steps the GUI offers, in run order: the ``Experiment`` field
+#: The pipeline steps the GUI offers, in run order: the ``VideoPipeline`` field
 #: each maps to, its model type, the title shown, and whether it is optional.
 #: Object tracking is required; the later passes consume its boxes and are opt-in.
 _STEPS: list[tuple[str, type, str, bool]] = [
@@ -143,11 +143,11 @@ class PipelineEditor(QWidget):
         layout.addWidget(self.run_all_button)
         layout.addStretch(1)
 
-    def set_from(self, config: ExperimentConfig) -> None:
-        """Populate the editor from ``config``'s pipeline (no ``changed``)."""
+    def set_from(self, pipeline: VideoPipeline) -> None:
+        """Populate the editor from ``pipeline``'s stages (no ``changed``)."""
         for section in self._sections:
             section.blockSignals(True)
-            section.set_from(getattr(config, section.attr_name))
+            section.set_from(getattr(pipeline, section.attr_name))
             section.blockSignals(False)
 
     def reset(self) -> None:
@@ -157,11 +157,11 @@ class PipelineEditor(QWidget):
             section.reset()
             section.blockSignals(False)
 
-    def apply_to(self, config: ExperimentConfig) -> None:
-        """Write the edited steps back onto ``config``'s pipeline fields.
+    def apply_to(self, pipeline: VideoPipeline) -> None:
+        """Write the edited steps back onto ``pipeline``'s stage fields.
 
         Disabled optional steps become ``None``. All steps are validated before
-        anything is assigned, so an invalid field leaves ``config`` intact.
+        anything is assigned, so an invalid field leaves ``pipeline`` intact.
         Raises :class:`pydantic.ValidationError` / :class:`ValueError` if any
         step's arguments are invalid.
         """
@@ -170,7 +170,7 @@ class PipelineEditor(QWidget):
             for s in self._sections
         }
         for name, value in values.items():
-            setattr(config, name, value)
+            setattr(pipeline, name, value)
 
     def enabled_steps(self) -> list[StepSpec]:
         """The enabled steps, in order, built and validated from the widgets.

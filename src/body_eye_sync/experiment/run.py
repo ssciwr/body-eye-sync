@@ -9,10 +9,10 @@ from body_eye_sync.experiment.config import (
     BodyPoseStep,
     FaceDetectionStep,
     ObjectTrackingStep,
-    VideoInput,
+    VideoPipeline,
 )
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.video import Video
+from body_eye_sync.experiment.video import FixedVideo, GlassesVideo, Video
 from body_eye_sync.pipeline.body_pose import detect_body_poses
 from body_eye_sync.pipeline.face_detection import detect_faces
 from body_eye_sync.pipeline.object_tracking import BoundingBox, detect_tracklets
@@ -21,45 +21,52 @@ logger = logging.getLogger(__name__)
 
 
 def run_experiment(experiment: Experiment, *, force: bool = False) -> dict[str, Path]:
-    """Run every input's pipeline and write one Parquet per input.
-
-    Outputs go to the experiment's ``outputs`` folder; existing ones are left
-    untouched unless ``force`` is set. Returns a mapping of input id to the
-    Parquet path written (or found).
-    """
+    """Run the whole pipeline over all inputs"""
+    runs = [
+        *((video, run_glasses_video) for video in experiment.glasses_videos),
+        *((video, run_fixed_video) for video in experiment.fixed_videos),
+    ]
     results: dict[str, Path] = {}
-    for spec in experiment.config.inputs:
-        destination = experiment.output_path(spec)
+    for video, run in runs:
+        destination = experiment.output_path(video)
         if destination.exists() and not force:
-            logger.info("skipping input %r: %s already exists", spec.id, destination)
-            results[spec.id] = destination
+            logger.info("skipping input %r: %s already exists", video.id, destination)
+            results[video.id] = destination
             continue
 
-        logger.info("running input %r", spec.id)
-        video = run_input(experiment, spec)
+        logger.info("running input %r", video.id)
+        run(experiment, video)
         destination.parent.mkdir(parents=True, exist_ok=True)
         video.to_parquet(destination)
         logger.info("wrote %s", destination)
-        results[spec.id] = destination
+        results[video.id] = destination
+
+    for audio in experiment.audio:
+        logger.info("skipping input %r: audio has no pipeline stages yet", audio.id)
     return results
 
 
-def run_input(experiment: Experiment, spec: VideoInput) -> Video:
-    """Run one input's pipeline stages in order, returning the populated Video."""
-    video_path = experiment.resolved_input_path(spec)
-    if not video_path.exists():
-        raise FileNotFoundError(f"input {spec.id!r} video not found: {video_path}")
+def run_glasses_video(experiment: Experiment, video: GlassesVideo) -> None:
+    """Run the glasses video pipeline stages over ``video``."""
+    _run_video_pipeline(video, experiment.pipeline.glasses_video)
 
-    config = experiment.config
-    video = Video()
-    video.set_video(video_path)
-    _run_object_tracking(video, video_path, config.object_tracking)
+
+def run_fixed_video(experiment: Experiment, video: FixedVideo) -> None:
+    """Run the fixed video pipeline stages over ``video``."""
+    _run_video_pipeline(video, experiment.pipeline.fixed_video)
+
+
+def _run_video_pipeline(video: Video, pipeline: VideoPipeline) -> None:
+    """Run ``pipeline``'s stages over ``video``, in order."""
+    video_path = video.video_path
+    if video_path is None or not video_path.exists():
+        raise FileNotFoundError(f"input {video.id!r} video not found: {video_path}")
+    _run_object_tracking(video, video_path, pipeline.object_tracking)
     boxes_by_frame = video.all_boxes_by_frame()
-    if config.face_detection is not None:
-        _run_face_detection(video, video_path, config.face_detection, boxes_by_frame)
-    if config.body_pose is not None:
-        _run_body_pose(video, video_path, config.body_pose, boxes_by_frame)
-    return video
+    if pipeline.face_detection is not None:
+        _run_face_detection(video, video_path, pipeline.face_detection, boxes_by_frame)
+    if pipeline.body_pose is not None:
+        _run_body_pose(video, video_path, pipeline.body_pose, boxes_by_frame)
 
 
 def _run_object_tracking(

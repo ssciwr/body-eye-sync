@@ -27,8 +27,9 @@ from body_eye_sync.experiment.config import (
     BodyPoseStep,
     ExperimentConfig,
     FaceDetectionStep,
+    GlassesVideoInput,
     ObjectTrackingStep,
-    VideoInput,
+    VideoPipeline,
 )
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import Video
@@ -40,6 +41,32 @@ from body_eye_sync.gui.video_viewer import VideoViewer
 
 #: Base window title; the open experiment folder is appended when there is one.
 _BASE_TITLE = "body-eye-sync"
+
+
+@dataclass
+class _ShownVideo:
+    """The video input the window is showing, with the pipeline that applies."""
+
+    video: Video
+    pipeline: VideoPipeline
+
+
+def _shown_video(experiment: Experiment | None) -> _ShownVideo | None:
+    """The video ``experiment`` is shown by, or ``None`` if it has none.
+
+    The GUI shows a single video, while an experiment can hold several of each
+    input type; until there is an interface for choosing between them, the first
+    video input is the one shown, glasses cameras first.
+    """
+    if experiment is None:
+        return None
+    if experiment.glasses_videos:
+        video = experiment.glasses_videos[0]
+        return _ShownVideo(video, experiment.pipeline.glasses_video)
+    if experiment.fixed_videos:
+        video = experiment.fixed_videos[0]
+        return _ShownVideo(video, experiment.pipeline.fixed_video)
+    return None
 
 
 @dataclass
@@ -149,10 +176,9 @@ class MainWindow(QMainWindow):
         self._update_step_availability()
 
     def _video(self) -> Video | None:
-        """The current input's :class:`Video` (its results), or ``None``."""
-        if self.experiment is None:
-            return None
-        return self.experiment.video(self.experiment.config.inputs[0])
+        """The shown input's :class:`Video` (its results), or ``None``."""
+        shown = _shown_video(self.experiment)
+        return shown.video if shown is not None else None
 
     def _build_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
@@ -220,21 +246,32 @@ class MainWindow(QMainWindow):
         else:
             self.setWindowTitle(_BASE_TITLE)
 
+    def _pipeline(self) -> VideoPipeline | None:
+        """The pipeline block for the shown video's input type, or ``None``.
+
+        Each input type has its own block, so the editor edits the one belonging
+        to the video the window is showing.
+        """
+        shown = _shown_video(self.experiment)
+        return shown.pipeline if shown is not None else None
+
     def _bind_editor_to_experiment(self) -> None:
         """Populate the pipeline editor from the experiment (or disable it)."""
-        if self.experiment is None:
+        pipeline = self._pipeline()
+        if pipeline is None:
             self.pipeline_editor.reset()
             self.pipeline_editor.setEnabled(False)
             return
         self.pipeline_editor.setEnabled(True)
-        self.pipeline_editor.set_from(self.experiment.config)
+        self.pipeline_editor.set_from(pipeline)
 
     def _on_pipeline_edited(self) -> None:
         """Adopt the editor's pipeline as the experiment's, when it is valid."""
-        if self.experiment is None:
+        pipeline = self._pipeline()
+        if pipeline is None:
             return
         try:
-            self.pipeline_editor.apply_to(self.experiment.config)
+            self.pipeline_editor.apply_to(pipeline)
         except (ValidationError, ValueError):
             self.statusBar().showMessage("Pipeline has invalid settings; not applied")
 
@@ -249,14 +286,16 @@ class MainWindow(QMainWindow):
             self._load_video(Path(path))
 
     def _load_video(self, path: Path) -> None:
-        # Opening a video starts a fresh, unsaved single-input experiment.
+        # Opening a video starts a fresh, unsaved single-input experiment. It is
+        # taken to be glasses footage, this project's primary subject; its gaze
+        # data can be attached later.
         config = ExperimentConfig(
             name=path.stem or "experiment",
-            inputs=[VideoInput(id=path.stem or "video", path=path)],
+            glasses_videos=[GlassesVideoInput(id=path.stem or "video", path=path)],
         )
         experiment = Experiment(config)
         try:
-            self.video_viewer.load(experiment.video(config.inputs[0]))
+            self.video_viewer.load(experiment.glasses_videos[0])
         except OSError as exc:
             QMessageBox.critical(self, "Could not open video", str(exc))
             return
@@ -288,16 +327,18 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Could not open experiment", str(exc))
             return
 
-        # The GUI shows a single video, so open the experiment's first input; the
-        # experiment loads that video's cached results (if any) on access.
-        spec = experiment.config.inputs[0]
-        video_path = experiment.resolved_input_path(spec)
+        shown = _shown_video(experiment)
+        if shown is None:
+            QMessageBox.critical(
+                self, "No video inputs", f"{folder} has no video inputs to show"
+            )
+            return
+        video_path = shown.video.video_path
         if not video_path.exists():
             QMessageBox.critical(self, "Video not found", str(video_path))
             return
-        video = experiment.video(spec)
         try:
-            self.video_viewer.load(video)
+            self.video_viewer.load(shown.video)
         except OSError as exc:
             QMessageBox.critical(self, "Could not open video", str(exc))
             return
@@ -309,9 +350,9 @@ class MainWindow(QMainWindow):
         self.save_action.setEnabled(True)
         self.video_viewer.refresh_overlays()
         self._update_step_availability()
-        if video.data is not None:
+        if shown.video.data is not None:
             self.statusBar().showMessage(
-                f"Loaded cached results from {experiment.output_path(spec)}"
+                f"Loaded cached results from {experiment.output_path(shown.video)}"
             )
 
     def _update_step_availability(self) -> None:
