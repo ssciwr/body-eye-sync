@@ -8,12 +8,13 @@ uninstall_name: body-eye-sync
 channels:
   - conda-forge
 
-# A minimal base: Python + pip + menuinst. The application and all of its
-# dependencies (including CUDA torch) are pip-installed by post_install.bat from
-# the shipped, fully-pinned, hashed lockfile - so they are NOT listed here.
+# A minimal base: Python, pip, uv and menuinst. The application and all of its
+# dependencies (including CUDA torch) are installed by post_install.bat from the
+# shipped requirements export of uv.lock, so they are NOT listed here.
 specs:
   - python 3.13.*
   - pip
+  - uv
   - menuinst
 
 # This is a self-contained application, not a Python distribution: never offer to

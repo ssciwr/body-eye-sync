@@ -8,6 +8,32 @@ Install the development environment with `uv`:
 uv sync
 ```
 
+### Updating Dependencies
+
+The committed `uv.lock` is the single dependency lockfile used by local
+development, CI and the Windows installer. Windows selects the CUDA 12.6 builds
+of Torch and Torchvision through the platform-specific sources in
+`pyproject.toml`; the other platforms use PyPI.
+
+After adding or changing a dependency in `pyproject.toml`, update and check the
+lockfile with:
+
+```bash
+uv lock
+uv lock --check
+```
+
+To update one dependency while keeping the rest of the locked versions where
+possible, use:
+
+```bash
+uv lock --upgrade-package <package>
+```
+
+Commit `pyproject.toml` and `uv.lock` together. CI uses `uv run --locked`, and
+the Windows installer uses `uv export --locked`, so both fail instead of
+silently resolving different dependencies when the lockfile is stale.
+
 Install pre-commit hooks with `prek`:
 
 ```bash
