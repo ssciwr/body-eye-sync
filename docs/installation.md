@@ -9,6 +9,12 @@ Python and all dependencies. Download
 [body-eye-sync.exe](https://github.com/ssciwr/body-eye-sync/releases/latest/download/body-eye-sync.exe)
 and run it, then launch Body Eye Sync from the Start menu or desktop shortcut.
 
+Installed releases check PyPI for newer versions when the GUI starts. If an
+update does not require dependency changes, the application can install it from
+PyPI after confirmation. Updates with changed dependencies direct you to the
+latest Windows installer instead. Editable development installs do not check for
+updates.
+
 ## From Source
 
 Clone the repository and install the package:

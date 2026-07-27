@@ -1,4 +1,5 @@
 import subprocess
+from io import BytesIO
 
 import pytest
 from qtpy.QtWidgets import QMessageBox, QWidget
@@ -19,8 +20,21 @@ def not_editable(monkeypatch):
     monkeypatch.setattr(autoupdate, "_is_editable_install", lambda: False)
 
 
-def _pyproject(version, dependencies=()):
-    return {"project": {"version": version, "dependencies": list(dependencies)}}
+def _metadata(version, dependencies=()):
+    return {"info": {"version": version, "requires_dist": list(dependencies)}}
+
+
+def test_fetches_latest_release_metadata_from_pypi(monkeypatch):
+    requested = []
+
+    def fake_urlopen(url, timeout):
+        requested.append((url, timeout))
+        return BytesIO(b'{"info": {"version": "0.1.0", "requires_dist": []}}')
+
+    monkeypatch.setattr(autoupdate, "urlopen", fake_urlopen)
+
+    assert autoupdate._fetch_package_metadata() == _metadata("0.1.0")
+    assert requested == [("https://pypi.org/pypi/body-eye-sync/json", 10.0)]
 
 
 # --- check_for_update -------------------------------------------------------
@@ -28,20 +42,26 @@ def _pyproject(version, dependencies=()):
 
 def test_returns_update_when_remote_is_newer(not_editable, monkeypatch):
     monkeypatch.setattr(autoupdate, "_installed_version", lambda: "0.0.1")
-    monkeypatch.setattr(autoupdate, "_fetch_pyproject", lambda: _pyproject("0.1.0"))
+    monkeypatch.setattr(
+        autoupdate, "_fetch_package_metadata", lambda: _metadata("0.1.0")
+    )
     info = autoupdate.check_for_update()
     assert info == UpdateInfo("0.1.0", [])
 
 
 def test_returns_none_when_up_to_date(not_editable, monkeypatch):
     monkeypatch.setattr(autoupdate, "_installed_version", lambda: "0.1.0")
-    monkeypatch.setattr(autoupdate, "_fetch_pyproject", lambda: _pyproject("0.1.0"))
+    monkeypatch.setattr(
+        autoupdate, "_fetch_package_metadata", lambda: _metadata("0.1.0")
+    )
     assert autoupdate.check_for_update() is None
 
 
 def test_returns_none_when_remote_is_older(not_editable, monkeypatch):
     monkeypatch.setattr(autoupdate, "_installed_version", lambda: "0.2.0")
-    monkeypatch.setattr(autoupdate, "_fetch_pyproject", lambda: _pyproject("0.1.0"))
+    monkeypatch.setattr(
+        autoupdate, "_fetch_package_metadata", lambda: _metadata("0.1.0")
+    )
     assert autoupdate.check_for_update() is None
 
 
@@ -50,7 +70,7 @@ def test_returns_none_when_offline(not_editable, monkeypatch):
         raise OSError("offline")
 
     monkeypatch.setattr(autoupdate, "_installed_version", lambda: "0.0.1")
-    monkeypatch.setattr(autoupdate, "_fetch_pyproject", boom)
+    monkeypatch.setattr(autoupdate, "_fetch_package_metadata", boom)
     assert autoupdate.check_for_update() is None
 
 
@@ -67,7 +87,7 @@ def test_editable_install_never_updates(monkeypatch):
     def fail():
         raise AssertionError("should not fetch for an editable install")
 
-    monkeypatch.setattr(autoupdate, "_fetch_pyproject", fail)
+    monkeypatch.setattr(autoupdate, "_fetch_package_metadata", fail)
     assert autoupdate.check_for_update() is None
 
 
@@ -78,8 +98,8 @@ def test_flags_a_brand_new_dependency(not_editable, monkeypatch):
     monkeypatch.setattr(autoupdate, "_installed_version", lambda: "0.0.1")
     monkeypatch.setattr(
         autoupdate,
-        "_fetch_pyproject",
-        lambda: _pyproject("0.1.0", ["definitely-not-installed-xyz"]),
+        "_fetch_package_metadata",
+        lambda: _metadata("0.1.0", ["definitely-not-installed-xyz"]),
     )
     info = autoupdate.check_for_update()
     assert info.missing_dependencies == ["definitely-not-installed-xyz"]
@@ -89,7 +109,9 @@ def test_flags_a_pin_beyond_what_is_installed(not_editable, monkeypatch):
     # numpy is installed (it's a real dependency); an impossible pin is unmet.
     monkeypatch.setattr(autoupdate, "_installed_version", lambda: "0.0.1")
     monkeypatch.setattr(
-        autoupdate, "_fetch_pyproject", lambda: _pyproject("0.1.0", ["numpy==999.0.0"])
+        autoupdate,
+        "_fetch_package_metadata",
+        lambda: _metadata("0.1.0", ["numpy==999.0.0"]),
     )
     info = autoupdate.check_for_update()
     assert info.missing_dependencies == ["numpy==999.0.0"]
@@ -99,7 +121,9 @@ def test_satisfied_dependencies_are_not_flagged(not_editable, monkeypatch):
     # numpy is installed and any version satisfies a bare requirement.
     monkeypatch.setattr(autoupdate, "_installed_version", lambda: "0.0.1")
     monkeypatch.setattr(
-        autoupdate, "_fetch_pyproject", lambda: _pyproject("0.1.0", ["numpy"])
+        autoupdate,
+        "_fetch_package_metadata",
+        lambda: _metadata("0.1.0", ["numpy"]),
     )
     info = autoupdate.check_for_update()
     assert info.missing_dependencies == []
@@ -110,8 +134,8 @@ def test_dependency_not_for_this_platform_is_skipped(not_editable, monkeypatch):
     monkeypatch.setattr(autoupdate, "_installed_version", lambda: "0.0.1")
     monkeypatch.setattr(
         autoupdate,
-        "_fetch_pyproject",
-        lambda: _pyproject("0.1.0", ["not-installed-pkg; python_version < '3.0'"]),
+        "_fetch_package_metadata",
+        lambda: _metadata("0.1.0", ["not-installed-pkg; python_version < '3.0'"]),
     )
     info = autoupdate.check_for_update()
     assert info.missing_dependencies == []
@@ -122,6 +146,32 @@ def test_dependency_not_for_this_platform_is_skipped(not_editable, monkeypatch):
 
 def _fake_completed(returncode, output=""):
     return subprocess.CompletedProcess([], returncode, stdout=output, stderr=output)
+
+
+def test_pip_install_uses_pypi_package(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return _fake_completed(0)
+
+    monkeypatch.setattr(autoupdate.subprocess, "run", fake_run)
+
+    autoupdate._run_pip_install()
+
+    command, kwargs = calls[0]
+    assert command == [
+        autoupdate.sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--no-deps",
+        "body-eye-sync",
+    ]
+    assert kwargs["capture_output"] is True
+    assert kwargs["text"] is True
+    assert kwargs["check"] is False
 
 
 def test_missing_deps_sends_user_to_installer_without_installing(

@@ -1,13 +1,9 @@
-"""Check GitHub for a newer version of body-eye-sync and offer to install it.
+"""Check PyPI for a newer version of body-eye-sync and offer to install it.
 
-The version currently comes from the ``pyproject.toml`` on the ``main`` branch on
-GitHub, and updates are installed straight from a source archive of that branch.
+The latest published version and its dependencies come from the PyPI JSON API.
+Updates are installed from PyPI with pip.
 
 If any deps are missing we instead point the user at the full installer.
-
-TODO: Once body-eye-sync is published on PyPI, check the version there
-(``https://pypi.org/pypi/body-eye-sync/json``) and install with
-``pip install --upgrade body-eye-sync`` instead of using GitHub.
 """
 
 from __future__ import annotations
@@ -20,7 +16,6 @@ from dataclasses import dataclass
 from importlib.metadata import Distribution, PackageNotFoundError, version
 from urllib.request import urlopen
 
-import tomllib
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.version import InvalidVersion, Version
 from qtpy.QtCore import QObject, Signal, Slot
@@ -28,12 +23,7 @@ from qtpy.QtWidgets import QMessageBox, QProgressDialog, QWidget
 
 PACKAGE = "body-eye-sync"
 
-# TODO: replace with the PyPI JSON API once the package is published there.
-_PYPROJECT_URL = (
-    "https://raw.githubusercontent.com/ssciwr/body-eye-sync/main/pyproject.toml"
-)
-# TODO: replace with ``pip install --upgrade body-eye-sync`` once on PyPI.
-_ARCHIVE_URL = "https://github.com/ssciwr/body-eye-sync/archive/refs/heads/main.zip"
+_PYPI_URL = f"https://pypi.org/pypi/{PACKAGE}/json"
 # Where to send users whose update needs new dependencies we can't install here.
 _RELEASES_URL = "https://github.com/ssciwr/body-eye-sync/releases"
 
@@ -68,15 +58,17 @@ def _is_editable_install() -> bool:
     return bool(info.get("dir_info", {}).get("editable"))
 
 
-def _fetch_pyproject(timeout: float = 10.0) -> dict:
-    with urlopen(_PYPROJECT_URL, timeout=timeout) as response:  # noqa: S310
-        return tomllib.loads(response.read().decode("utf-8"))
+def _fetch_package_metadata(timeout: float = 10.0) -> dict:
+    """Fetch metadata for the latest published release from PyPI."""
+    with urlopen(_PYPI_URL, timeout=timeout) as response:  # noqa: S310
+        return json.loads(response.read())
 
 
-def _missing_dependencies(pyproject: dict) -> list[str]:
+def _missing_dependencies(metadata: dict) -> list[str]:
     """Requirements the new version needs that this environment does not satisfy."""
     missing: list[str] = []
-    for spec in pyproject.get("project", {}).get("dependencies", []):
+    info = metadata.get("info") or {}
+    for spec in info.get("requires_dist") or []:
         try:
             req = Requirement(spec)
         except InvalidRequirement:
@@ -103,11 +95,11 @@ def check_for_update() -> UpdateInfo | None:
         # A developer running from a source checkout: don't overwrite their tree.
         return None
     try:
-        pyproject = _fetch_pyproject()
+        metadata = _fetch_package_metadata()
     except Exception:
-        # offline, GitHub unreachable, malformed pyproject, etc
+        # offline, PyPI unreachable, malformed metadata, etc
         return None
-    latest = pyproject.get("project", {}).get("version")
+    latest = (metadata.get("info") or {}).get("version")
     if latest is None:
         return None
     try:
@@ -115,11 +107,11 @@ def check_for_update() -> UpdateInfo | None:
             return None
     except InvalidVersion:
         return None
-    return UpdateInfo(latest, _missing_dependencies(pyproject))
+    return UpdateInfo(latest, _missing_dependencies(metadata))
 
 
 def _run_pip_install() -> subprocess.CompletedProcess:
-    """Install the latest version from GitHub into the current environment using --no-deps."""
+    """Install the latest version from PyPI using --no-deps."""
     kwargs = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -131,7 +123,7 @@ def _run_pip_install() -> subprocess.CompletedProcess:
             "install",
             "--upgrade",
             "--no-deps",
-            _ARCHIVE_URL,
+            PACKAGE,
         ],
         capture_output=True,
         text=True,
