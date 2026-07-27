@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from body_eye_sync.experiment.video import Video
-from body_eye_sync.gui.video_viewer import VideoViewer
+from body_eye_sync.gui.widgets.video_viewer import VideoViewer
 
 
 def _video(data_dir, tracklets=None):

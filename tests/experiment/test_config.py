@@ -28,8 +28,11 @@ def _video_pipeline(**overrides):
 
 def _config(**overrides):
     kwargs = dict(
-        name="demo",
-        glasses_videos=[GlassesVideoInput(id="cam1", path="videos/session1.mp4")],
+        glasses_videos=[
+            GlassesVideoInput(
+                id="cam1", path="videos/session1.mp4", gaze_path="videos/session1.tsv"
+            )
+        ],
         pipeline=Pipeline(
             glasses_video=_video_pipeline(), fixed_video=_video_pipeline()
         ),
@@ -62,7 +65,7 @@ def test_default_models_are_recent_medium():
 
 def test_object_tracking_defaults_when_omitted():
     cfg = ExperimentConfig(
-        name="demo", glasses_videos=[GlassesVideoInput(id="cam1", path="v.mp4")]
+        glasses_videos=[GlassesVideoInput(id="cam1", path="v.mp4", gaze_path="v.tsv")]
     )
     pipeline = cfg.pipeline.glasses_video
     assert isinstance(pipeline.object_tracking, ObjectTrackingStep)
@@ -93,24 +96,36 @@ def test_unknown_keys_are_rejected():
         ObjectTrackingStep(detecter="yolov8n")  # typo
 
 
+def test_a_glasses_video_needs_its_gaze_file():
+    # The pipeline has no use for one without the other, so it is not optional.
+    with pytest.raises(ValidationError, match="gaze_path"):
+        GlassesVideoInput(id="cam1", path="v.mp4")
+
+
 def test_time_offset_defaults_to_zero():
-    assert GlassesVideoInput(id="cam1", path="v.mp4").time_offset == 0.0
+    assert (
+        GlassesVideoInput(id="cam1", path="v.mp4", gaze_path="v.tsv").time_offset == 0.0
+    )
     assert AudioInput(id="mic1", path="a.wav").time_offset == 0.0
 
 
-def test_inputs_lists_every_type_videos_first():
+def test_inputs_are_stored_in_typed_lists():
     cfg = _config(
         fixed_videos=[FixedVideoInput(id="room", path="room.mp4")],
         audio=[AudioInput(id="mic1", path="a.wav")],
     )
-    assert [i.id for i in cfg.inputs] == ["cam1", "room", "mic1"]
+    assert [video.id for video in cfg.glasses_videos] == ["cam1"]
+    assert [video.id for video in cfg.fixed_videos] == ["room"]
+    assert [audio.id for audio in cfg.audio] == ["mic1"]
 
 
 def test_audio_only_experiment_is_valid():
     cfg = ExperimentConfig(
-        name="demo", glasses_videos=[], audio=[AudioInput(id="mic1", path="a.wav")]
+        glasses_videos=[], audio=[AudioInput(id="mic1", path="a.wav")]
     )
-    assert [i.id for i in cfg.inputs] == ["mic1"]
+    assert cfg.glasses_videos == []
+    assert cfg.fixed_videos == []
+    assert [audio.id for audio in cfg.audio] == ["mic1"]
 
 
 def test_video_pipeline_blocks_are_independent():
@@ -121,17 +136,20 @@ def test_video_pipeline_blocks_are_independent():
     assert cfg.pipeline.glasses_video.object_tracking.detector == "yolo26m"
 
 
-def test_empty_inputs_rejected():
-    with pytest.raises(ValidationError, match="no inputs"):
-        _config(glasses_videos=[])
+def test_an_experiment_with_no_inputs_is_valid():
+    # What a new experiment in the GUI is, until input files are added to it.
+    cfg = _config(glasses_videos=[])
+    assert cfg.glasses_videos == []
+    assert cfg.fixed_videos == []
+    assert cfg.audio == []
 
 
 def test_duplicate_input_ids_rejected():
     with pytest.raises(ValidationError, match="duplicate input ids"):
         _config(
             glasses_videos=[
-                GlassesVideoInput(id="cam1", path="a.mp4"),
-                GlassesVideoInput(id="cam1", path="b.mp4"),
+                GlassesVideoInput(id="cam1", path="a.mp4", gaze_path="a.tsv"),
+                GlassesVideoInput(id="cam1", path="b.mp4", gaze_path="b.tsv"),
             ]
         )
 

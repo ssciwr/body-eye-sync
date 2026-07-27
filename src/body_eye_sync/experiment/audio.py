@@ -17,7 +17,7 @@ class Audio:
     Audio recorded on its own device, such as a directional microphone; the
     video inputs carry their own audio separately.
 
-    ``id`` names the input and its output files, and ``time_offset`` is the
+    ``id`` names the input and its output directory, and ``time_offset`` is the
     seconds to add to this recording's own clock to reach experiment time.
     ``glasses_video`` is the glasses video worn by the participant this
     recording captures, when it is aimed at one.

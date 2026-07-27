@@ -10,8 +10,13 @@ from click.testing import CliRunner
 
 def _make_experiment(folder):
     config = ExperimentConfig(
-        name=folder.name,
-        glasses_videos=[GlassesVideoInput(id="cam1", path=Path("videos/example.mp4"))],
+        glasses_videos=[
+            GlassesVideoInput(
+                id="cam1",
+                path=Path("videos/example.mp4"),
+                gaze_path=Path("videos/example.tsv"),
+            )
+        ],
     )
     Experiment(config, folder).save()
 
@@ -52,7 +57,7 @@ def test_runs_experiment_and_prints_results(tmp_path, monkeypatch):
     def fake_run_experiment(experiment, **kwargs):
         captured["experiment"] = experiment
         captured["kwargs"] = kwargs
-        return {"cam1": folder / "outputs" / "cam1.parquet"}
+        return {"cam1": folder / "outputs" / "cam1" / "results.parquet"}
 
     monkeypatch.setattr(cli, "run_experiment", fake_run_experiment)
 

@@ -4,7 +4,7 @@ from typing import Iterator
 
 from body_eye_sync.experiment.config import BodyPoseStep
 from body_eye_sync.experiment.video import Video
-from body_eye_sync.gui.base_worker import BaseWorker
+from body_eye_sync.gui.workers.base import BaseWorker
 
 
 class BodyPoseWorker(BaseWorker):
