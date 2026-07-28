@@ -24,6 +24,10 @@ dependencies = [
     "pyside6",
     "insightface",
     "onnxruntime",
+    "sherpa-onnx",
+    "sherpa-onnx-core", # sherpa-onnx dependency missing from sdist metadata
+    "faster-whisper",
+    "huggingface-hub",
 ]
 authors = [
     { name = "SSC" },

@@ -159,10 +159,8 @@ def test_absolute_paths_outside_the_folder_pass_through(tmp_path):
 def test_output_paths_are_under_outputs_dir(tmp_path):
     exp = Experiment(_config(), tmp_path)
     assert exp.output_dir == tmp_path / "outputs"
-    assert (
-        exp.output_path(exp.glasses_videos[0])
-        == tmp_path / "outputs" / "cam1" / "results.parquet"
-    )
+    # The experiment decides where an input's results go, not what they are called.
+    assert exp.output_dir_for(exp.glasses_videos[0]) == tmp_path / "outputs" / "cam1"
 
 
 def test_output_paths_require_a_folder():
@@ -259,7 +257,7 @@ def test_rename_input_moves_its_outputs(tmp_path):
     video.set_data(_tracks())
     exp.save()
     pd.DataFrame({"track_id": [1], "frame": [0], "score": [0.5]}).to_parquet(
-        exp.output_path(video).with_name("body_embeddings.parquet")
+        exp.output_dir_for(video) / "body_embeddings.parquet"
     )
 
     exp.rename_input(video, "cam2")
@@ -352,18 +350,36 @@ def test_save_writes_results_for_every_input_type(tmp_path):
     )
     exp.glasses_videos[0].set_data(_tracks())
     exp.fixed_videos[0].set_data(_tracks())
-    exp.audio[0].set_data(pd.DataFrame({"start": [0.0], "end": [1.0]}))
+    exp.audio[0].speech.set_data(
+        pd.DataFrame({"segment_id": [0], "start": [0.0], "end": [1.0], "speaker": [0]})
+    )
     exp.save()
 
+    # Each input's main output is named for what that output holds.
     assert sorted(
         p.relative_to(tmp_path / "outputs").as_posix()
-        for p in (tmp_path / "outputs").glob("*/results.parquet")
+        for p in (tmp_path / "outputs").glob("*/*.parquet")
     ) == [
         "cam1/results.parquet",
-        "mic1/results.parquet",
+        "mic1/speaker_turns.parquet",
         "room/results.parquet",
     ]
-    assert Experiment.load(tmp_path).audio[0].data["end"].tolist() == [1.0]
+    assert Experiment.load(tmp_path).audio[0].speech.data["end"].tolist() == [1.0]
+
+
+def test_video_speech_results_survive_a_save_and_load(tmp_path):
+    exp = Experiment(_config(), tmp_path)
+    video = exp.glasses_videos[0]
+    video.set_data(_tracks())
+    video.speech.set_data(
+        pd.DataFrame({"segment_id": [0], "start": [0.0], "end": [1.0], "speaker": [3]})
+    )
+
+    exp.save()
+
+    reloaded = Experiment.load(tmp_path).glasses_videos[0]
+    assert reloaded.data["track_id"].nunique() == 2
+    assert reloaded.speech.data["speaker"].tolist() == [3]
 
 
 def test_unreadable_results_are_skipped_rather_than_failing_the_load(tmp_path, caplog):
@@ -373,7 +389,9 @@ def test_unreadable_results_are_skipped_rather_than_failing_the_load(tmp_path, c
     exp.glasses_videos[0].set_data(_tracks())
     exp.fixed_videos[0].set_data(_tracks())
     exp.save()
-    exp.output_path(exp.glasses_videos[0]).write_bytes(b"not a parquet file")
+    (exp.output_dir_for(exp.glasses_videos[0]) / "results.parquet").write_bytes(
+        b"not a parquet file"
+    )
 
     reloaded = Experiment.load(tmp_path)
 
@@ -389,7 +407,9 @@ def test_results_that_are_parquet_but_not_ours_are_skipped(tmp_path):
     exp.glasses_videos[0].set_data(_tracks())
     exp.save()
     # A valid Parquet file without the columns a video's results need.
-    pd.DataFrame({"nothing": [1]}).to_parquet(exp.output_path(exp.glasses_videos[0]))
+    pd.DataFrame({"nothing": [1]}).to_parquet(
+        exp.output_dir_for(exp.glasses_videos[0]) / "results.parquet"
+    )
 
     assert Experiment.load(tmp_path).glasses_videos[0].data is None
 

@@ -7,20 +7,26 @@ from body_eye_sync.experiment import run as run_module
 from body_eye_sync.experiment.config import (
     AudioInput,
     BodyPoseStep,
+    DiarizationStep,
     ExperimentConfig,
     FaceDetectionStep,
     FixedVideoInput,
     GlassesVideoInput,
     ObjectTrackingStep,
     Pipeline,
+    SpeechPipeline,
+    TranscriptionStep,
     VideoPipeline,
 )
+from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.run import run_experiment
 from body_eye_sync.experiment.video import Video
+from body_eye_sync.pipeline.diarization import SpeakerEmbedding, SpeakerSegment
 from body_eye_sync.pipeline.face_detection import FaceBox, FaceFrameResult
 from body_eye_sync.pipeline.body_pose import BodyPose, PoseFrameResult
 from body_eye_sync.pipeline.object_tracking import BoundingBox
+from body_eye_sync.pipeline.transcription import TranscriptSegment, Word
 
 
 def _frame(frame_idx, *boxes):
@@ -35,6 +41,10 @@ def _face_result(frame_idx, *faces):
         for tid, x1, y1, x2, y2, score in faces
     ]
     return FaceFrameResult(frame_idx, boxes)
+
+
+def _word(start, end, text):
+    return Word(start, end, text, 0.9)
 
 
 def _pose_result(frame_idx, *poses):
@@ -53,11 +63,48 @@ def stub_pipeline(monkeypatch):
     recording the video it ran on and the kwargs it was given, so tests can
     assert step args are forwarded correctly.
     """
-    calls: dict[str, list[dict]] = {"tracking": [], "face": [], "pose": []}
+    calls: dict[str, list[dict]] = {
+        "tracking": [],
+        "face": [],
+        "pose": [],
+        "diarize": [],
+        "embed": [],
+        "transcribe": [],
+    }
 
     def fake_tracklets(video_path, **kwargs):
         calls["tracking"].append({"video": video_path, **kwargs})
         return iter([_frame(1, (0.0, 0.0, 5.0, 5.0, 1, 0.9))])
+
+    def fake_diarize(audio_path, **kwargs):
+        calls["diarize"].append({"audio": audio_path, **kwargs})
+        return [SpeakerSegment(0.0, 1.0, 0), SpeakerSegment(1.5, 2.5, 1)]
+
+    def fake_embeddings(audio_path, segments, **kwargs):
+        calls["embed"].append(
+            {"audio": audio_path, "segments": list(segments), **kwargs}
+        )
+        return iter(
+            [
+                SpeakerEmbedding(
+                    index, segment.speaker, segment.end - segment.start, np.full(4, 0.5)
+                )
+                for index, segment in enumerate(segments)
+            ]
+        )
+
+    def fake_transcribe(audio_path, **kwargs):
+        calls["transcribe"].append({"audio": audio_path, **kwargs})
+        return iter(
+            [
+                TranscriptSegment(
+                    0.0,
+                    2.5,
+                    "hallo welt",
+                    [_word(0.0, 1.0, "hallo"), _word(1.5, 2.5, "welt")],
+                )
+            ]
+        )
 
     def fake_faces(video_path, boxes_by_frame, **kwargs):
         calls["face"].append({"video": video_path, "boxes": boxes_by_frame, **kwargs})
@@ -70,6 +117,9 @@ def stub_pipeline(monkeypatch):
     monkeypatch.setattr(run_module, "detect_tracklets", fake_tracklets)
     monkeypatch.setattr(run_module, "detect_faces", fake_faces)
     monkeypatch.setattr(run_module, "detect_body_poses", fake_poses)
+    monkeypatch.setattr(run_module, "diarize", fake_diarize)
+    monkeypatch.setattr(run_module, "extract_speaker_embeddings", fake_embeddings)
+    monkeypatch.setattr(run_module, "transcribe", fake_transcribe)
     return calls
 
 
@@ -102,8 +152,8 @@ def test_run_writes_parquet_per_input(tmp_path, stub_pipeline):
 
     results = run_experiment(_experiment(video_file))
 
-    assert results == {"cam1": tmp_path / "outputs" / "cam1" / "results.parquet"}
-    data = Video.from_parquet(results["cam1"]).data
+    assert results == {"cam1": tmp_path / "outputs" / "cam1"}
+    data = Video.from_directory(results["cam1"]).data
     # One tracked box in frame 0, with face and pose columns merged on.
     assert len(data) == 1
     assert data["face_score"].notna().all()
@@ -171,28 +221,153 @@ def test_each_video_type_runs_its_own_pipeline_block(tmp_path, stub_pipeline):
     assert [c["video"] for c in stub_pipeline["pose"]] == [glasses_file, room_file]
 
 
-def test_audio_inputs_are_skipped(tmp_path, stub_pipeline):
+def _audio_experiment(tmp_path, **pipeline_overrides):
     video_file = tmp_path / "clip.mp4"
     video_file.touch()
     audio_file = tmp_path / "p1.wav"
     audio_file.touch()
-    exp = _experiment(
+    return _experiment(
         video_file,
         audio=[AudioInput(id="mic1", path=audio_file, glasses_video="cam1")],
+        pipeline=Pipeline(
+            glasses_video=_full_pipeline(),
+            fixed_video=_full_pipeline(),
+            speech=SpeechPipeline(**pipeline_overrides),
+        ),
+    )
+
+
+def test_diarization_only_audio_run(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path)
+
+    results = run_experiment(exp)
+
+    assert set(results) == {"cam1", "mic1"}
+    audio = Audio.from_directory(results["mic1"])
+    assert audio.speech.data["speaker"].tolist() == [0, 1]
+    # Transcription is off, so no text column and no companion word file.
+    assert "text" not in audio.speech.data.columns
+    assert audio.speech.words is None
+    assert not stub_pipeline["transcribe"]
+
+
+def test_speaker_embeddings_are_written_beside_the_turns(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path)
+
+    results = run_experiment(exp)
+
+    audio = Audio.from_directory(results["mic1"])
+    assert audio.speech.embeddings["speaker"].tolist() == [0, 1]
+    assert (results["mic1"] / "speaker_embeddings.parquet").exists()
+    # The embedding pass sees the turns diarization settled on.
+    assert [s.speaker for s in stub_pipeline["embed"][0]["segments"]] == [0, 1]
+
+
+def test_no_embedding_pass_when_none_are_asked_for(tmp_path, stub_pipeline):
+    exp = _audio_experiment(
+        tmp_path, diarization=DiarizationStep(embeddings_per_speaker=0)
     )
 
     results = run_experiment(exp)
 
-    # Audio has no pipeline stages yet, so it produces no output at all.
+    assert not stub_pipeline["embed"]
+    assert Audio.from_directory(results["mic1"]).speech.embeddings is None
+    assert not (results["mic1"] / "speaker_embeddings.parquet").exists()
+
+
+def test_speech_runs_over_a_video_own_audio_track(tmp_path, stub_pipeline, data_dir):
+    # A real camera file that carries sound, so the audio-stream probe is the
+    # one that decides here rather than a stub.
+    video_file = tmp_path / "clip.mp4"
+    video_file.write_bytes((data_dir / "three-people-talking.mp4").read_bytes())
+    exp = _experiment(
+        video_file,
+        pipeline=Pipeline(glasses_video=_full_pipeline(), speech=SpeechPipeline()),
+    )
+
+    results = run_experiment(exp)
+
+    # The camera's speech lands under the camera, beside its frame results.
+    video_dir = results["cam1"]
+    assert (video_dir / "results.parquet").exists()
+    assert (video_dir / "speaker_turns.parquet").exists()
+    video = Video.from_directory(video_dir)
+    assert video.speech.data["speaker"].tolist() == [0, 1]
+    # Frame results and speech results stay in their own tables.
+    assert "speaker" not in video.data.columns
+    # The speech stages read the video file itself; there is no separate audio.
+    assert [c["audio"] for c in stub_pipeline["diarize"]] == [video_file]
+
+
+def test_a_video_without_an_audio_track_skips_speech(tmp_path, stub_pipeline, data_dir):
+    video_file = tmp_path / "clip.mp4"
+    video_file.write_bytes((data_dir / "three-people.mp4").read_bytes())
+    exp = _experiment(
+        video_file,
+        pipeline=Pipeline(glasses_video=_full_pipeline(), speech=SpeechPipeline()),
+    )
+
+    results = run_experiment(exp)
+
+    # A silent camera is not an error: it just has no speech to find.
+    assert (results["cam1"] / "results.parquet").exists()
+    assert not (results["cam1"] / "speaker_turns.parquet").exists()
+    assert not stub_pipeline["diarize"]
+
+
+def test_speech_pipeline_off_leaves_audio_inputs_unrun(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path)
+    exp.pipeline.speech = None
+    exp.audio[0].audio_path.unlink()
+
+    results = run_experiment(exp)
+
+    # The audio input has no results of its own without the speech stages.
     assert set(results) == {"cam1"}
+    assert not stub_pipeline["diarize"]
     assert not (tmp_path / "outputs" / "mic1").exists()
+
+
+def test_transcription_attributes_text_to_speakers(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path, transcription=TranscriptionStep())
+
+    results = run_experiment(exp)
+
+    audio = Audio.from_directory(results["mic1"])
+    # Each stubbed word overlaps exactly one diarized turn.
+    assert audio.speech.data["text"].tolist() == ["hallo", "welt"]
+    assert audio.speech.words["word"].tolist() == ["hallo", "welt"]
+    assert audio.speech.words["speaker"].tolist() == [0, 1]
+
+
+def test_run_forwards_audio_step_args(tmp_path, stub_pipeline):
+    exp = _audio_experiment(
+        tmp_path,
+        diarization=DiarizationStep(num_speakers=3, threshold=0.25),
+        transcription=TranscriptionStep(model_name="tiny", language="de"),
+    )
+
+    run_experiment(exp)
+
+    assert stub_pipeline["diarize"][0]["num_speakers"] == 3
+    assert stub_pipeline["diarize"][0]["threshold"] == 0.25
+    assert stub_pipeline["transcribe"][0]["model_name"] == "tiny"
+    assert stub_pipeline["transcribe"][0]["language"] == "de"
+
+
+def test_missing_audio_file_raises(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path)
+    exp.audio[0].audio_path.unlink()
+
+    with pytest.raises(FileNotFoundError, match="mic1"):
+        run_experiment(exp)
 
 
 def test_existing_output_is_skipped_without_force(tmp_path, monkeypatch):
     video_file = tmp_path / "clip.mp4"
     video_file.touch()
     exp = _experiment(video_file)
-    destination = exp.output_path(exp.glasses_videos[0])
+    destination = exp.output_dir_for(exp.glasses_videos[0]) / "results.parquet"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(b"stale")
 
@@ -202,20 +377,33 @@ def test_existing_output_is_skipped_without_force(tmp_path, monkeypatch):
     monkeypatch.setattr(run_module, "detect_tracklets", boom)
 
     results = run_experiment(exp)
-    assert results["cam1"] == destination
+    assert results["cam1"] == destination.parent
     assert destination.read_bytes() == b"stale"  # untouched
+
+
+def test_existing_audio_output_is_skipped_without_force(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path)
+    run_experiment(exp)
+    assert len(stub_pipeline["diarize"]) == 1
+
+    # An audio input names its results differently to a video, so the check has
+    # to be the input's own rather than a fixed filename.
+    results = run_experiment(_audio_experiment(tmp_path))
+
+    assert len(stub_pipeline["diarize"]) == 1  # not run a second time
+    assert results["mic1"] == tmp_path / "outputs" / "mic1"
 
 
 def test_force_reruns_and_overwrites(tmp_path, stub_pipeline):
     video_file = tmp_path / "clip.mp4"
     video_file.touch()
     exp = _experiment(video_file)
-    destination = exp.output_path(exp.glasses_videos[0])
+    destination = exp.output_dir_for(exp.glasses_videos[0]) / "results.parquet"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(b"stale")
 
     results = run_experiment(exp, force=True)
-    assert Video.from_parquet(results["cam1"]).data is not None
+    assert Video.from_directory(results["cam1"]).data is not None
 
 
 def test_runs_a_loaded_experiment(tmp_path, stub_pipeline):
@@ -224,8 +412,8 @@ def test_runs_a_loaded_experiment(tmp_path, stub_pipeline):
     _experiment(video_file).save()
 
     results = run_experiment(Experiment.load(tmp_path))
-    assert results["cam1"] == tmp_path / "outputs" / "cam1" / "results.parquet"
-    assert results["cam1"].exists()
+    assert results["cam1"] == tmp_path / "outputs" / "cam1"
+    assert (results["cam1"] / "results.parquet").exists()
 
 
 def test_missing_video_raises(tmp_path, stub_pipeline):

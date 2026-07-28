@@ -91,13 +91,12 @@ def test_face_embeddings_best_k_and_fp16_round_trip(tmp_path):
     # Face embeddings do not leak into the main dataframe.
     assert "embedding" not in video.data.columns
 
-    path = tmp_path / "cam1" / "results.parquet"
-    path.parent.mkdir()
-    video.to_parquet(path)
-    assert (path.parent / "face_embeddings.parquet").exists()
-    assert not (path.parent / "body_embeddings.parquet").exists()
+    directory = tmp_path / "cam1"
+    video.save(directory)
+    assert (directory / "face_embeddings.parquet").exists()
+    assert not (directory / "body_embeddings.parquet").exists()
 
-    loaded = Video.from_parquet(path)
+    loaded = Video.from_directory(directory)
     loaded_emb = loaded.face_embeddings
     assert len(loaded_emb) == 1
     assert loaded_emb["embedding"].iloc[0].dtype == np.float16
@@ -108,13 +107,13 @@ def test_face_embeddings_best_k_and_fp16_round_trip(tmp_path):
 
 def test_no_companion_files_written_without_embeddings(tmp_path):
     video = _tracked_video([[0, 1, 0, 0, 10, 10, 0.9]])
-    path = tmp_path / "cam1" / "results.parquet"
-    path.parent.mkdir()
-    (path.parent / "face_embeddings.parquet").write_bytes(b"stale")
-    (path.parent / "body_embeddings.parquet").write_bytes(b"stale")
+    directory = tmp_path / "cam1"
+    directory.mkdir()
+    (directory / "face_embeddings.parquet").write_bytes(b"stale")
+    (directory / "body_embeddings.parquet").write_bytes(b"stale")
 
-    video.to_parquet(path)
+    video.save(directory)
 
-    assert path.exists()
-    assert not (path.parent / "face_embeddings.parquet").exists()
-    assert not (path.parent / "body_embeddings.parquet").exists()
+    assert (directory / "results.parquet").exists()
+    assert not (directory / "face_embeddings.parquet").exists()
+    assert not (directory / "body_embeddings.parquet").exists()

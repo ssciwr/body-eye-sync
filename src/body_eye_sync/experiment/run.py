@@ -5,55 +5,89 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.config import (
     BodyPoseStep,
+    DiarizationStep,
     FaceDetectionStep,
     ObjectTrackingStep,
+    SpeechPipeline,
+    TranscriptionStep,
     VideoPipeline,
 )
 from body_eye_sync.experiment.experiment import Experiment
+from body_eye_sync.experiment.speech import Speech
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo, Video
 from body_eye_sync.pipeline.body_pose import detect_body_poses
+from body_eye_sync.pipeline.diarization import (
+    diarize,
+    extract_speaker_embeddings,
+    has_audio_stream,
+)
 from body_eye_sync.pipeline.face_detection import detect_faces
 from body_eye_sync.pipeline.object_tracking import BoundingBox, detect_tracklets
+from body_eye_sync.pipeline.transcription import transcribe
 
 logger = logging.getLogger(__name__)
 
 
 def run_experiment(experiment: Experiment, *, force: bool = False) -> dict[str, Path]:
-    """Run the whole pipeline over all inputs"""
+    """Run the whole pipeline over all inputs, returning each one's output directory."""
     runs = [
         *((video, run_glasses_video) for video in experiment.glasses_videos),
         *((video, run_fixed_video) for video in experiment.fixed_videos),
+        *((audio, run_audio) for audio in experiment.audio),
     ]
     results: dict[str, Path] = {}
-    for video, run in runs:
-        destination = experiment.output_path(video)
-        if destination.exists() and not force:
-            logger.info("skipping input %r: %s already exists", video.id, destination)
-            results[video.id] = destination
+    for data, run in runs:
+        directory = experiment.output_dir_for(data)
+        if data.has_results(directory) and not force:
+            logger.info("skipping input %r: %s already has results", data.id, directory)
+            results[data.id] = directory
             continue
 
-        logger.info("running input %r", video.id)
-        run(experiment, video)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        video.to_parquet(destination)
-        logger.info("wrote %s", destination)
-        results[video.id] = destination
-
-    for audio in experiment.audio:
-        logger.info("skipping input %r: audio has no pipeline stages yet", audio.id)
+        logger.info("running input %r", data.id)
+        run(experiment, data)
+        if not data.has_data():
+            # Nothing to write: an audio input with the speech pipeline off.
+            logger.info("input %r produced no results", data.id)
+            continue
+        data.save(directory)
+        logger.info("wrote %s", directory)
+        results[data.id] = directory
     return results
 
 
 def run_glasses_video(experiment: Experiment, video: GlassesVideo) -> None:
     """Run the glasses video pipeline stages over ``video``."""
     _run_video_pipeline(video, experiment.pipeline.glasses_video)
+    _run_video_speech(video, experiment.pipeline.speech)
 
 
 def run_fixed_video(experiment: Experiment, video: FixedVideo) -> None:
     """Run the fixed video pipeline stages over ``video``."""
     _run_video_pipeline(video, experiment.pipeline.fixed_video)
+    _run_video_speech(video, experiment.pipeline.speech)
+
+
+def run_audio(experiment: Experiment, audio: Audio) -> None:
+    """Run the speech pipeline stages over ``audio``."""
+    if experiment.pipeline.speech is None:
+        return
+    audio_path = audio.audio_path
+    if audio_path is None or not audio_path.exists():
+        raise FileNotFoundError(f"input {audio.id!r} audio not found: {audio_path}")
+    _run_speech_pipeline(audio.speech, audio_path, experiment.pipeline.speech)
+
+
+def _run_video_speech(video: Video, pipeline: SpeechPipeline | None) -> None:
+    """Run the speech stages over a video's audio track, if it has one."""
+    if pipeline is None or video.video_path is None:
+        return
+    if not has_audio_stream(video.video_path):
+        logger.info("input %r has no audio track; skipping speech", video.id)
+        return
+    _run_speech_pipeline(video.speech, video.video_path, pipeline)
 
 
 def _run_video_pipeline(video: Video, pipeline: VideoPipeline) -> None:
@@ -117,3 +151,57 @@ def _run_body_pose(
     ):
         video.add_body_pose_frame(result)
     video.finish_body_pose_detection()
+
+
+def _run_speech_pipeline(
+    speech: Speech, media_path: Path, pipeline: SpeechPipeline
+) -> None:
+    """Run ``pipeline``'s stages over one recording's audio, in order."""
+    _run_diarization(speech, media_path, pipeline.diarization)
+    if pipeline.transcription is not None:
+        _run_transcription(speech, media_path, pipeline.transcription)
+
+
+def _run_diarization(speech: Speech, media_path: Path, step: DiarizationStep) -> None:
+    speech.begin_diarization(step.embeddings_per_speaker)
+    for segment in diarize(
+        media_path,
+        segmentation_model=step.segmentation_model,
+        embedding_model=step.embedding_model,
+        num_speakers=step.num_speakers,
+        threshold=step.threshold,
+        min_duration_on=step.min_duration_on,
+        min_duration_off=step.min_duration_off,
+    ):
+        speech.add_diarization_segment(segment)
+    speech.finish_diarization()
+    if step.embeddings_per_speaker > 0:
+        _run_speaker_embeddings(speech, media_path, step)
+
+
+def _run_speaker_embeddings(
+    speech: Speech, media_path: Path, step: DiarizationStep
+) -> None:
+    """Embed each speech turn, once diarization has decided what the turns are."""
+    for embedding in extract_speaker_embeddings(
+        media_path,
+        speech.segments,
+        embedding_model=step.embedding_model,
+    ):
+        speech.add_speaker_embedding(embedding)
+    speech.finish_speaker_embeddings()
+
+
+def _run_transcription(
+    speech: Speech, media_path: Path, step: TranscriptionStep
+) -> None:
+    speech.begin_transcription()
+    for segment in transcribe(
+        media_path,
+        model_name=step.model_name,
+        language=step.language,
+        beam_size=step.beam_size,
+        vad_filter=step.vad_filter,
+    ):
+        speech.add_transcription_segment(segment)
+    speech.finish_transcription()

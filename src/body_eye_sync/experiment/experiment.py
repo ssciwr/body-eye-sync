@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 # An experiment lives in a folder: this config file plus an outputs/ subfolder.
 CONFIG_FILENAME = "experiment.yaml"
 OUTPUTS_DIRNAME = "outputs"
-RESULTS_FILENAME = "results.parquet"
 
 
 class Experiment:
@@ -178,22 +177,23 @@ class Experiment:
         """The application-owned output directory for one input."""
         return self.output_dir / input_id
 
-    def output_path(self, data: Video | Audio) -> Path:
-        """Main Parquet output path inside an input's output directory."""
-        return self._input_output_dir(data.id) / RESULTS_FILENAME
+    def output_dir_for(self, data: Video | Audio) -> Path:
+        """The output directory an input owns, inside :attr:`output_dir`."""
+        return self._input_output_dir(data.id)
 
     def _load_results(self, data: Video | Audio) -> None:
-        """Fill an input from its output file, if the experiment has one, skip if invalid."""
-        if self.folder is None or not self.output_path(data).exists():
+        """Fill an input from its stored results, skipping any it cannot read."""
+        if self.folder is None:
             return
+        directory = self.output_dir_for(data)
         try:
-            data.load_parquet(self.output_path(data))
+            data.load(directory)
         except (OSError, ValueError) as exc:
             data.clear()
             logger.warning(
                 "ignoring unreadable results for input %r in %s: %s",
                 data.id,
-                self.output_path(data),
+                directory,
                 exc,
             )
 
@@ -265,7 +265,5 @@ class Experiment:
         with (folder / CONFIG_FILENAME).open("w", encoding="utf-8") as f:
             yaml.safe_dump(self.config().model_dump(mode="json"), f, sort_keys=False)
         for data in self.inputs:
-            if data.data is not None:
-                destination = self.output_path(data)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                data.to_parquet(destination)
+            if data.has_data():
+                data.save(self.output_dir_for(data))

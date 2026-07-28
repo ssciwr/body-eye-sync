@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - add `GlassesVideo`, `FixedVideo` and `Audio` input types [#31](https://github.com/ssciwr/body-eye-sync/pull/31)
-- split the GUI into a tab per stage, with an Input files tab for managing an experiment's inputs [#32](https://github.com/ssciwr/body-eye-sync/pull/34)
+- split the GUI into a tab per stage, with an Input files tab for managing an experiment's inputs [#34](https://github.com/ssciwr/body-eye-sync/pull/34)
+- add a speech pipeline: speaker diarization and transcription [#35](https://github.com/ssciwr/body-eye-sync/pull/35)
 
 ## [0.0.4] - 2026-07-03
 

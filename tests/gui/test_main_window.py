@@ -189,8 +189,8 @@ def test_save_writes_the_experiment_and_its_results(window, data_dir, tmp_path):
     assert [type(s) for s in reloaded.pipeline.glasses_video.steps] == [
         ObjectTrackingStep
     ]
-    output = reloaded.output_path(reloaded.glasses_videos[0])
-    assert Video.from_parquet(output).data["track_id"].tolist() == [1]
+    output = reloaded.output_dir_for(reloaded.glasses_videos[0])
+    assert Video.from_directory(output).data["track_id"].tolist() == [1]
 
 
 def _answer_save_dialogs(monkeypatch, location, name=("", True)):

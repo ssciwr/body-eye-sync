@@ -193,8 +193,110 @@ class BodyPoseStep(_Model):
     )
 
 
+class DiarizationStep(_Model):
+    """Speaker diarization -- who spoke when. Fields mirror ``diarize``."""
+
+    segmentation_model: str = Field(
+        "sherpa-onnx-pyannote-segmentation-3-0",
+        description="sherpa-onnx speaker segmentation model.",
+        json_schema_extra={
+            "choices": [
+                "sherpa-onnx-pyannote-segmentation-3-0",
+                "sherpa-onnx-reverb-diarization-v1",
+                "sherpa-onnx-reverb-diarization-v2",
+            ]
+        },
+    )
+    embedding_model: str = Field(
+        "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
+        description="Speaker embedding model used to cluster turns into speakers.",
+        json_schema_extra={
+            "choices": [
+                "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
+                "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",
+                "wespeaker_en_voxceleb_CAM++_LM.onnx",
+                "wespeaker_en_voxceleb_resnet152_LM.onnx",
+                "nemo_en_titanet_small.onnx",
+                "nemo_en_titanet_large.onnx",
+            ]
+        },
+    )
+    num_speakers: int = Field(
+        -1,
+        ge=-1,
+        description=(
+            "Upper bound on the number of speakers, or -1 to use the threshold instead."
+        ),
+    )
+    threshold: float = Field(
+        0.5,
+        gt=0.0,
+        description=(
+            "Distance below which two speech turns count as the same speaker, "
+            "used when num_speakers is -1. Lower values find more speakers."
+        ),
+    )
+    min_duration_on: float = Field(
+        0.3, ge=0.0, description="Drop speech turns shorter than this many seconds."
+    )
+    min_duration_off: float = Field(
+        0.5,
+        ge=0.0,
+        description="Bridge pauses shorter than this many seconds within a turn.",
+    )
+    embeddings_per_speaker: int = Field(
+        32,
+        ge=0,
+        description=(
+            "Number of best voice embeddings to keep per speaker, ranked by "
+            "turn duration, for relating speakers across inputs later."
+        ),
+    )
+
+
+class TranscriptionStep(_Model):
+    """Speech transcription. Fields mirror ``transcribe``."""
+
+    model_name: str = Field(
+        "large-v3-turbo",
+        description="Whisper model, run through faster-whisper.",
+        json_schema_extra={
+            "choices": [
+                "tiny",
+                "base",
+                "small",
+                "medium",
+                "large-v3",
+                "large-v3-turbo",
+                "distil-large-v3",
+            ]
+        },
+    )
+    language: str | None = Field(
+        None,
+        description=(
+            "ISO 639-1 language code of the recording, e.g. 'de'. Leave unset to "
+            "detect it from the first 30 seconds."
+        ),
+    )
+    beam_size: int = Field(5, ge=1, description="Decoding beam width.")
+    vad_filter: bool = Field(
+        True,
+        description=(
+            "Skip silent stretches, which speeds up the pass and suppresses text "
+            "invented over silence."
+        ),
+    )
+
+
 # A pipeline stage for type hints
-StepSpec = Union[ObjectTrackingStep, FaceDetectionStep, BodyPoseStep]
+StepSpec = Union[
+    ObjectTrackingStep,
+    FaceDetectionStep,
+    BodyPoseStep,
+    DiarizationStep,
+    TranscriptionStep,
+]
 
 
 class VideoPipeline(_Model):
@@ -223,19 +325,20 @@ class VideoPipeline(_Model):
         return [step for step in present if step is not None]
 
 
-class AudioPipeline(_Model):
-    """The stages run over an audio input.
+class SpeechPipeline(_Model):
+    """The stages run over all inputs that contain audio."""
 
-    There are none yet: audio is currently only loaded and placed on the
-    timeline. Diarization and transcription stages belong here.
-    """
+    # The pipeline step fields, in run order
+    STEP_FIELDS: ClassVar[tuple[str, ...]] = ("diarization", "transcription")
 
-    STEP_FIELDS: ClassVar[tuple[str, ...]] = ()
+    diarization: DiarizationStep = Field(default_factory=DiarizationStep)
+    transcription: TranscriptionStep | None = None
 
     @property
     def steps(self) -> list[StepSpec]:
         """The pipeline stages that will run, in order."""
-        return []
+        present = (getattr(self, name) for name in self.STEP_FIELDS)
+        return [step for step in present if step is not None]
 
 
 class Pipeline(_Model):
@@ -243,7 +346,7 @@ class Pipeline(_Model):
 
     glasses_video: VideoPipeline = Field(default_factory=VideoPipeline)
     fixed_video: VideoPipeline = Field(default_factory=VideoPipeline)
-    audio: AudioPipeline = Field(default_factory=AudioPipeline)
+    speech: SpeechPipeline | None = Field(default_factory=SpeechPipeline)
 
 
 class ExperimentConfig(_Model):

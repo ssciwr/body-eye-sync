@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import pandas as pd
+from body_eye_sync.experiment.speech import TURNS_FILENAME, Speech
 
 if TYPE_CHECKING:
     from body_eye_sync.experiment.video import GlassesVideo
@@ -34,46 +34,41 @@ class Audio:
         self.audio_path = Path(path) if path is not None else None
         self.time_offset = time_offset
         self.glasses_video = glasses_video
-        self._data: pd.DataFrame | None = None
+        self.speech = Speech()
 
     def set_audio(self, path: str | Path) -> None:
         """Set the current recording, invalidating any previous model outputs."""
         self.clear()
         self.audio_path = Path(path)
 
-    def set_data(self, data: pd.DataFrame) -> None:
-        """Replace all results with a complete data DataFrame."""
-        self._data = data
-
-    @property
-    def data(self) -> pd.DataFrame | None:
-        """All results for this recording, or ``None`` until there are any."""
-        return self._data
-
     def clear(self) -> None:
-        self._data = None
+        self.speech.clear()
 
-    def to_parquet(self, path: str | Path) -> None:
-        """Write the completed :attr:`data` to a Parquet file.
+    def has_data(self) -> bool:
+        """Whether this recording has completed speech results in memory."""
+        return self.speech.data is not None
 
-        Raises :class:`ValueError` if there is no completed data to write.
-        """
-        import pyarrow as pa
-        import pyarrow.parquet as pq
+    def has_results(self, directory: str | Path) -> bool:
+        """Whether ``directory`` already holds results for a recording."""
+        return (Path(directory) / TURNS_FILENAME).exists()
 
-        if self._data is None:
+    def save(self, directory: str | Path) -> None:
+        """Write these results into ``directory``, a file per kind of result."""
+        if self.speech.data is None:
             raise ValueError("no data to write; run the pipeline first")
-        table = pa.Table.from_pandas(self._data, preserve_index=False)
-        pq.write_table(table, str(path))
+        self.speech.save(directory)
 
-    def load_parquet(self, path: str | Path) -> None:
-        """Load results written by :meth:`to_parquet` into this recording."""
-        self.clear()
-        self.set_data(pd.read_parquet(path))
+    def load(self, directory: str | Path) -> None:
+        """Load results written by :meth:`save`, if ``directory`` holds any.
+
+        Replaces any current results. A directory with nothing in it leaves
+        this recording empty rather than failing.
+        """
+        self.speech.load(directory)
 
     @classmethod
-    def from_parquet(cls, path: str | Path) -> "Audio":
-        """A new :class:`Audio` loaded from a Parquet file (see :meth:`load_parquet`)."""
+    def from_directory(cls, directory: str | Path) -> "Audio":
+        """A new :class:`Audio` loaded from an output directory (see :meth:`load`)."""
         audio = cls()
-        audio.load_parquet(path)
+        audio.load(directory)
         return audio
