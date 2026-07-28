@@ -57,7 +57,19 @@ pipeline:
       detector: yolo26m
     face_detection: null
     body_pose: null
-  audio: {}
+  audio:
+    diarization:
+      segmentation_model: sherpa-onnx-pyannote-segmentation-3-0
+      embedding_model: 3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx
+      num_speakers: -1
+      threshold: 0.5
+      min_duration_on: 0.3
+      min_duration_off: 0.5
+    transcription:
+      model_name: large-v3-turbo
+      language: de
+      beam_size: 5
+      vad_filter: true
 ```
 
 ## Inputs
@@ -90,8 +102,12 @@ they run. Omit a block to use its defaults.
 
 For the video blocks — `glasses_video` and `fixed_video` — `object_tracking` is
 required, while `face_detection` and `body_pose` are optional; omit either key or
-set it to `null` to skip that stage. The `audio` block has no stages yet, so
-audio inputs are currently only loaded and placed on the timeline.
+set it to `null` to skip that stage.
+
+The `audio` block follows the same shape: `diarization` is required and
+`transcription` is optional. Diarization produces the speech turns that are the
+rows of the output, so transcription has nothing to attach its text to without
+it; leave `transcription` unset to only work out who spoke when.
 
 ## Object Tracking
 
@@ -121,3 +137,47 @@ person box:
 
 - `model_name`: YOLO pose weights.
 - `conf`: minimum pose confidence.
+
+## Diarization
+
+Diarization works out who spoke when, splitting the recording into speech turns
+and labelling each with a `speaker` id. It runs [sherpa-onnx][sherpa], which
+needs no account or access token; the models download into the shared model
+cache on first use.
+
+- `segmentation_model`: speaker segmentation model, which finds the speech
+  turns. The default is pyannote's `segmentation-3.0` exported to ONNX.
+- `embedding_model`: speaker embedding model, used to cluster turns by voice.
+- `num_speakers`: upper bound on the number of speakers, or `-1` to use
+  `threshold` instead. This is *not* an exact count — fewer speakers may be
+  found, and the default of `-1` is usually more accurate. Prefer tuning
+  `threshold`, and reach for this only to stop a recording being split into
+  obviously too many speakers.
+- `threshold`: distance below which two turns count as the same speaker. Lower
+  values find more speakers.
+- `min_duration_on`: drop speech turns shorter than this many seconds.
+- `min_duration_off`: bridge pauses shorter than this many seconds within a turn.
+
+Speaker ids are only meaningful within one recording: `speaker` 0 in one input
+has nothing to do with `speaker` 0 in another, exactly as `track_id` is local to
+one video.
+
+[sherpa]: https://github.com/k2-fsa/sherpa-onnx
+
+## Transcription
+
+Transcription runs [faster-whisper][fw] over the whole recording and then
+attributes its words to the diarized speech turns by time overlap. Whisper is
+not run per turn: it transcribes far better with surrounding context, and
+cutting the audio at turn boundaries would clip words in half.
+
+- `model_name`: Whisper model. Larger models are more accurate and slower;
+  `large-v3-turbo` is a good balance, and the `tiny`/`base` models are only
+  really usable for English.
+- `language`: ISO 639-1 code such as `de`. Leave unset to detect it from the
+  first 30 seconds.
+- `beam_size`: decoding beam width.
+- `vad_filter`: skip silent stretches. This speeds up the pass and suppresses
+  the text Whisper otherwise invents to fill silence.
+
+[fw]: https://github.com/SYSTRAN/faster-whisper

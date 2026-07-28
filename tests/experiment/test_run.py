@@ -6,21 +6,27 @@ import pytest
 from body_eye_sync.experiment import run as run_module
 from body_eye_sync.experiment.config import (
     AudioInput,
+    AudioPipeline,
     BodyPoseStep,
+    DiarizationStep,
     ExperimentConfig,
     FaceDetectionStep,
     FixedVideoInput,
     GlassesVideoInput,
     ObjectTrackingStep,
     Pipeline,
+    TranscriptionStep,
     VideoPipeline,
 )
+from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.run import run_experiment
 from body_eye_sync.experiment.video import Video
+from body_eye_sync.pipeline.diarization import SpeakerSegment
 from body_eye_sync.pipeline.face_detection import FaceBox, FaceFrameResult
 from body_eye_sync.pipeline.body_pose import BodyPose, PoseFrameResult
 from body_eye_sync.pipeline.object_tracking import BoundingBox
+from body_eye_sync.pipeline.transcription import TranscriptSegment, Word
 
 
 def _frame(frame_idx, *boxes):
@@ -35,6 +41,10 @@ def _face_result(frame_idx, *faces):
         for tid, x1, y1, x2, y2, score in faces
     ]
     return FaceFrameResult(frame_idx, boxes)
+
+
+def _word(start, end, text):
+    return Word(start, end, text, 0.9)
 
 
 def _pose_result(frame_idx, *poses):
@@ -53,11 +63,34 @@ def stub_pipeline(monkeypatch):
     recording the video it ran on and the kwargs it was given, so tests can
     assert step args are forwarded correctly.
     """
-    calls: dict[str, list[dict]] = {"tracking": [], "face": [], "pose": []}
+    calls: dict[str, list[dict]] = {
+        "tracking": [],
+        "face": [],
+        "pose": [],
+        "diarize": [],
+        "transcribe": [],
+    }
 
     def fake_tracklets(video_path, **kwargs):
         calls["tracking"].append({"video": video_path, **kwargs})
         return iter([_frame(1, (0.0, 0.0, 5.0, 5.0, 1, 0.9))])
+
+    def fake_diarize(audio_path, **kwargs):
+        calls["diarize"].append({"audio": audio_path, **kwargs})
+        return [SpeakerSegment(0.0, 1.0, 0), SpeakerSegment(1.5, 2.5, 1)]
+
+    def fake_transcribe(audio_path, **kwargs):
+        calls["transcribe"].append({"audio": audio_path, **kwargs})
+        return iter(
+            [
+                TranscriptSegment(
+                    0.0,
+                    2.5,
+                    "hallo welt",
+                    [_word(0.0, 1.0, "hallo"), _word(1.5, 2.5, "welt")],
+                )
+            ]
+        )
 
     def fake_faces(video_path, boxes_by_frame, **kwargs):
         calls["face"].append({"video": video_path, "boxes": boxes_by_frame, **kwargs})
@@ -70,6 +103,8 @@ def stub_pipeline(monkeypatch):
     monkeypatch.setattr(run_module, "detect_tracklets", fake_tracklets)
     monkeypatch.setattr(run_module, "detect_faces", fake_faces)
     monkeypatch.setattr(run_module, "detect_body_poses", fake_poses)
+    monkeypatch.setattr(run_module, "diarize", fake_diarize)
+    monkeypatch.setattr(run_module, "transcribe", fake_transcribe)
     return calls
 
 
@@ -168,21 +203,74 @@ def test_each_video_type_runs_its_own_pipeline_block(tmp_path, stub_pipeline):
     assert [c["video"] for c in stub_pipeline["pose"]] == [glasses_file, room_file]
 
 
-def test_audio_inputs_are_skipped(tmp_path, stub_pipeline):
+def _audio_experiment(tmp_path, **pipeline_overrides):
     video_file = tmp_path / "clip.mp4"
     video_file.touch()
     audio_file = tmp_path / "p1.wav"
     audio_file.touch()
-    exp = _experiment(
-        video_file,
-        audio=[AudioInput(id="mic1", path=audio_file, glasses_video="cam1")],
+    pipeline = Pipeline(
+        glasses_video=_full_pipeline(),
+        fixed_video=_full_pipeline(),
+        audio=AudioPipeline(**pipeline_overrides),
     )
+    return Experiment(
+        ExperimentConfig(
+            name="demo",
+            glasses_videos=[GlassesVideoInput(id="cam1", path=video_file)],
+            audio=[AudioInput(id="mic1", path=audio_file, glasses_video="cam1")],
+            pipeline=pipeline,
+        ),
+        tmp_path,
+    )
+
+
+def test_diarization_only_audio_run(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path)
 
     results = run_experiment(exp)
 
-    # Audio has no pipeline stages yet, so it produces no output at all.
-    assert set(results) == {"cam1"}
-    assert not (tmp_path / "outputs" / "mic1.parquet").exists()
+    assert set(results) == {"cam1", "mic1"}
+    audio = Audio.from_parquet(results["mic1"])
+    assert audio.data["speaker"].tolist() == [0, 1]
+    # Transcription is off, so no text column and no companion word file.
+    assert "text" not in audio.data.columns
+    assert audio.words is None
+    assert not stub_pipeline["transcribe"]
+
+
+def test_transcription_attributes_text_to_speakers(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path, transcription=TranscriptionStep())
+
+    results = run_experiment(exp)
+
+    audio = Audio.from_parquet(results["mic1"])
+    # Each stubbed word overlaps exactly one diarized turn.
+    assert audio.data["text"].tolist() == ["hallo", "welt"]
+    assert audio.words["word"].tolist() == ["hallo", "welt"]
+    assert audio.words["speaker"].tolist() == [0, 1]
+
+
+def test_run_forwards_audio_step_args(tmp_path, stub_pipeline):
+    exp = _audio_experiment(
+        tmp_path,
+        diarization=DiarizationStep(num_speakers=3, threshold=0.25),
+        transcription=TranscriptionStep(model_name="tiny", language="de"),
+    )
+
+    run_experiment(exp)
+
+    assert stub_pipeline["diarize"][0]["num_speakers"] == 3
+    assert stub_pipeline["diarize"][0]["threshold"] == 0.25
+    assert stub_pipeline["transcribe"][0]["model_name"] == "tiny"
+    assert stub_pipeline["transcribe"][0]["language"] == "de"
+
+
+def test_missing_audio_file_raises(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path)
+    exp.audio[0].audio_path.unlink()
+
+    with pytest.raises(FileNotFoundError, match="mic1"):
+        run_experiment(exp)
 
 
 def test_existing_output_is_skipped_without_force(tmp_path, monkeypatch):

@@ -24,6 +24,14 @@ dependencies = [
     "pyside6",
     "insightface",
     "onnxruntime",
+    "sherpa-onnx",  # see pipeline/diarization.py
+    # sherpa-onnx's sdist metadata omits the sherpa-onnx-core dependency that its
+    # wheels declare, so uv resolves without it and the native onnxruntime
+    # library is missing at import. Requiring it here restores it; the two are
+    # released in lockstep and their versions must match.
+    "sherpa-onnx-core",
+    "faster-whisper",  # see pipeline/transcription.py
+    "huggingface-hub",  # model downloads for pipeline/diarization.py
 ]
 authors = [
     { name = "SSC" },

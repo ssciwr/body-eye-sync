@@ -5,6 +5,8 @@ from body_eye_sync.experiment.config import (
     CURRENT_VERSION,
     AudioInput,
     AudioPipeline,
+    DiarizationStep,
+    TranscriptionStep,
     BodyPoseStep,
     ExperimentConfig,
     FaceDetectionStep,
@@ -80,8 +82,18 @@ def test_tracking_only_pipeline_is_valid():
     assert [type(s) for s in pipeline.steps] == [ObjectTrackingStep]
 
 
-def test_audio_pipeline_has_no_steps_yet():
-    assert AudioPipeline().steps == []
+def test_audio_pipeline_diarizes_by_default():
+    assert [type(s) for s in AudioPipeline().steps] == [DiarizationStep]
+
+
+def test_audio_pipeline_with_transcription():
+    pipeline = AudioPipeline(transcription=TranscriptionStep())
+    assert [type(s) for s in pipeline.steps] == [DiarizationStep, TranscriptionStep]
+
+
+def test_num_speakers_below_minus_one_is_rejected():
+    with pytest.raises(ValidationError):
+        DiarizationStep(num_speakers=-2)
 
 
 def test_version_defaults_to_current():
