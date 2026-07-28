@@ -75,10 +75,12 @@ added, removed and renamed through `Experiment` so their ids stay unique.
 - `glasses_videos`: video recorded by a participant's glasses-mounted camera.
   This is the input that carries eye tracking.
 - `fixed_videos`: video from a camera at a fixed position in the room.
-- `audio`: audio recorded on its own device, such as a directional microphone
-  aimed at one participant. The video inputs carry their own audio, so this is
-  for separately recorded audio only. An audio input may name the
-  `glasses_video` worn by the participant it captures.
+- `audio`: audio recorded on another device, such as a directional microphone
+  aimed at one participant, or a single microphone recording the whole group.
+  If the audio is from a specific participant, the optional `glasses_video`
+  field identifies the id of the glasses worn by the participant.
+  The video inputs carry their own audio, so this is
+  for separately recorded audio only.
 
 At least one input, of any type, is required.
 
