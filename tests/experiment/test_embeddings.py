@@ -97,7 +97,7 @@ def test_face_embeddings_best_k_and_fp16_round_trip(tmp_path):
     assert not (directory / "body_embeddings.parquet").exists()
 
     loaded = Video.from_directory(directory)
-    loaded_emb = loaded._face_embeddings
+    loaded_emb = loaded.face_embeddings
     assert len(loaded_emb) == 1
     assert loaded_emb["embedding"].iloc[0].dtype == np.float16
     np.testing.assert_array_equal(

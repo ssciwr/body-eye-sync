@@ -13,6 +13,7 @@ from body_eye_sync.experiment.embeddings import (
     read_embeddings,
     write_embeddings,
 )
+from body_eye_sync.experiment.speech import Speech
 from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.pipeline.object_tracking import BoundingBox, tracks_to_dataframe
 from body_eye_sync.pipeline.face_detection import (
@@ -52,6 +53,9 @@ class Video:
     Face detection runs as a later pass over those tracked boxes, accumulating
     per frame and folding its columns onto the matching rows in
     :meth:`finish_face_detection`. Body-pose detection follows the same pattern.
+
+    A camera also records audio, so the speech stages can run over this video's
+    own track, with their results stored in :attr:`speech`.
     """
 
     #: The tracked boxes, this input's main result.
@@ -66,6 +70,7 @@ class Video:
         self.id = id
         self.video_path = Path(path) if path is not None else None
         self.timeline = timeline if timeline is not None else Timeline()
+        self.speech = Speech()
         # Persistent results.
         self._data: pd.DataFrame | None = None
         self._rows_by_frame: dict[int, np.ndarray] = {}
@@ -256,6 +261,7 @@ class Video:
     def clear(self) -> None:
         self._data = None
         self._rows_by_frame = {}
+        self.speech.clear()
         self._tmp_frames = []
         self._tmp_face_frames = []
         self._tmp_pose_frames = []
@@ -292,11 +298,13 @@ class Video:
                 embeddings_path.unlink(missing_ok=True)
             else:
                 write_embeddings(embeddings_path, embeddings)
+        self.speech.save(directory)
 
     def load(self, directory: str | Path) -> None:
         """Load results written by :meth:`save`, if ``directory`` holds any."""
         directory = Path(directory)
         self.clear()
+        self.speech.load(directory)
         results_path = directory / self._RESULTS_FILENAME
         if not results_path.exists():
             return

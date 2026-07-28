@@ -12,6 +12,14 @@
 
 ::: body_eye_sync.pipeline.body_pose
 
+## Diarization
+
+::: body_eye_sync.pipeline.diarization
+
+## Transcription
+
+::: body_eye_sync.pipeline.transcription
+
 ## Model Cache
 
 ::: body_eye_sync.pipeline.model_cache
