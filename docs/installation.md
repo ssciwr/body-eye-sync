@@ -1,57 +1,20 @@
 # Installation
 
-Body Eye Sync requires Python 3.11 or newer.
-
-## Windows Installer
-
-On Windows the easiest option is the standalone installer, which bundles its own
-Python and all dependencies. Download
-[body-eye-sync.exe](https://github.com/ssciwr/body-eye-sync/releases/latest/download/body-eye-sync.exe)
-and run it, then launch Body Eye Sync from the Start menu or desktop shortcut.
-
-Installed releases check PyPI for newer versions when the GUI starts. If an
-update does not require dependency changes, the application can install it from
-PyPI after confirmation. Updates with changed dependencies direct you to the
-latest Windows installer instead. Editable development installs do not check for
-updates.
-
-## From Source
-
-Clone the repository and install the package:
+To install using pip:
 
 ```bash
-git clone https://github.com/ssciwr/body-eye-sync.git
-cd body-eye-sync
-pip install .
+pip install body-eye-sync
 ```
 
-Launch the GUI:
+Then you can launch the GUI:
 
 ```bash
 body-eye-sync
 ```
 
-## Development Install
-
-The repository uses `uv` for development:
-
-```bash
-git clone https://github.com/ssciwr/body-eye-sync.git
-cd body-eye-sync
-uv sync
-```
-
-Run the GUI from the development environment:
-
-```bash
-uv run body-eye-sync
-```
-
-Run the CLI:
-
-```bash
-uv run body-eye-sync-cli --help
-```
+Alternatively on windows you can download the standalone installer
+[body-eye-sync.exe](https://github.com/ssciwr/body-eye-sync/releases/latest/download/body-eye-sync.exe)
+and run it, then launch Body Eye Sync from the Start menu or desktop shortcut.
 
 ## Model Downloads
 

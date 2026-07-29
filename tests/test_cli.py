@@ -2,7 +2,7 @@ from pathlib import Path
 
 from body_eye_sync import cli
 from body_eye_sync.cli import main
-from body_eye_sync.experiment.config import ExperimentConfig, VideoInput
+from body_eye_sync.experiment.config import ExperimentConfig, GlassesVideoInput
 from body_eye_sync.experiment.experiment import Experiment
 
 from click.testing import CliRunner
@@ -11,7 +11,7 @@ from click.testing import CliRunner
 def _make_experiment(folder):
     config = ExperimentConfig(
         name=folder.name,
-        inputs=[VideoInput(id="cam1", path=Path("videos/example.mp4"))],
+        glasses_videos=[GlassesVideoInput(id="cam1", path=Path("videos/example.mp4"))],
     )
     Experiment(config, folder).save()
 

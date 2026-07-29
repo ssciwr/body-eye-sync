@@ -6,14 +6,18 @@ import pandas as pd
 import pytest
 
 from body_eye_sync.experiment.config import (
+    AudioInput,
     BodyPoseStep,
     ExperimentConfig,
     FaceDetectionStep,
+    FixedVideoInput,
+    GlassesVideoInput,
     ObjectTrackingStep,
-    VideoInput,
+    Pipeline,
+    VideoPipeline,
 )
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.video import Video
+from body_eye_sync.experiment.video import FixedVideo, Video
 from body_eye_sync.gui import MainWindow
 
 
@@ -155,10 +159,12 @@ def test_run_face_detection_populates_state_and_overlays(qtbot, window, data_dir
 
 def _experiment_folder(tmp_path, video, with_output):
     """A saved experiment folder for ``video``, optionally with a cached output."""
-    config = ExperimentConfig(name="demo", inputs=[VideoInput(id="cam1", path=video)])
+    config = ExperimentConfig(
+        name="demo", glasses_videos=[GlassesVideoInput(id="cam1", path=video)]
+    )
     experiment = Experiment(config, tmp_path)
     if with_output:
-        experiment.video(config.inputs[0]).set_data(
+        experiment.glasses_videos[0].set_data(
             pd.DataFrame(
                 {
                     "frame": [0, 0, 0],
@@ -188,6 +194,41 @@ def test_open_experiment_loads_video_and_cached_results(window, data_dir, tmp_pa
     # Cached tracks are present, so the later passes are ready to run.
     assert _run_button(window, FaceDetectionStep).isEnabled()
     assert _run_button(window, BodyPoseStep).isEnabled()
+
+
+def test_open_experiment_with_only_fixed_videos(window, data_dir, tmp_path):
+    # No glasses camera, so the first fixed camera is the one shown, and the
+    # editor edits that type's pipeline block.
+    config = ExperimentConfig(
+        name="demo",
+        fixed_videos=[FixedVideoInput(id="room", path=data_dir / "three-people.mp4")],
+    )
+    Experiment(config, tmp_path).save()
+
+    window._load_experiment(tmp_path)
+
+    assert window.video_viewer.frame_count == 5
+    assert isinstance(window._video(), FixedVideo)
+    assert window._pipeline() is window.experiment.pipeline.fixed_video
+
+
+def test_open_experiment_without_video_inputs_is_reported(
+    window, tmp_path, monkeypatch
+):
+    config = ExperimentConfig(
+        name="demo", audio=[AudioInput(id="mic1", path=tmp_path / "p1.wav")]
+    )
+    Experiment(config, tmp_path).save()
+    warned = []
+    monkeypatch.setattr(
+        "body_eye_sync.gui.main_window.QMessageBox.critical",
+        lambda *args, **kwargs: warned.append(args[1]),
+    )
+
+    window._load_experiment(tmp_path)
+
+    assert warned == ["No video inputs"]
+    assert window.experiment is None
 
 
 def test_open_experiment_without_output_loads_video_only(window, data_dir, tmp_path):
@@ -222,9 +263,11 @@ def test_open_video_creates_single_input_experiment(window, data_dir):
     window._load_video(video)
 
     assert window.experiment is not None
-    assert [i.path for i in window.experiment.config.inputs] == [video]
+    assert [v.video_path for v in window.experiment.glasses_videos] == [video]
     # The pipeline editor seeds the mandatory tracking step; the rest are opt-in.
-    assert [type(s) for s in window.experiment.config.steps] == [ObjectTrackingStep]
+    assert [type(s) for s in window.experiment.pipeline.glasses_video.steps] == [
+        ObjectTrackingStep
+    ]
     assert window.experiment.folder is None
     assert window.save_action.isEnabled()
 
@@ -234,7 +277,9 @@ def test_running_object_tracking_records_step_in_experiment(qtbot, window, data_
     window._start_step(ObjectTrackingStep)
     qtbot.waitUntil(lambda: window._thread is None, timeout=60000)
 
-    assert [type(s) for s in window.experiment.config.steps] == [ObjectTrackingStep]
+    assert [type(s) for s in window.experiment.pipeline.glasses_video.steps] == [
+        ObjectTrackingStep
+    ]
 
 
 def test_new_experiment_resets_state(qtbot, window, data_dir):
@@ -260,9 +305,11 @@ def test_save_writes_experiment_and_results(qtbot, window, data_dir, tmp_path):
     window._save_experiment()
 
     reloaded = Experiment.load(tmp_path)
-    assert [type(s) for s in reloaded.config.steps] == [ObjectTrackingStep]
+    assert [type(s) for s in reloaded.pipeline.glasses_video.steps] == [
+        ObjectTrackingStep
+    ]
     # Results are written beside the config and reload with the tracked boxes.
-    output = reloaded.output_path(reloaded.config.inputs[0])
+    output = reloaded.output_path(reloaded.glasses_videos[0])
     assert Video.from_parquet(output).data["track_id"].nunique() == 3
 
 
@@ -279,7 +326,9 @@ def test_save_then_open_round_trips_through_the_window(
     window._load_experiment(tmp_path)
 
     assert window._video().data["track_id"].nunique() == 3
-    assert [type(s) for s in window.experiment.config.steps] == [ObjectTrackingStep]
+    assert [type(s) for s in window.experiment.pipeline.glasses_video.steps] == [
+        ObjectTrackingStep
+    ]
     assert window.experiment.folder == tmp_path
     assert _run_button(window, FaceDetectionStep).isEnabled()
 
@@ -326,7 +375,9 @@ def test_editing_pipeline_updates_experiment(window, data_dir):
     from body_eye_sync.experiment.config import FaceDetectionStep
 
     window._load_video(data_dir / "three-people.mp4")
-    assert [type(s) for s in window.experiment.config.steps] == [ObjectTrackingStep]
+    assert [type(s) for s in window.experiment.pipeline.glasses_video.steps] == [
+        ObjectTrackingStep
+    ]
 
     # Enable the face-detection section via the editor.
     face_section = next(
@@ -334,7 +385,7 @@ def test_editing_pipeline_updates_experiment(window, data_dir):
     )
     face_section.setChecked(True)
 
-    assert [type(s) for s in window.experiment.config.steps] == [
+    assert [type(s) for s in window.experiment.pipeline.glasses_video.steps] == [
         ObjectTrackingStep,
         FaceDetectionStep,
     ]
@@ -343,9 +394,15 @@ def test_editing_pipeline_updates_experiment(window, data_dir):
 def test_loaded_pipeline_populates_editor(qtbot, window, data_dir, tmp_path):
     config = ExperimentConfig(
         name="demo",
-        inputs=[VideoInput(id="cam1", path=data_dir / "three-people.mp4")],
-        object_tracking=ObjectTrackingStep(),
-        face_detection=FaceDetectionStep(det_thresh=0.8),
+        glasses_videos=[
+            GlassesVideoInput(id="cam1", path=data_dir / "three-people.mp4")
+        ],
+        pipeline=Pipeline(
+            glasses_video=VideoPipeline(
+                object_tracking=ObjectTrackingStep(),
+                face_detection=FaceDetectionStep(det_thresh=0.8),
+            )
+        ),
     )
     Experiment(config, tmp_path).save()
 

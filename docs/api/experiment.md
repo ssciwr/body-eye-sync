@@ -15,3 +15,7 @@
 ## Video Results
 
 ::: body_eye_sync.experiment.video
+
+## Audio Results
+
+::: body_eye_sync.experiment.audio
