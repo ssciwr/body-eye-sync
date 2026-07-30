@@ -3,7 +3,11 @@
 import pytest
 from qtpy.QtWidgets import QLabel
 
-from body_eye_sync.experiment.config import ExperimentConfig
+from body_eye_sync.experiment.config import (
+    ExperimentConfig,
+    FixedVideoInput,
+    GlassesVideoInput,
+)
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.gui.tabs import TAB_TYPES
 from body_eye_sync.gui.tabs.alignment import AlignmentTab
@@ -13,7 +17,6 @@ from body_eye_sync.gui.tabs.data_export import DataExportTab
 from body_eye_sync.gui.tabs.post_processing import PostProcessingTab
 
 PLACEHOLDER_TABS = [
-    AlignmentTab,
     AudioProcessingTab,
     PostProcessingTab,
     DataExportTab,
@@ -61,3 +64,22 @@ def test_placeholder_tabs_say_so(qtbot, experiment, tab_type):
     assert issubclass(tab_type, PlaceholderTab)
     label = tab.findChild(QLabel)
     assert label.text() == f"{tab_type.title} is not implemented yet"
+
+
+def test_alignment_tab_renders_all_videos_without_overlays(qtbot, experiment, data_dir):
+    path = data_dir / "three-people.mp4"
+    experiment = Experiment(
+        ExperimentConfig(
+            glasses_videos=[
+                GlassesVideoInput(
+                    id="cam1", path=path, gaze_path=path.with_suffix(".tsv")
+                )
+            ],
+            fixed_videos=[FixedVideoInput(id=f"room{i}", path=path) for i in range(3)],
+        )
+    )
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    assert len(tab.video_viewers) == 4
+    assert tab.grid.itemAtPosition(1, 0).widget() is tab.video_viewers[3]
+    assert all(viewer.no_overlays for viewer in tab.video_viewers)

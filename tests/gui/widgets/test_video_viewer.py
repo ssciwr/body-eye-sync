@@ -148,3 +148,16 @@ def test_video_viewer_draws_boxes_from_video(qtbot, data_dir):
 
     viewer.set_frame(0)
     assert len(viewer._overlay_items) == 2
+
+
+# Video viewer object itself works without overlays with some sample video
+def test_video_viewer_no_overlays_skips_stored_and_live_boxes(qtbot, data_dir):
+    viewer = VideoViewer(no_overlays=True)
+    qtbot.addWidget(viewer)
+    viewer.load(_video(data_dir, _one_box_on_first_frame()))
+    viewer.show_live_frame(
+        SimpleNamespace(frame_idx=2, tracks=np.array([[0, 0, 10, 10, 1, 0.9, 0, 0]]))
+    )
+    assert viewer.current_frame == 1
+    assert viewer.no_overlays
+    assert viewer._overlay_items == []
