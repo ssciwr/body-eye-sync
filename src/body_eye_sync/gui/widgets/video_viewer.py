@@ -199,10 +199,6 @@ class VideoViewer(QWidget):
         return self._video
 
     @property
-    def current_frame(self) -> int:
-        return self._current
-
-    @property
     def frame_count(self) -> int:
         return self._frame_count
 

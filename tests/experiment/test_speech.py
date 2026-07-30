@@ -81,11 +81,11 @@ def test_diarization_drops_previous_results():
     assert speech.words is None
 
 
-def test_discard_diarization_drops_partial_results():
+def test_clear_drops_partial_diarization():
     speech = Speech()
     speech.begin_diarization()
     speech.add_diarization_segment(SpeakerSegment(0.0, 1.0, 0))
-    speech.discard_diarization()
+    speech.clear()
 
     assert speech.data is None
 
@@ -110,18 +110,6 @@ def test_rerunning_transcription_replaces_the_text():
     # The text column is rebuilt rather than duplicated by the merge.
     assert speech.data["text"].tolist() == ["neu", ""]
     assert list(speech.data.columns).count("text") == 1
-
-
-def test_discard_transcription_keeps_the_turns():
-    speech = _diarized(Speech())
-    speech.begin_transcription()
-    speech.add_transcription_segment(
-        TranscriptSegment(0.0, 1.0, "neu", [Word(0.1, 1.0, "neu", 0.9)])
-    )
-    speech.discard_transcription()
-
-    assert speech.data["speaker"].tolist() == [0, 1]
-    assert speech.words is None
 
 
 def test_transcription_without_diarization_does_nothing():

@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "body-eye-sync"
 version = "0.0.4"
 dependencies = [
+    "av",
     "boxmot>=21.0.0,<22.0.0",  # see pipeline/object_tracking.py
     "ultralytics",
     # Direct dependencies so uv can select the CUDA builds on Windows below.
@@ -20,6 +21,7 @@ dependencies = [
     "pyarrow",
     "pydantic",
     "pyyaml",
+    "scipy",
     "qtpy",
     "pyside6",
     "insightface",
@@ -28,6 +30,7 @@ dependencies = [
     "sherpa-onnx-core", # sherpa-onnx dependency missing from sdist metadata
     "faster-whisper",
     "huggingface-hub",
+    "matplotlib",
 ]
 authors = [
     { name = "SSC" },

@@ -72,10 +72,6 @@ class Speech:
         """Collapse the accumulated speech turns into :attr:`data`."""
         self.set_data(segments_to_dataframe(self._tmp_segments))
 
-    def discard_diarization(self) -> None:
-        """Drop a cancelled or failed run; its partial output is unusable."""
-        self.clear()
-
     def add_speaker_embedding(self, embedding: SpeakerEmbedding) -> None:
         """Accumulate one turn's voice embedding, keeping the best per speaker."""
         self._tmp_speaker_topk.add(
@@ -110,11 +106,6 @@ class Speech:
         self.set_data(self._data.merge(text, on="segment_id", how="left"))
         self._words = words
         self._tmp_transcript = []
-
-    def discard_transcription(self) -> None:
-        """Drop a cancelled or failed pass; the speech turns are left intact."""
-        self._tmp_transcript = []
-        self._words = None
 
     def set_data(self, data: pd.DataFrame) -> None:
         """Replace the speech turns with a complete data DataFrame."""

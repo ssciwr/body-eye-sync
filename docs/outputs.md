@@ -58,9 +58,11 @@ For an audio input each row is one speech turn found by diarization:
 | `start`, `end` | Turn bounds in seconds, on the recording's own clock |
 | `speaker` | Speaker identifier, stable within this recording only |
 
-Times are in seconds rather than frames, and the input's `time_offset` is what
-places them on the shared experiment timeline. Turns by different speakers may
-overlap: that is how simultaneous speech is represented.
+Times are in seconds rather than frames, on the recording's own clock. Its
+`time_offset`, `time_scale` and `time_shifts` together place them on the shared
+experiment timeline -- `Timeline.to_experiment_time` applies all three, so
+prefer it to adding the offset by hand. Turns by different speakers may overlap:
+that is how simultaneous speech is represented.
 
 When transcription is enabled, one more column is merged onto each turn:
 

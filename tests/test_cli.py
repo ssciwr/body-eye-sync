@@ -21,10 +21,11 @@ def _make_experiment(folder):
     Experiment(config, folder).save()
 
 
-def test_cli_help():
+def test_cli_help_lists_the_commands():
     result = CliRunner().invoke(main, ("--help",))
     assert result.exit_code == 0
-    assert "FOLDER" in result.output
+    assert "prepare" in result.output
+    assert "run" in result.output
 
 
 def test_cli_version():
@@ -36,7 +37,7 @@ def test_cli_version():
 
 
 def test_missing_folder_is_rejected():
-    result = CliRunner().invoke(main, ("does-not-exist",))
+    result = CliRunner().invoke(main, ("run", "does-not-exist"))
     assert result.exit_code != 0
 
 
@@ -44,7 +45,7 @@ def test_yaml_file_is_rejected(tmp_path):
     # Only a folder is accepted, not an experiment.yaml file (file_okay=False).
     folder = tmp_path / "exp"
     _make_experiment(folder)
-    result = CliRunner().invoke(main, (str(folder / "experiment.yaml"),))
+    result = CliRunner().invoke(main, ("run", str(folder / "experiment.yaml")))
     assert result.exit_code != 0
 
 
@@ -61,7 +62,7 @@ def test_runs_experiment_and_prints_results(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli, "run_experiment", fake_run_experiment)
 
-    result = CliRunner().invoke(main, (str(folder),))
+    result = CliRunner().invoke(main, ("run", str(folder)))
 
     assert result.exit_code == 0, result.output
     assert isinstance(captured["experiment"], Experiment)
@@ -81,6 +82,24 @@ def test_force_flag_is_forwarded(tmp_path, monkeypatch):
         lambda experiment, **kwargs: captured.update(kwargs) or {},
     )
 
-    result = CliRunner().invoke(main, (str(folder), "--force"))
+    result = CliRunner().invoke(main, ("run", str(folder), "--force"))
     assert result.exit_code == 0, result.output
     assert captured["force"] is True
+
+
+def test_prepare_writes_the_corrected_timeline_back(tmp_path, monkeypatch):
+    folder = tmp_path / "exp"
+    _make_experiment(folder)
+
+    def fake_prepare(experiment, **kwargs):
+        experiment.inputs[0].time_offset = 1.25
+        return None
+
+    monkeypatch.setattr(cli, "prepare_experiment", fake_prepare)
+
+    result = CliRunner().invoke(main, ("prepare", str(folder)))
+
+    assert result.exit_code == 0, result.output
+    assert "cam1: offset +1.250 s" in result.output
+    # The point of the command: the corrections are saved, not just reported.
+    assert Experiment.load(folder).inputs[0].time_offset == 1.25

@@ -14,8 +14,10 @@ from body_eye_sync.experiment.config import (
     GlassesVideoInput,
     ObjectTrackingStep,
     Pipeline,
+    TimeShift,
     VideoPipeline,
 )
+from body_eye_sync.preprocessing.alignment import Shift
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo
 
@@ -430,3 +432,52 @@ def test_newer_file_version_rejected(tmp_path):
     )
     with pytest.raises(ValueError, match="newer than supported"):
         Experiment.load(tmp_path)
+
+
+def test_time_shifts_survive_a_save_and_load(tmp_path):
+    exp = Experiment(_config(audio=[AudioInput(id="mic1", path="p1.wav")]), tmp_path)
+    exp.glasses_videos[0].time_offset = 12.5
+    exp.glasses_videos[0].time_scale = 1.0001
+    exp.glasses_videos[0].time_shifts = [Shift(at=100.0, seconds=0.4)]
+    exp.save()
+
+    reloaded = Experiment.load(tmp_path)
+
+    video = reloaded.glasses_videos[0]
+    assert video.time_offset == pytest.approx(12.5)
+    assert video.time_scale == pytest.approx(1.0001)
+    assert [(s.at, s.seconds) for s in video.time_shifts] == [(100.0, 0.4)]
+    # An input that kept time stores nothing extra.
+    assert reloaded.audio[0].time_shifts == []
+
+
+def test_an_input_places_its_own_clock_on_the_experiment(tmp_path):
+    exp = Experiment(_config(), tmp_path)
+    video = exp.glasses_videos[0]
+    video.time_offset = 20.0
+    video.time_scale = 1.0001
+    video.time_shifts = [Shift(at=100.0, seconds=0.4)]
+
+    # Before the loss only the offset applies; after it, the missing content too.
+    assert video.to_experiment_time(50.0) == pytest.approx(70.005)
+    assert video.to_experiment_time(150.0) == pytest.approx(170.415)
+    # And back again.
+    assert video.to_local_time(170.415) == pytest.approx(150.0)
+    # The experiment ran on through the loss; this video has nothing for it.
+    assert video.to_local_time(120.21) is None
+    assert video.unobserved() == [pytest.approx((120.01, 120.41))]
+
+
+def test_an_input_that_kept_time_is_just_its_offset(tmp_path):
+    exp = Experiment(_config(), tmp_path)
+    video = exp.glasses_videos[0]
+    video.time_offset = 7.0
+
+    assert video.to_experiment_time(30.0) == pytest.approx(37.0)
+    assert video.to_local_time(37.0) == pytest.approx(30.0)
+    assert video.unobserved() == []
+
+
+def test_missing_content_duration_must_be_positive():
+    with pytest.raises(ValidationError):
+        TimeShift(at=10.0, seconds=-0.1)

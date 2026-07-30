@@ -41,25 +41,16 @@ class Experiment:
         self.folder = Path(folder) if folder is not None else None
         self.pipeline: Pipeline = config.pipeline
         self.glasses_videos = [
-            GlassesVideo(
-                spec.id,
-                self._resolve(spec.path),
-                self._resolve(spec.gaze_path),
-                spec.time_offset,
-            )
+            GlassesVideo.from_config(spec, self._resolve)
             for spec in config.glasses_videos
         ]
         self.fixed_videos = [
-            FixedVideo(spec.id, self._resolve(spec.path), spec.time_offset)
-            for spec in config.fixed_videos
+            FixedVideo.from_config(spec, self._resolve) for spec in config.fixed_videos
         ]
         glasses_by_id = {video.id: video for video in self.glasses_videos}
         self.audio = [
-            Audio(
-                spec.id,
-                self._resolve(spec.path),
-                spec.time_offset,
-                glasses_by_id.get(spec.glasses_video),
+            Audio.from_config(
+                spec, self._resolve, glasses_by_id.get(spec.glasses_video)
             )
             for spec in config.audio
         ]
@@ -74,12 +65,7 @@ class Experiment:
     def add_glasses_video(self, spec: GlassesVideoInput) -> GlassesVideo:
         """Add a glasses video input, returning its :class:`GlassesVideo`."""
         self._check_id(spec.id)
-        video = GlassesVideo(
-            spec.id,
-            self._resolve(spec.path),
-            self._resolve(spec.gaze_path),
-            spec.time_offset,
-        )
+        video = GlassesVideo.from_config(spec, self._resolve)
         self._discard_results(video.id)
         self.glasses_videos.append(video)
         return video
@@ -87,7 +73,7 @@ class Experiment:
     def add_fixed_video(self, spec: FixedVideoInput) -> FixedVideo:
         """Add a fixed video input, returning its :class:`FixedVideo`."""
         self._check_id(spec.id)
-        video = FixedVideo(spec.id, self._resolve(spec.path), spec.time_offset)
+        video = FixedVideo.from_config(spec, self._resolve)
         self._discard_results(video.id)
         self.fixed_videos.append(video)
         return video
@@ -106,9 +92,7 @@ class Experiment:
             )
             if glasses_video is None:
                 raise ValueError(f"unknown glasses video id: {spec.glasses_video!r}")
-        audio = Audio(
-            spec.id, self._resolve(spec.path), spec.time_offset, glasses_video
-        )
+        audio = Audio.from_config(spec, self._resolve, glasses_video)
         self._discard_results(audio.id)
         self.audio.append(audio)
         return audio
@@ -213,13 +197,15 @@ class Experiment:
                     id=v.id,
                     path=self._store(v.video_path),
                     gaze_path=self._store(v.gaze_path),
-                    time_offset=v.time_offset,
+                    **v.timeline_config(),
                 )
                 for v in self.glasses_videos
             ],
             fixed_videos=[
                 FixedVideoInput(
-                    id=v.id, path=self._store(v.video_path), time_offset=v.time_offset
+                    id=v.id,
+                    path=self._store(v.video_path),
+                    **v.timeline_config(),
                 )
                 for v in self.fixed_videos
             ],
@@ -227,7 +213,7 @@ class Experiment:
                 AudioInput(
                     id=a.id,
                     path=self._store(a.audio_path),
-                    time_offset=a.time_offset,
+                    **a.timeline_config(),
                     glasses_video=(
                         a.glasses_video.id if a.glasses_video is not None else None
                     ),

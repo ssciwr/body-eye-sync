@@ -1,9 +1,9 @@
 # Getting Started
 
 The window is a set of tabs, one per stage of working with an experiment:
-**Input files**, **Alignment**, **Video processing**, **Audio processing**,
-**Post processing** and **Data export**. Only input files and video processing
-do anything so far.
+**Input files**, **Alignment**, **Timing correction**, **Video processing**,
+**Audio processing**, **Post processing** and **Data export**. Audio
+processing, post processing and data export do nothing so far.
 
 The title bar names the folder the open experiment is saved to, or says
 `[unsaved experiment]` until it has one.
@@ -25,6 +25,30 @@ A glasses video also needs the gaze file the same device recorded. If it sits
 beside the video it is picked up automatically; otherwise you are asked for it,
 and a video with no gaze file is not added. The **Gaze file** column shows which
 one is in use, and changes it.
+
+## Place the Inputs on One Timeline
+
+Every recording starts whenever its device was switched on, so nothing relates
+them until each input's offset is known. In the **Alignment** tab, **Automatic
+alignment** finds those offsets from the audio every input shares, and writes
+them into the inputs. It needs at least two inputs that have a file.
+
+The **Timing correction** tab then checks whether a single offset actually held
+for the whole recording. **Analyse and correct timing** measures each input
+against whichever one overlaps the others most, and reports two further things
+per input:
+
+- **Drift** -- a device whose clock ran slightly fast or slow, in parts per
+  million.
+- **Gaps** -- stretches a device stalled and never wrote, listed as the time
+  each one falls at and how much content is missing.
+
+Only inputs that need one of those corrections are changed; an input that kept
+time keeps the offset alignment gave it. Drift and gaps too small to tell apart
+from measurement noise are ignored, which is the usual outcome. An input whose
+audio could not be lined up against the reference reads **Couldn't match**
+rather than being reported as having kept time -- it may overlap too little, be
+too quiet, or need aligning first.
 
 ## Configure the Pipeline
 

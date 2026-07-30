@@ -9,6 +9,7 @@ from typing import Callable, Iterable, Iterator
 import numpy as np
 import pandas as pd
 
+from body_eye_sync.media import SAMPLE_RATE, load_audio
 from body_eye_sync.pipeline.model_cache import model_cache_dir
 
 # Hugging Face repo holding all the sherpa-onnx speaker embedding models
@@ -19,9 +20,6 @@ _SEGMENTATION_REPO = "csukuangfj/{name}"
 
 # The file every segmentation repo stores its full-precision model under.
 _SEGMENTATION_FILE = "model.onnx"
-
-# The sample rate the segmentation and embedding models expect.
-SAMPLE_RATE = 16000
 
 # The columns diarization contributes: one row per speech turn.
 SEGMENT_COLUMNS = ["segment_id", "start", "end", "speaker"]
@@ -58,24 +56,6 @@ def segments_to_dataframe(segments: Iterable[SpeakerSegment]) -> pd.DataFrame:
     )
     frame = pd.DataFrame(data, columns=SEGMENT_COLUMNS)
     return frame.astype({"segment_id": int, "speaker": int})
-
-
-def load_audio(audio_path: str | Path, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
-    """Decode a recording to mono ``float32`` samples at ``sample_rate``."""
-    from faster_whisper.audio import decode_audio
-
-    return decode_audio(str(audio_path), sampling_rate=sample_rate)
-
-
-def has_audio_stream(path: str | Path) -> bool:
-    """Whether a media file carries audio the speech stages could run on."""
-    import av
-
-    try:
-        with av.open(str(path)) as container:
-            return bool(container.streams.audio)
-    except Exception:
-        return False
 
 
 def _download(repo_id: str, filename: str) -> str:

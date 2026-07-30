@@ -42,6 +42,10 @@ fixed_videos:
   - id: camera-1
     path: videos/camera-1.mp4
     time_offset: -1.25
+    time_scale: 1.000031
+    time_shifts:
+      - at: 512.4
+        seconds: 0.18
 audio:
   - id: p1-mic
     path: audio/p1.wav
@@ -90,9 +94,29 @@ pipeline:
 Inputs are grouped by type, each in its own list. Every input needs an `id` that
 is unique across *all* the lists, since it names that input's output directory;
 for the same reason it has to be usable as a filename, so it cannot be empty or
-contain a path separator. Each
-also has a `time_offset` in seconds, which is added to that input's own clock to
-place it on the experiment's shared timeline; it defaults to `0.0`.
+contain a path separator.
+
+Each input also carries where it sits on the experiment's shared timeline. All
+three fields are optional, and the defaults describe a device that started with
+the experiment and kept time:
+
+- `time_offset`: seconds added to this input's own clock to reach experiment
+  time, since every device was switched on at its own moment. Defaults to `0.0`.
+- `time_scale`: experiment seconds per second of this input's own clock. Values
+  slightly away from `1.0` compensate a clock that ran fast or slow. Defaults to
+  `1.0`.
+- `time_shifts`: content the recording lost partway through, if any. Each entry
+  has an `at`, where the loss falls on the recording's own clock, and `seconds`,
+  how much is missing there, which is added to the offset from that point on.
+  Defaults to none.
+
+The Alignment tab fills in `time_offset`; the Timing correction tab measures
+`time_scale` and `time_shifts` and refines the offset of any input that needs
+them. Both can also be edited by hand. Because a lost stretch was never
+recorded, the mapping is not symmetric: every moment an input holds has an
+experiment time, but a stretch of experiment time covered by a `time_shift` has
+nowhere in that recording to map to, and `Timeline.to_local_time` returns `None`
+there rather than the nearest frame it does have.
 
 This file is the on-disk form. At runtime each input is a `GlassesVideo`,
 `FixedVideo` or `Audio` that owns these settings alongside its results, reached

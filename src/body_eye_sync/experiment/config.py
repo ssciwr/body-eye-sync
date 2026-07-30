@@ -24,6 +24,21 @@ class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class TimeShift(_Model):
+    """A stretch of a recording that was never written.
+
+    Some devices stall briefly and carry on without it, so everything after
+    sits earlier on their own clock than it does in the room. ``at`` is where
+    that happens on the recording's own clock and ``seconds`` is how much is
+    missing, which is added to the offset from there on.
+    """
+
+    at: float = Field(
+        description="Where the loss falls on the recording's own clock, in seconds."
+    )
+    seconds: float = Field(gt=0, description="How much content is missing there.")
+
+
 class _Input(_Model):
     """Fields shared by every experiment input, whatever its type.
 
@@ -40,6 +55,20 @@ class _Input(_Model):
             "Seconds to add to this input's own clock to place it on the shared "
             "experiment timeline."
         ),
+    )
+
+    time_scale: float = Field(
+        1.0,
+        gt=0,
+        description=(
+            "Rate of experiment time per second of this input's own clock. "
+            "Values slightly different from one compensate independent device clocks."
+        ),
+    )
+
+    time_shifts: list[TimeShift] = Field(
+        default_factory=list,
+        description=("Content the recording lost partway through, if any."),
     )
 
     @field_validator("id")
@@ -299,7 +328,25 @@ StepSpec = Union[
 ]
 
 
-class VideoPipeline(_Model):
+class _StepPipeline(_Model):
+    """A set of pipeline steps held as fields, in the order they run.
+
+    :attr:`STEP_FIELDS` names them, so a subclass declares its stages once and
+    gets :attr:`steps` from that. An optional stage that is switched off is
+    ``None`` and simply does not run.
+    """
+
+    #: The pipeline step fields, in run order.
+    STEP_FIELDS: ClassVar[tuple[str, ...]] = ()
+
+    @property
+    def steps(self) -> list[StepSpec]:
+        """The pipeline stages that will run, in order."""
+        present = (getattr(self, name) for name in self.STEP_FIELDS)
+        return [step for step in present if step is not None]
+
+
+class VideoPipeline(_StepPipeline):
     """The stages run over a video input.
 
     Both video types use this same set of stages, but as independent blocks, so
@@ -307,7 +354,6 @@ class VideoPipeline(_Model):
     cameras.
     """
 
-    # The pipeline step fields, in run order
     STEP_FIELDS: ClassVar[tuple[str, ...]] = (
         "object_tracking",
         "face_detection",
@@ -318,27 +364,14 @@ class VideoPipeline(_Model):
     face_detection: FaceDetectionStep | None = None
     body_pose: BodyPoseStep | None = None
 
-    @property
-    def steps(self) -> list[StepSpec]:
-        """The pipeline stages that will run, in order."""
-        present = (getattr(self, name) for name in self.STEP_FIELDS)
-        return [step for step in present if step is not None]
 
-
-class SpeechPipeline(_Model):
+class SpeechPipeline(_StepPipeline):
     """The stages run over all inputs that contain audio."""
 
-    # The pipeline step fields, in run order
     STEP_FIELDS: ClassVar[tuple[str, ...]] = ("diarization", "transcription")
 
     diarization: DiarizationStep = Field(default_factory=DiarizationStep)
     transcription: TranscriptionStep | None = None
-
-    @property
-    def steps(self) -> list[StepSpec]:
-        """The pipeline stages that will run, in order."""
-        present = (getattr(self, name) for name in self.STEP_FIELDS)
-        return [step for step in present if step is not None]
 
 
 class Pipeline(_Model):

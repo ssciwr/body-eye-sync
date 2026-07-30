@@ -6,8 +6,6 @@ from body_eye_sync.pipeline.diarization import (
     SpeakerSegment,
     diarize,
     extract_speaker_embeddings,
-    has_audio_stream,
-    load_audio,
     segments_to_dataframe,
 )
 
@@ -55,14 +53,6 @@ def test_segments_to_dataframe_empty():
     assert len(df) == 0
 
 
-def test_load_audio_decodes_opus(data_dir):
-    samples = load_audio(data_dir / "three-people-conversation.opus", 16000)
-
-    assert samples.ndim == 1
-    # The fixture is 10.4 seconds long.
-    assert 10.0 < len(samples) / 16000 < 11.0
-
-
 @pytest.mark.parametrize("num_speakers", [-1, 2])
 def test_diarize_finds_the_speech_turns(data_dir, num_speakers):
     segments = diarize(
@@ -102,26 +92,6 @@ def test_diarize_reports_progress_and_can_be_aborted(data_dir):
     assert seen
     assert all(0.0 <= f <= 1.0 for f in seen)
     assert segments == []
-
-
-def test_has_audio_stream_detects_a_recording(data_dir):
-    assert has_audio_stream(data_dir / "three-people-conversation.opus")
-
-
-def test_has_audio_stream_detects_a_video_sound_track(data_dir):
-    assert has_audio_stream(data_dir / "three-people-talking.mp4")
-
-
-def test_has_audio_stream_is_false_for_a_silent_video(data_dir):
-    # A camera that records no audio is not an error, just nothing to diarize.
-    assert not has_audio_stream(data_dir / "three-people.mp4")
-
-
-def test_has_audio_stream_is_false_for_an_unreadable_file(tmp_path):
-    unreadable = tmp_path / "broken.mp4"
-    unreadable.write_bytes(b"not a video")
-
-    assert not has_audio_stream(unreadable)
 
 
 def test_extract_speaker_embeddings_gives_one_vector_per_turn(data_dir):
@@ -183,10 +153,3 @@ def test_diarize_reads_a_video_own_audio_track(data_dir):
     # The one turn covers the clip, rather than being an artefact at its edge.
     assert segments[0].start < 0.1
     assert segments[0].end > 0.5
-
-
-def test_load_audio_decodes_a_video_sound_track(data_dir):
-    samples = load_audio(data_dir / "three-people-talking.mp4", 16000)
-
-    # As long as the video it came in, 15 frames at 25 fps.
-    assert 0.5 < len(samples) / 16000 < 0.7

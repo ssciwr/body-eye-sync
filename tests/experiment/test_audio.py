@@ -1,4 +1,5 @@
 import pandas as pd
+
 import pytest
 
 from body_eye_sync.experiment.audio import Audio
@@ -46,23 +47,8 @@ def test_new_audio_is_empty():
     assert audio.speech.embeddings is None
 
 
-def test_set_audio_records_the_path():
-    audio = Audio()
-    audio.set_audio("recordings/p1.wav")
-    assert audio.audio_path.name == "p1.wav"
-    assert audio.speech.data is None
-
-
-def test_set_audio_drops_previous_results():
-    audio = Audio()
-    audio.speech.set_data(_turns())
-    audio.set_audio("recordings/p2.wav")
-    assert audio.speech.data is None
-
-
 def test_clear_keeps_the_path():
-    audio = Audio()
-    audio.set_audio("recordings/p1.wav")
+    audio = Audio(path="recordings/p1.wav")
     audio.speech.set_data(_turns())
     audio.clear()
     assert audio.speech.data is None
@@ -88,8 +74,7 @@ def test_results_are_found_in_an_output_directory(tmp_path):
 
 
 def test_round_trip_through_an_output_directory(tmp_path):
-    audio = Audio()
-    audio.set_audio("recordings/p1.wav")
+    audio = Audio(path="recordings/p1.wav")
     audio.speech.set_data(_turns())
 
     loaded = Audio.from_directory(_stored(audio, tmp_path))

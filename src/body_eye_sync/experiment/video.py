@@ -14,6 +14,7 @@ from body_eye_sync.experiment.embeddings import (
     write_embeddings,
 )
 from body_eye_sync.experiment.speech import Speech
+from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.pipeline.object_tracking import BoundingBox, tracks_to_dataframe
 from body_eye_sync.pipeline.face_detection import (
     FACE_COLUMNS,
@@ -40,7 +41,7 @@ def _embeddings_filename(kind: str) -> str:
     return f"{kind}_embeddings.parquet"
 
 
-class Video:
+class Video(Timeline):
     """A video input: its settings and the model outputs computed from it.
 
     ``id`` names the input and its output directory, and ``time_offset`` is the
@@ -64,11 +65,13 @@ class Video:
         self,
         id: str = "",
         path: str | Path | None = None,
-        time_offset: float = 0.0,
+        **timeline,
     ) -> None:
+        # ``timeline`` is where this input sits on the experiment clock; see
+        # :class:`~body_eye_sync.experiment.timeline.Timeline`.
+        super().__init__(**timeline)
         self.id = id
         self.video_path = Path(path) if path is not None else None
-        self.time_offset = time_offset
         self.speech = Speech()
         # Persistent results.
         self._data: pd.DataFrame | None = None
@@ -83,10 +86,18 @@ class Video:
         self._tmp_body_topk = TopK(0, _EMBEDDING_COLUMNS)
         self._tmp_face_topk = TopK(0, _EMBEDDING_COLUMNS)
 
-    def set_video(self, path: str | Path) -> None:
-        """Set the current video, invalidating any previous model outputs."""
-        self.clear()
-        self.video_path = Path(path)
+    @classmethod
+    def from_config(cls, spec, resolve) -> "Video":
+        """This input as its stored form describes it.
+
+        ``resolve`` turns a stored path into the one to read at runtime, which
+        only the experiment holding the folder can do.
+        """
+        return cls(spec.id, resolve(spec.path), **cls.timeline_kwargs(spec))
+
+    @property
+    def path(self) -> Path | None:
+        return self.video_path
 
     def begin_object_tracking(self, embeddings_per_track: int = 0) -> None:
         """Drop any previous model outputs.
@@ -235,16 +246,6 @@ class Video:
         """All tracked detections as a DataFrame, or ``None`` until complete."""
         return self._data
 
-    @property
-    def body_embeddings(self) -> pd.DataFrame | None:
-        """Best-K body-appearance embeddings per tracklet, or ``None``."""
-        return self._body_embeddings
-
-    @property
-    def face_embeddings(self) -> pd.DataFrame | None:
-        """Best-K face embeddings per tracklet, or ``None``."""
-        return self._face_embeddings
-
     def boxes_for_frame(self, frame_index: int) -> list[BoundingBox]:
         """Object bounding boxes for frame ``frame_index`` (0-based)."""
         if self._data is None:
@@ -332,10 +333,20 @@ class GlassesVideo(Video):
         id: str = "",
         path: str | Path | None = None,
         gaze_path: str | Path | None = None,
-        time_offset: float = 0.0,
+        **timeline,
     ) -> None:
-        super().__init__(id, path, time_offset)
+        super().__init__(id, path, **timeline)
         self.gaze_path = Path(gaze_path) if gaze_path is not None else None
+
+    @classmethod
+    def from_config(cls, spec, resolve) -> "GlassesVideo":
+        """As :meth:`Video.from_config`, and the gaze file recorded with it."""
+        return cls(
+            spec.id,
+            resolve(spec.path),
+            resolve(spec.gaze_path),
+            **cls.timeline_kwargs(spec),
+        )
 
     def set_gaze(self, path: str | Path) -> None:
         """Set the gaze samples recorded with this video."""

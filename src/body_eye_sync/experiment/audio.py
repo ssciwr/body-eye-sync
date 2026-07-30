@@ -6,12 +6,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from body_eye_sync.experiment.speech import TURNS_FILENAME, Speech
+from body_eye_sync.experiment.timeline import Timeline
 
 if TYPE_CHECKING:
     from body_eye_sync.experiment.video import GlassesVideo
 
 
-class Audio:
+class Audio(Timeline):
     """An audio input: its settings and the model outputs computed from it.
 
     Audio recorded on its own device, such as a directional microphone; the
@@ -27,19 +28,36 @@ class Audio:
         self,
         id: str = "",
         path: str | Path | None = None,
-        time_offset: float = 0.0,
         glasses_video: GlassesVideo | None = None,
+        **timeline,
     ) -> None:
+        # ``timeline`` is where this input sits on the experiment clock; see
+        # :class:`~body_eye_sync.experiment.timeline.Timeline`.
+        super().__init__(**timeline)
         self.id = id
         self.audio_path = Path(path) if path is not None else None
-        self.time_offset = time_offset
         self.glasses_video = glasses_video
         self.speech = Speech()
 
-    def set_audio(self, path: str | Path) -> None:
-        """Set the current recording, invalidating any previous model outputs."""
-        self.clear()
-        self.audio_path = Path(path)
+    @classmethod
+    def from_config(
+        cls, spec, resolve, glasses_video: GlassesVideo | None = None
+    ) -> "Audio":
+        """This recording as its stored form describes it.
+
+        ``glasses_video`` is the input ``spec.glasses_video`` names, which only
+        the experiment holding the other inputs can look up.
+        """
+        return cls(
+            spec.id,
+            resolve(spec.path),
+            glasses_video,
+            **cls.timeline_kwargs(spec),
+        )
+
+    @property
+    def path(self) -> Path | None:
+        return self.audio_path
 
     def clear(self) -> None:
         self.speech.clear()

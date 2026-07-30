@@ -19,10 +19,10 @@ from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.speech import Speech
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo, Video
 from body_eye_sync.pipeline.body_pose import detect_body_poses
+from body_eye_sync.media import has_audio_stream
 from body_eye_sync.pipeline.diarization import (
     diarize,
     extract_speaker_embeddings,
-    has_audio_stream,
 )
 from body_eye_sync.pipeline.face_detection import detect_faces
 from body_eye_sync.pipeline.object_tracking import BoundingBox, detect_tracklets

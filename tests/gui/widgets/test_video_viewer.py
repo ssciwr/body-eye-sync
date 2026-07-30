@@ -10,7 +10,7 @@ from body_eye_sync.gui.widgets.video_viewer import VideoViewer
 
 def _video(data_dir, tracklets=None):
     video = Video()
-    video.set_video(data_dir / "three-people.mp4")
+    video.video_path = data_dir / "three-people.mp4"
     if tracklets is not None:
         video.set_data(tracklets)
     return video
@@ -41,7 +41,7 @@ def viewer(qtbot, data_dir):
 
 def test_video_viewer_load_shows_first_frame(viewer):
     assert viewer.frame_count == 5
-    assert viewer.current_frame == 0
+    assert viewer._current == 0
     assert not viewer._pixmap_item.pixmap().isNull()
 
 
@@ -60,17 +60,17 @@ def test_video_viewer_load_clears_stale_overlays(qtbot, data_dir):
 
 def test_video_viewer_seek_forward_and_back(viewer):
     viewer.set_frame(3)
-    assert viewer.current_frame == 3
+    assert viewer._current == 3
     # Seeking backwards exercises the re-seek path.
     viewer.set_frame(1)
-    assert viewer.current_frame == 1
+    assert viewer._current == 1
 
 
 def test_video_viewer_set_frame_clamps_to_valid_range(viewer):
     viewer.set_frame(999)
-    assert viewer.current_frame == viewer.frame_count - 1
+    assert viewer._current == viewer.frame_count - 1
     viewer.set_frame(-5)
-    assert viewer.current_frame == 0
+    assert viewer._current == 0
 
 
 def test_video_viewer_corrects_overestimated_frame_count(viewer):
@@ -81,14 +81,14 @@ def test_video_viewer_corrects_overestimated_frame_count(viewer):
     # Seeking to the bogus end steps back to the real last frame and shrinks the
     # count to the number of frames that actually decode.
     viewer.set_frame(7)
-    assert viewer.current_frame == 4
+    assert viewer._current == 4
     assert viewer.frame_count == 5
 
 
 def test_video_viewer_advance_steps_one_frame(viewer):
     viewer.set_frame(0)
     viewer._advance()
-    assert viewer.current_frame == 1
+    assert viewer._current == 1
 
 
 def test_video_viewer_frame_changed_signal_emits_index(viewer):
@@ -129,7 +129,7 @@ def test_video_viewer_show_live_frame_draws_its_own_boxes(viewer):
     viewer.show_live_frame(frame)
 
     # Jumped to the tracked frame (1-based 2 -> 0-based 1) and drew its one box.
-    assert viewer.current_frame == 1
+    assert viewer._current == 1
     assert len(viewer._overlay_items) == 2  # one rect + one label
 
 

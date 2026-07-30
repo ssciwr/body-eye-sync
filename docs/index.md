@@ -8,7 +8,7 @@ saves the results in analysis-friendly Parquet files.
 The project has two entry points:
 
 - `body-eye-sync` launches the Qt desktop application.
-- `body-eye-sync-cli` runs a saved experiment folder without opening the GUI.
+- `body-eye-sync-cli` prepares and runs a saved experiment folder without opening the GUI.
 
 The GUI is the primary workflow for opening a video, tuning the pipeline, running
 steps interactively, previewing overlays, and saving an experiment. The CLI uses

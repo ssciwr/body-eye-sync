@@ -85,11 +85,13 @@ name = "body-eye-sync"
 version = "0.0.4"
 source = { editable = "." }
 dependencies = [
+    { name = "av" },
     { name = "boxmot" },
     { name = "click" },
     { name = "faster-whisper" },
     { name = "huggingface-hub" },
     { name = "insightface" },
+    { name = "matplotlib" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "onnxruntime" },
@@ -102,6 +104,8 @@ dependencies = [
     { name = "pyside6" },
     { name = "pyyaml" },
     { name = "qtpy" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "sherpa-onnx" },
     { name = "sherpa-onnx-core" },
     { name = "torch", version = "2.12.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
@@ -123,11 +127,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "av" },
     { name = "boxmot", specifier = ">=21.0.0,<22.0.0" },
     { name = "click" },
     { name = "faster-whisper" },
     { name = "huggingface-hub" },
     { name = "insightface" },
+    { name = "matplotlib" },
     { name = "numpy" },
     { name = "onnxruntime" },
     { name = "opencv-python" },
@@ -139,6 +145,7 @@ requires-dist = [
     { name = "pyside6" },
     { name = "pyyaml" },
     { name = "qtpy" },
+    { name = "scipy" },
     { name = "sherpa-onnx" },
     { name = "sherpa-onnx-core" },
     { name = "torch", marker = "sys_platform != 'win32'" },
