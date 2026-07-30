@@ -225,17 +225,16 @@ class _InputSection(QGroupBox):
         self.remove_button = QPushButton("Remove")
         self.remove_button.clicked.connect(self._remove_selected)
 
-        # The empty-state text shares the button row, so a section with nothing
-        # in it is a single line rather than a mostly empty box.
-        header = QHBoxLayout()
-        header.addWidget(self.empty_label)
-        header.addStretch(1)
-        header.addWidget(self.add_button)
-        header.addWidget(self.remove_button)
+        # The buttons sit below the current rows, where a new input will appear. Preserve sold "line" appearance vs empty box.
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        actions.addWidget(self.add_button)
+        actions.addWidget(self.remove_button)
 
         layout = QVBoxLayout(self)
-        layout.addLayout(header)
+        layout.addWidget(self.empty_label)
         layout.addWidget(self.table)
+        layout.addLayout(actions)
 
         self.refresh()
 
