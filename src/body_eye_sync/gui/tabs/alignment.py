@@ -35,7 +35,8 @@ class AlignmentTab(BaseTab):
         for index, video in enumerate(
             inputs_of_interest  # later this may just remain videos and we conditionally include audio
         ):
-            viewer = VideoViewer(no_overlays=True)
+            viewer = VideoViewer()
+            viewer.show_overlays = False
             # here we will search up relevant audio if not fixed video
             try:
                 viewer.load(video)

@@ -82,4 +82,4 @@ def test_alignment_tab_renders_all_videos_without_overlays(qtbot, experiment, da
     qtbot.addWidget(tab)
     assert len(tab.video_viewers) == 4
     assert tab.grid.itemAtPosition(1, 0).widget() is tab.video_viewers[3]
-    assert all(viewer.no_overlays for viewer in tab.video_viewers)
+    assert all(not viewer.show_overlays for viewer in tab.video_viewers)

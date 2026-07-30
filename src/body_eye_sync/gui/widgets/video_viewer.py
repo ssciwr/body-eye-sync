@@ -37,9 +37,7 @@ class VideoViewer(QWidget):
 
     frame_changed = Signal(int)
 
-    def __init__(
-        self, parent: QWidget | None = None, *, no_overlays: bool = False
-    ) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
         self._capture: cv2.VideoCapture | None = None
@@ -49,7 +47,7 @@ class VideoViewer(QWidget):
 
         # the video being displayed; supplies the boxes to draw per frame
         self._video: Video | None = None
-        self.no_overlays = no_overlays
+        self.show_overlays = True
         self._overlay_items: list[QGraphicsItem] = []
 
         # video display
@@ -153,7 +151,7 @@ class VideoViewer(QWidget):
         """
         self._goto(result.frame_idx)
         self._clear_overlays()
-        if self.no_overlays:
+        if not self.show_overlays:
             return
         if self._video is not None:
             for box in self._video.boxes_for_frame(self._current):
@@ -171,7 +169,7 @@ class VideoViewer(QWidget):
         """
         self._goto(result.frame_idx)
         self._clear_overlays()
-        if self.no_overlays:
+        if not self.show_overlays:
             return
         if self._video is not None:
             for box in self._video.boxes_for_frame(self._current):
@@ -191,7 +189,7 @@ class VideoViewer(QWidget):
     def refresh_overlays(self) -> None:
         """Redraw the current frame's person boxes and any detected faces."""
         self._clear_overlays()
-        if self.no_overlays or self._video is None or self._current < 0:
+        if not self.show_overlays or self._video is None or self._current < 0:
             return
         for box in self._video.boxes_for_frame(self._current):
             self._add_box(box)
@@ -243,7 +241,7 @@ class VideoViewer(QWidget):
 
     def _draw_boxes(self, boxes: list[BoundingBox]) -> None:
         self._clear_overlays()
-        if self.no_overlays:
+        if not self.show_overlays:
             return
         for box in boxes:
             self._add_box(box)
