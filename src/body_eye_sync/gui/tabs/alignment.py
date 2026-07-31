@@ -2,50 +2,90 @@
 
 from __future__ import annotations
 
-from qtpy.QtCore import QUrl
-from qtpy.QtMultimedia import QAudioOutput, QMediaPlayer
 from qtpy.QtWidgets import (
+    QApplication,
+    QDoubleSpinBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.video import GlassesVideo
+from body_eye_sync.experiment.video import GlassesVideo, Video
 from body_eye_sync.gui.tabs.base import BaseTab
 from body_eye_sync.gui.widgets import VideoViewer
+from body_eye_sync.pipeline.audio_offset import assign_automatic_estimated_offset
+
+_OFFSET_STEP = 0.05
+_SET_BUTTON_ACTIVE_STYLE = (
+    "QToolButton { background-color: #2563eb; color: white; font-weight: 600; }"
+)
 
 
-# Minimal player used in the alignment tab before waveform/timeline work exists.
-class _AudioPlayer(QWidget):
-    """Play one audio input. No audio waveforms yet."""
-
-    def __init__(self, audio: Audio) -> None:
+class _VideoAlignmentControls(QWidget):
+    def __init__(self, video: Video, viewer: VideoViewer) -> None:
         super().__init__()
-        self.audio = audio
-        self.output = QAudioOutput(self)
-        self.player = QMediaPlayer(self)
-        self.player.setAudioOutput(self.output)
-        self.player.setSource(QUrl.fromLocalFile(str(audio.audio_path)))
+        self.video = video
+        self.viewer = viewer
 
-        self.button = QPushButton(f"Play {audio.id}")
-        self.button.clicked.connect(self._toggle)
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.button)
+        self.down_button = QToolButton()
+        self.down_button.setText("-")
+        self.down_button.setToolTip("Decrease offset by 0.05 s")
+        self.up_button = QToolButton()
+        self.up_button.setText("+")
+        self.up_button.setToolTip("Increase offset by 0.05 s")
+        self.spin = QDoubleSpinBox()
+        self.spin.setRange(-86_400.0, 86_400.0)
+        self.spin.setDecimals(3)
+        self.spin.setSingleStep(_OFFSET_STEP)
+        self.spin.setSuffix(" s")
+        self.spin.setKeyboardTracking(False)
+        self.spin.setMaximumWidth(105)
+        self.spin.setValue(video.time_offset)
+        self.set_button = QToolButton()
+        self.set_button.setText("Set")
+        self.set_button.setToolTip("Set as offset")
+        self.time_label = QLabel()
+        self.time_label.setToolTip("Video time -> timeline time")
 
-    # Toggle playback for the minimal audio player.
-    def _toggle(self) -> None:
-        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self.player.pause()
-            self.button.setText("Play")
+        self.down_button.clicked.connect(
+            lambda _checked=False: self.spin.setValue(self.spin.value() - _OFFSET_STEP)
+        )
+        self.up_button.clicked.connect(
+            lambda _checked=False: self.spin.setValue(self.spin.value() + _OFFSET_STEP)
+        )
+        self.spin.valueChanged.connect(self._offset_changed)
+        self.viewer.frame_changed.connect(self._refresh_time_label)
+        self._refresh_time_label()
+
+        layout = QHBoxLayout(self)
+        layout.addWidget(QLabel("Offset"))
+        layout.addWidget(self.down_button)
+        layout.addWidget(self.spin)
+        layout.addWidget(self.up_button)
+        layout.addWidget(self.set_button)
+        layout.addWidget(self.time_label, stretch=1)
+
+    def _offset_changed(self, value: float) -> None:
+        offset = round(value, 3)
+        if self.video.time_offset == offset:
             return
-        self.player.play()
-        self.button.setText("Pause")
-        # Later this could offer "Play from offset" rather than resuming in place.
+        self.video.time_offset = offset
+        self.viewer.set_time_seconds(-offset, allow_negative=True)
+        self._refresh_time_label()
+
+    def _refresh_time_label(self, _frame: int = 0) -> None:
+        video_time = self.viewer.current_time_seconds
+        timeline_time = video_time + self.video.time_offset
+        self.time_label.setText(f"{video_time:.3f} -> {timeline_time:.3f} s")
+        active = round(timeline_time, 3) != 0.0
+        self.set_button.setProperty("needsOffset", active)
+        self.set_button.setStyleSheet(_SET_BUTTON_ACTIVE_STYLE if active else "")
 
 
 class AlignmentTab(BaseTab):
@@ -57,25 +97,22 @@ class AlignmentTab(BaseTab):
         super().__init__(experiment)
         self._cells: list[QWidget] = []
         self.video_viewers: list[VideoViewer] = []
-        self.audio_players: list[_AudioPlayer] = []
-        self.no_paired_audio_labels: list[QLabel] = []
-        self.unpaired_audio_labels: list[QLabel] = []
-        self._show_audio = False
-
-        self.step_label = QLabel("Step 1: Align all videos")
-        self.done_button = QPushButton("Finish videos, align audio")
+        self.video_controls: list[_VideoAlignmentControls] = []
+        self.estimate_button = QPushButton("Estimate inter-video offsets automatically")
+        self.estimate_button.clicked.connect(self._estimate_video_offsets)
+        self.done_button = QPushButton("Finish alignment")
         self.done_button.setDefault(True)
-        self.done_button.clicked.connect(self._start_audio_step)
+        self.done_button.clicked.connect(self.finished.emit)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.step_label)
-        self.grid = QGridLayout()  # to lay out into rows of max 3
+        self.grid = QGridLayout()
         layout.addLayout(self.grid, stretch=1)
-        button_row = QHBoxLayout()
-        button_row.addStretch(1)
-        button_row.addWidget(self.done_button)
-        layout.addLayout(button_row)
-        self.refresh()  # Seems to be the paradigm to name the render function this way
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.estimate_button)
+        buttons.addStretch(1)
+        buttons.addWidget(self.done_button)
+        layout.addLayout(buttons)
+        self.refresh()
 
     def refresh(self) -> None:
         """Render every video input, with at most three viewers per row."""
@@ -84,17 +121,11 @@ class AlignmentTab(BaseTab):
             widget.deleteLater()
         self._cells = []
         self.video_viewers = []
-        self.audio_players = []
-        self.no_paired_audio_labels = []
-        self.unpaired_audio_labels = []
-        inputs_of_interest = [
-            *self.experiment.glasses_videos,
-            *self.experiment.fixed_videos,
-        ]
+        self.video_controls = []
 
-        for index, video in enumerate(inputs_of_interest):
+        videos = [*self.experiment.glasses_videos, *self.experiment.fixed_videos]
+        for index, video in enumerate(videos):
             cell = QWidget()
-            self._cells.append(cell)
             cell_layout = QVBoxLayout(cell)
             viewer = VideoViewer()
             viewer.show_overlays = False
@@ -102,47 +133,68 @@ class AlignmentTab(BaseTab):
                 viewer.load(video)
             except OSError as exc:
                 self.status_message.emit(f"Could not open video: {exc}")
-            self.video_viewers.append(viewer)
+
+            controls = _VideoAlignmentControls(video, viewer)
+            controls.spin.valueChanged.connect(
+                lambda _value: self.experiment_changed.emit()
+            )
+            controls.set_button.clicked.connect(
+                lambda _checked=False, c=controls: self._set_offset_from_current_frame(
+                    c
+                )
+            )
+
             cell_layout.addWidget(viewer)
-
-            if self._show_audio and isinstance(video, GlassesVideo):
-                paired_audio = [
-                    audio
-                    for audio in self.experiment.audio
-                    if audio.glasses_video is video
-                ]
-                if not paired_audio:
-                    label = QLabel("No paired audio")
-                    label.setEnabled(False)
-                    self.no_paired_audio_labels.append(label)
-                    cell_layout.addWidget(label)
-                for audio in paired_audio:
-                    player = _AudioPlayer(audio)
-                    self.audio_players.append(player)
-                    cell_layout.addWidget(player)
-
+            cell_layout.addWidget(controls)
+            self._cells.append(cell)
+            self.video_viewers.append(viewer)
+            self.video_controls.append(controls)
             self.grid.addWidget(cell, index // 3, index % 3)
 
-        if self._show_audio:
-            unpaired_audio = [
-                audio for audio in self.experiment.audio if audio.glasses_video is None
-            ]
-            for offset, audio in enumerate(unpaired_audio):
-                index = len(inputs_of_interest) + offset
-                cell = QWidget()
-                self._cells.append(cell)
-                cell_layout = QVBoxLayout(cell)
-                label = QLabel("Unpaired audio")
-                self.unpaired_audio_labels.append(label)
-                cell_layout.addWidget(label)
-                player = _AudioPlayer(audio)
-                self.audio_players.append(player)
-                cell_layout.addWidget(player)
-                self.grid.addWidget(cell, index // 3, index % 3)
+    def _estimate_video_offsets(self) -> None:
+        videos = self.experiment.glasses_videos
+        if not videos:
+            self.status_message.emit("No glasses videos to estimate")
+            return
 
-    # Move into the audio step after the user has accepted the video alignment.
-    def _start_audio_step(self) -> None:
-        self._show_audio = True
-        self.step_label.setText("Step 2: Check the audio is aligned to its video")
-        self.done_button.setVisible(False)
-        self.refresh()
+        self.status_message.emit("Estimating offsets...")
+        self.estimate_button.setEnabled(False)
+        QApplication.processEvents()
+        try:
+            offsets = assign_automatic_estimated_offset(*videos)
+        finally:
+            self.estimate_button.setEnabled(True)
+
+        changed = 0
+        for controls in self.video_controls:
+            if not isinstance(controls.video, GlassesVideo):
+                continue
+            offset = offsets.get(controls.video)
+            if offset is None:
+                continue
+            if round(controls.video.time_offset, 3) != round(offset, 3):
+                changed += 1
+            controls.spin.setValue(round(offset, 3))
+
+        self.experiment_changed.emit()
+        if any(round(offset, 3) != 0.0 for offset in offsets.values()):
+            self.status_message.emit(f"Estimated offsets: {changed} changed")
+        else:
+            self.status_message.emit("Estimated offsets: no confident non-zero matches")
+
+    def _set_offset_from_current_frame(self, source: _VideoAlignmentControls) -> None:
+        source.spin.setValue(round(-source.viewer.current_time_seconds, 3))
+        if len(self.video_controls) <= 1:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Set other videos?",
+            "Set the other videos to this same video timestamp?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        for controls in self.video_controls:
+            if controls is not source:
+                controls.spin.setValue(source.video.time_offset)

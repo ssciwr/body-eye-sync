@@ -143,7 +143,6 @@ class VideoViewer(QWidget):
         if self._goto(index):
             self.refresh_overlays()
 
-    # AI-Generated:
     # Display the frame closest to ``seconds`` in the video.
     def set_time_seconds(self, seconds: float, *, allow_negative: bool = False) -> None:
         if self._fps <= 0.0:
@@ -325,7 +324,6 @@ class VideoViewer(QWidget):
         self._pixmap_item.setPixmap(QPixmap.fromImage(image))
         self._scene.setSceneRect(0, 0, width, height)
 
-    # AI-Generated:
     # Show the waiting period before a positively-offset video starts.
     def _show_preroll_frame(self, seconds: float) -> None:
         self._preroll_seconds = seconds
