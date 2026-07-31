@@ -10,7 +10,12 @@ from body_eye_sync.experiment.config import (
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import Video
 from body_eye_sync.gui import MainWindow
-from body_eye_sync.gui.tabs import TAB_TYPES, InputFilesTab, VideoProcessingTab
+from body_eye_sync.gui.tabs import (
+    TAB_TYPES,
+    AlignmentTab,
+    InputFilesTab,
+    VideoProcessingTab,
+)
 
 TAB_TITLES = [
     "Input files",
@@ -103,6 +108,21 @@ def test_adding_an_input_reaches_the_other_tabs(window, data_dir):
     video_tab = window.tab(VideoProcessingTab)
     assert video_tab.video() is window.experiment.glasses_videos[0]
     assert video_tab.video_viewer.frame_count == 5
+
+
+def test_finishing_alignment_saves_offsets_and_moves_to_video_tab(
+    window, data_dir, tmp_path
+):
+    window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
+    window.experiment.folder = tmp_path
+    tab = window.tab(AlignmentTab)
+    window.tabs.setCurrentWidget(tab)
+    tab.video_controls[0].spin.setValue(1.25)
+    tab.done_button.click()
+    reloaded = Experiment.load(tmp_path)
+    assert reloaded.glasses_videos[0].time_offset == pytest.approx(1.25)
+    assert window.tabs.currentWidget() is window.tab(VideoProcessingTab)
+    assert not window._dirty
 
 
 def test_open_experiment_hands_it_to_every_tab(window, data_dir, tmp_path):
