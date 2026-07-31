@@ -111,6 +111,20 @@ class VideoViewer(QWidget):
         self.set_frame(0)
         self._fit()
 
+    def clear(self) -> None:
+        """Show nothing at all: no video, no frame and no overlays."""
+        self._stop()
+        if self._capture is not None:
+            self._capture.release()
+            self._capture = None
+        self._video = None
+        self._current = -1
+        self._clear_overlays()
+        self._pixmap_item.setPixmap(QPixmap())
+        self._scene.setSceneRect(0, 0, 0, 0)
+        self._set_frame_count(0)
+        self.enable_controls(False)
+
     def set_frame(self, index: int) -> None:
         """Display the frame at ``index`` (0-based), with its tracklet boxes."""
         if self._goto(index):
@@ -178,6 +192,11 @@ class VideoViewer(QWidget):
             self._add_pose(pose)
         for face in self._video.faces_for_frame(self._current):
             self._add_face(face)
+
+    @property
+    def video(self) -> Video | None:
+        """The video being displayed, or ``None`` if there is none."""
+        return self._video
 
     @property
     def current_frame(self) -> int:

@@ -5,10 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import ClassVar, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # The on-disk format version. Only needs to be bumped for non-backward-compatible changes, e.g. a new required field.
 CURRENT_VERSION = 1
+
+
+def validate_input_id(input_id: str) -> str:
+    """Return an input id, having checked it can be used as a filename."""
+    if not input_id:
+        raise ValueError("input id cannot be empty")
+    if any(char in input_id for char in ("/", "\\")) or input_id in (".", ".."):
+        raise ValueError(f"input id cannot be used as a filename: {input_id!r}")
+    return input_id
 
 
 class _Model(BaseModel):
@@ -33,9 +42,18 @@ class _Input(_Model):
         ),
     )
 
+    @field_validator("id")
+    @classmethod
+    def _check_id(cls, input_id: str) -> str:
+        return validate_input_id(input_id)
+
 
 class GlassesVideoInput(_Input):
-    """Video recorded by a participant's glasses-mounted camera."""
+    """Video and gaze data recorded by a participant's glasses-mounted camera."""
+
+    gaze_path: Path = Field(
+        description="Gaze samples recorded alongside this video, as a TSV file."
+    )
 
 
 class FixedVideoInput(_Input):
@@ -56,9 +74,6 @@ class AudioInput(_Input):
             "recording captures"
         ),
     )
-
-
-InputSpec = Union[GlassesVideoInput, FixedVideoInput, AudioInput]
 
 
 class ObjectTrackingStep(_Model):
@@ -235,7 +250,6 @@ class ExperimentConfig(_Model):
     """The serialisable definition of an experiment: its inputs and the pipeline to run."""
 
     version: int = CURRENT_VERSION
-    name: str
     glasses_videos: list[GlassesVideoInput] = Field(default_factory=list)
     fixed_videos: list[FixedVideoInput] = Field(default_factory=list)
     audio: list[AudioInput] = Field(default_factory=list)
@@ -243,10 +257,11 @@ class ExperimentConfig(_Model):
 
     @model_validator(mode="after")
     def _check(self) -> ExperimentConfig:
-        if not self.inputs:
-            raise ValueError("experiment has no inputs")
-
-        ids = [i.id for i in self.inputs]
+        ids = (
+            [video.id for video in self.glasses_videos]
+            + [video.id for video in self.fixed_videos]
+            + [audio.id for audio in self.audio]
+        )
         duplicates = {i for i in ids if ids.count(i) > 1}
         if duplicates:
             raise ValueError(f"duplicate input ids: {sorted(duplicates)}")
@@ -260,12 +275,3 @@ class ExperimentConfig(_Model):
         if unknown:
             raise ValueError(f"unknown glasses video ids: {sorted(unknown)}")
         return self
-
-    @property
-    def inputs(self) -> list[InputSpec]:
-        """Every input of every type, for the checks that span all of them.
-
-        Anything that acts on inputs of a particular type should go through that
-        type's own list instead, which keeps the type known.
-        """
-        return [*self.glasses_videos, *self.fixed_videos, *self.audio]

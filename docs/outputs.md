@@ -8,8 +8,11 @@ Python analysis tools such as pandas, Polars, or PyArrow.
 Each video input receives one main output:
 
 ```text
-outputs/<input-id>.parquet
+outputs/<input-id>/results.parquet
 ```
+
+Each `<input-id>` directory is managed by Body Eye Sync. Files placed directly
+in `outputs/` are left alone.
 
 Audio inputs have no pipeline stages yet, so they produce no output.
 
@@ -45,8 +48,8 @@ When body-pose detection is enabled, pose columns are merged onto matching rows:
 If embeddings are collected, companion files are written beside the main output:
 
 ```text
-outputs/<input-id>.body_embeddings.parquet
-outputs/<input-id>.face_embeddings.parquet
+outputs/<input-id>/body_embeddings.parquet
+outputs/<input-id>/face_embeddings.parquet
 ```
 
 Embedding files contain:
@@ -65,6 +68,6 @@ Only the best `embeddings_per_track` vectors are kept for each tracklet.
 ```python
 import pandas as pd
 
-tracks = pd.read_parquet("outputs/camera-1.parquet")
-body_embeddings = pd.read_parquet("outputs/camera-1.body_embeddings.parquet")
+tracks = pd.read_parquet("outputs/camera-1/results.parquet")
+body_embeddings = pd.read_parquet("outputs/camera-1/body_embeddings.parquet")
 ```

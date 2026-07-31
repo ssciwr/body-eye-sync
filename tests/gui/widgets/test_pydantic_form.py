@@ -6,7 +6,7 @@ from body_eye_sync.experiment.config import (
     FaceDetectionStep,
     ObjectTrackingStep,
 )
-from body_eye_sync.gui.pydantic_form import PydanticForm
+from body_eye_sync.gui.widgets.pydantic_form import PydanticForm
 
 
 def test_defaults_round_trip(qtbot):

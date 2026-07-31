@@ -34,7 +34,11 @@ After cloning the repo, ensure you have [uv](https://docs.astral.sh/uv/getting-s
 prek install
 ```
 
-This will ensure the pre-commit hooks are ran whenever you do a git commit.
+This will ensure the pre-commit hooks (linting, formatting, etc) are ran whenever you do a git commit. You can also run them manually with
+
+```
+prek run -a
+```
 
 To run the GUI:
 

@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import pandas as pd
 import pytest
+from pydantic import ValidationError
 
 from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.config import (
@@ -19,8 +22,11 @@ from body_eye_sync.experiment.video import FixedVideo, GlassesVideo
 
 def _config(**overrides):
     kwargs = dict(
-        name="demo",
-        glasses_videos=[GlassesVideoInput(id="cam1", path="videos/session1.mp4")],
+        glasses_videos=[
+            GlassesVideoInput(
+                id="cam1", path="videos/session1.mp4", gaze_path="videos/session1.tsv"
+            )
+        ],
     )
     kwargs.update(overrides)
     return ExperimentConfig(**kwargs)
@@ -88,12 +94,12 @@ def test_inputs_own_their_settings(tmp_path):
 def test_settings_edited_at_runtime_are_saved(tmp_path):
     exp = Experiment(_config(), tmp_path)
     exp.glasses_videos[0].time_offset = 0.75
-    exp.name = "renamed"
+    exp.pipeline.glasses_video.object_tracking.detector = "yolo26x"
     exp.save()
 
     reloaded = Experiment.load(tmp_path)
     assert reloaded.glasses_videos[0].time_offset == 0.75
-    assert reloaded.name == "renamed"
+    assert reloaded.pipeline.glasses_video.object_tracking.detector == "yolo26x"
 
 
 def test_save_sets_the_folder_when_given(tmp_path):
@@ -101,15 +107,30 @@ def test_save_sets_the_folder_when_given(tmp_path):
     exp.save(tmp_path)  # first save sets the folder
     assert exp.folder == tmp_path
     assert (tmp_path / "experiment.yaml").exists()
-    exp.name = "renamed"
+    exp.glasses_videos[0].time_offset = 2.5
     exp.save()  # subsequent save reuses the folder
-    assert Experiment.load(tmp_path).name == "renamed"
+    assert Experiment.load(tmp_path).glasses_videos[0].time_offset == 2.5
 
 
 def test_relative_paths_resolve_against_folder(tmp_path):
     exp = Experiment(_config(), tmp_path)
     resolved = (tmp_path / "videos" / "session1.mp4").resolve()
     assert exp.glasses_videos[0].video_path == resolved
+
+
+def test_the_gaze_file_travels_with_its_video(tmp_path):
+    exp = Experiment(_config(), tmp_path)
+    video = exp.glasses_videos[0]
+    # Resolved against the folder on the way in, stored relative on the way out.
+    assert video.gaze_path == (tmp_path / "videos" / "session1.tsv").resolve()
+    assert exp.config().glasses_videos[0].gaze_path == Path("videos/session1.tsv")
+
+    video.set_gaze(tmp_path / "videos" / "corrected.tsv")
+    exp.save()
+    assert (
+        Experiment.load(tmp_path).glasses_videos[0].gaze_path
+        == (tmp_path / "videos" / "corrected.tsv").resolve()
+    )
 
 
 def test_relative_paths_are_written_back_relative(tmp_path):
@@ -122,7 +143,14 @@ def test_relative_paths_are_written_back_relative(tmp_path):
 def test_absolute_paths_outside_the_folder_pass_through(tmp_path):
     absolute = tmp_path.parent / "clip.mp4"
     exp = Experiment(
-        _config(glasses_videos=[GlassesVideoInput(id="cam1", path=absolute)]), tmp_path
+        _config(
+            glasses_videos=[
+                GlassesVideoInput(
+                    id="cam1", path=absolute, gaze_path=absolute.with_suffix(".tsv")
+                )
+            ]
+        ),
+        tmp_path,
     )
     assert exp.glasses_videos[0].video_path == absolute
     assert exp.config().glasses_videos[0].path == absolute
@@ -132,7 +160,8 @@ def test_output_paths_are_under_outputs_dir(tmp_path):
     exp = Experiment(_config(), tmp_path)
     assert exp.output_dir == tmp_path / "outputs"
     assert (
-        exp.output_path(exp.glasses_videos[0]) == tmp_path / "outputs" / "cam1.parquet"
+        exp.output_path(exp.glasses_videos[0])
+        == tmp_path / "outputs" / "cam1" / "results.parquet"
     )
 
 
@@ -164,7 +193,10 @@ def test_add_inputs(tmp_path):
     assert isinstance(room, FixedVideo)
     assert exp.fixed_videos == [room]
     assert mic.glasses_video is exp.glasses_videos[0]
-    assert [i.id for i in exp.config().inputs] == ["cam1", "room", "mic1"]
+    config = exp.config()
+    assert [video.id for video in config.glasses_videos] == ["cam1"]
+    assert [video.id for video in config.fixed_videos] == ["room"]
+    assert [audio.id for audio in config.audio] == ["mic1"]
 
 
 def test_add_input_with_a_duplicate_id_rejected(tmp_path):
@@ -173,6 +205,24 @@ def test_add_input_with_a_duplicate_id_rejected(tmp_path):
         exp.add_fixed_video(FixedVideoInput(id="cam1", path="room.mp4"))
     with pytest.raises(ValueError, match="duplicate input id"):
         exp.add_audio(AudioInput(id="cam1", path="p1.wav"))
+
+
+def test_adding_an_input_discards_outputs_left_under_its_id(tmp_path):
+    exp = Experiment(_config(), tmp_path)
+    exp.glasses_videos[0].set_data(_tracks())
+    exp.save()
+    note = exp.output_dir / "cam1.notes.txt"
+    note.write_text("user-owned")
+    exp.remove_input(exp.glasses_videos[0])
+
+    # A different recording that happens to be given the id the old one had:
+    # it starts empty rather than adopting the results left behind.
+    video = exp.add_glasses_video(
+        GlassesVideoInput(id="cam1", path="other.mp4", gaze_path="other.tsv")
+    )
+
+    assert video.data is None
+    assert list(exp.output_dir.iterdir()) == [note]
 
 
 def test_add_audio_for_an_unknown_glasses_video_rejected(tmp_path):
@@ -209,19 +259,42 @@ def test_rename_input_moves_its_outputs(tmp_path):
     video.set_data(_tracks())
     exp.save()
     pd.DataFrame({"track_id": [1], "frame": [0], "score": [0.5]}).to_parquet(
-        exp.output_dir / "cam1.body_embeddings.parquet"
+        exp.output_path(video).with_name("body_embeddings.parquet")
     )
 
     exp.rename_input(video, "cam2")
 
     assert video.id == "cam2"
-    assert sorted(p.name for p in exp.output_dir.glob("*")) == [
-        "cam2.body_embeddings.parquet",
-        "cam2.parquet",
+    assert sorted(p.name for p in (exp.output_dir / "cam2").iterdir()) == [
+        "body_embeddings.parquet",
+        "results.parquet",
     ]
     assert Experiment.load(tmp_path).glasses_videos[0].id == "cam1"  # not saved yet
     exp.save()
     assert Experiment.load(tmp_path).glasses_videos[0].data is not None
+
+
+def test_rename_input_leaves_other_inputs_outputs_alone(tmp_path):
+    exp = Experiment(
+        _config(
+            glasses_videos=[
+                GlassesVideoInput(id="cam[1]", path="a.mp4", gaze_path="a.tsv")
+            ]
+        ),
+        tmp_path,
+    )
+    other = exp.add_fixed_video(FixedVideoInput(id="cam1", path="b.mp4"))
+    exp.glasses_videos[0].set_data(_tracks())
+    other.set_data(_tracks())
+    exp.save()
+    note = exp.output_dir / "cam[1].notes.txt"
+    note.write_text("user-owned")
+
+    exp.rename_input(exp.glasses_videos[0], "renamed")
+
+    assert (exp.output_dir / "cam1" / "results.parquet").exists()
+    assert (exp.output_dir / "renamed" / "results.parquet").exists()
+    assert note.read_text() == "user-owned"
 
 
 def test_rename_input_to_a_taken_id_rejected(tmp_path):
@@ -232,11 +305,37 @@ def test_rename_input_to_a_taken_id_rejected(tmp_path):
         exp.rename_input(exp.glasses_videos[0], "room")
 
 
+def test_rename_input_does_not_overwrite_existing_outputs(tmp_path):
+    exp = Experiment(_config(), tmp_path)
+    exp.glasses_videos[0].set_data(_tracks())
+    exp.save()
+    existing = exp.output_dir / "cam2"
+    existing.mkdir()
+    (existing / "notes.txt").write_text("keep me")
+
+    with pytest.raises(ValueError, match="outputs already exist"):
+        exp.rename_input(exp.glasses_videos[0], "cam2")
+
+    assert exp.glasses_videos[0].id == "cam1"
+    assert (existing / "notes.txt").read_text() == "keep me"
+
+
+@pytest.mark.parametrize("bad_id", ["", "..", "a/../b", "sub/cam1", "back\\cam1"])
+def test_an_id_that_is_not_a_filename_is_rejected(tmp_path, bad_id):
+    # Ids name output directories, so one of these would escape outputs/.
+    exp = Experiment(_config(), tmp_path)
+    with pytest.raises(ValueError, match="input id cannot"):
+        exp.rename_input(exp.glasses_videos[0], bad_id)
+    with pytest.raises(ValidationError, match="input id cannot"):
+        exp.add_fixed_video(FixedVideoInput(id=bad_id, path="room.mp4"))
+    assert [i.id for i in exp.inputs] == ["cam1"]
+
+
 def test_save_writes_and_load_rehydrates_video_results(tmp_path):
     exp = Experiment(_config(), tmp_path)
     exp.glasses_videos[0].set_data(_tracks())
     exp.save()
-    assert (tmp_path / "outputs" / "cam1.parquet").exists()
+    assert (tmp_path / "outputs" / "cam1" / "results.parquet").exists()
 
     video = Experiment.load(tmp_path).glasses_videos[0]
     assert video.data is not None
@@ -256,12 +355,43 @@ def test_save_writes_results_for_every_input_type(tmp_path):
     exp.audio[0].set_data(pd.DataFrame({"start": [0.0], "end": [1.0]}))
     exp.save()
 
-    assert sorted(p.name for p in (tmp_path / "outputs").glob("*.parquet")) == [
-        "cam1.parquet",
-        "mic1.parquet",
-        "room.parquet",
+    assert sorted(
+        p.relative_to(tmp_path / "outputs").as_posix()
+        for p in (tmp_path / "outputs").glob("*/results.parquet")
+    ) == [
+        "cam1/results.parquet",
+        "mic1/results.parquet",
+        "room/results.parquet",
     ]
     assert Experiment.load(tmp_path).audio[0].data["end"].tolist() == [1.0]
+
+
+def test_unreadable_results_are_skipped_rather_than_failing_the_load(tmp_path, caplog):
+    exp = Experiment(
+        _config(fixed_videos=[FixedVideoInput(id="room", path="room.mp4")]), tmp_path
+    )
+    exp.glasses_videos[0].set_data(_tracks())
+    exp.fixed_videos[0].set_data(_tracks())
+    exp.save()
+    exp.output_path(exp.glasses_videos[0]).write_bytes(b"not a parquet file")
+
+    reloaded = Experiment.load(tmp_path)
+
+    # The bad file is ignored, and the input it belongs to starts empty; the
+    # other input's results are unaffected.
+    assert reloaded.glasses_videos[0].data is None
+    assert reloaded.fixed_videos[0].data is not None
+    assert "ignoring unreadable results for input 'cam1'" in caplog.text
+
+
+def test_results_that_are_parquet_but_not_ours_are_skipped(tmp_path):
+    exp = Experiment(_config(), tmp_path)
+    exp.glasses_videos[0].set_data(_tracks())
+    exp.save()
+    # A valid Parquet file without the columns a video's results need.
+    pd.DataFrame({"nothing": [1]}).to_parquet(exp.output_path(exp.glasses_videos[0]))
+
+    assert Experiment.load(tmp_path).glasses_videos[0].data is None
 
 
 def test_inputs_without_results_write_nothing(tmp_path):

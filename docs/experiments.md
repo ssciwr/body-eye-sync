@@ -9,22 +9,24 @@ an `outputs/` directory.
 my-experiment/
 ├─ experiment.yaml
 └─ outputs/
-   ├─ camera-1.parquet
-   ├─ camera-1.body_embeddings.parquet
-   └─ camera-1.face_embeddings.parquet
+   └─ camera-1/
+      ├─ results.parquet
+      ├─ body_embeddings.parquet
+      └─ face_embeddings.parquet
 ```
 
 ## Configuration Format
 
 The current experiment format is versioned. Input paths may be absolute or
-relative to the experiment folder.
+relative to the experiment folder. An experiment is identified by the folder it
+lives in, and so carries no name of its own.
 
 ```yaml
 version: 1
-name: demo
 glasses_videos:
   - id: p1-glasses
     path: videos/p1.mp4
+    gaze_path: videos/p1-gaze.tsv
     time_offset: 0.0
 fixed_videos:
   - id: camera-1
@@ -63,7 +65,9 @@ pipeline:
 ## Inputs
 
 Inputs are grouped by type, each in its own list. Every input needs an `id` that
-is unique across *all* the lists, since it names that input's output file. Each
+is unique across *all* the lists, since it names that input's output directory;
+for the same reason it has to be usable as a filename, so it cannot be empty or
+contain a path separator. Each
 also has a `time_offset` in seconds, which is added to that input's own clock to
 place it on the experiment's shared timeline; it defaults to `0.0`.
 
@@ -73,7 +77,9 @@ through `Experiment.glasses_videos`, `.fixed_videos` and `.audio`. Inputs are
 added, removed and renamed through `Experiment` so their ids stay unique.
 
 - `glasses_videos`: video recorded by a participant's glasses-mounted camera.
-  This is the input that carries eye tracking.
+  This is the input that carries eye tracking, so it needs a `gaze_path` as well
+  as a `path`: the gaze samples the same device recorded, as a TSV file. They
+  share the video's clock, and so its `time_offset`.
 - `fixed_videos`: video from a camera at a fixed position in the room.
 - `audio`: audio recorded on another device, such as a directional microphone
   aimed at one participant, or a single microphone recording the whole group.
@@ -82,7 +88,8 @@ added, removed and renamed through `Experiment` so their ids stay unique.
   The video inputs carry their own audio, so this is
   for separately recorded audio only.
 
-At least one input, of any type, is required.
+Every list may be empty: an experiment with no inputs at all is valid, which is
+what a new one starts as before any files have been added to it.
 
 ## Pipeline
 

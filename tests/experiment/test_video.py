@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from body_eye_sync.experiment.video import Video
 from body_eye_sync.pipeline.object_tracking import BoundingBox
@@ -54,6 +55,12 @@ def _frame(frame_idx, *boxes):
 
 def test_boxes_for_frame_empty_without_tracklets():
     assert Video().boxes_for_frame(0) == []
+
+
+def test_a_table_that_is_not_video_results_is_rejected():
+    # Every row of a video's results belongs to a frame.
+    with pytest.raises(ValueError, match="no 'frame' column"):
+        Video().set_data(pd.DataFrame({"nothing": [1]}))
 
 
 def test_boxes_for_frame_looks_up_by_index():

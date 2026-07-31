@@ -4,7 +4,7 @@ from body_eye_sync.experiment.config import (
     ObjectTrackingStep,
     VideoPipeline,
 )
-from body_eye_sync.gui.pipeline_editor import PipelineEditor
+from body_eye_sync.gui.widgets.pipeline_editor import PipelineEditor
 
 
 def _editor(qtbot):

@@ -63,9 +63,9 @@ class _TrackTopK:
 
 
 def _embeddings_path(path: str | Path, kind: str) -> Path:
-    """Companion embeddings file beside a main output, e.g. ``cam1.face_embeddings.parquet``."""
+    """Companion embeddings file beside a main output."""
     path = Path(path)
-    return path.with_name(f"{path.stem}.{kind}_embeddings.parquet")
+    return path.with_name(f"{kind}_embeddings.parquet")
 
 
 def _write_embeddings(path: Path, table: pd.DataFrame) -> None:
@@ -97,7 +97,7 @@ def _read_embeddings(path: Path) -> pd.DataFrame:
 class Video:
     """A video input: its settings and the model outputs computed from it.
 
-    ``id`` names the input and its output files, and ``time_offset`` is the
+    ``id`` names the input and its output directory, and ``time_offset`` is the
     seconds to add to this video's own clock to reach experiment time.
 
     Completed results live in a single numeric :attr:`data` DataFrame. While a
@@ -175,6 +175,8 @@ class Video:
 
     def set_data(self, data: pd.DataFrame) -> None:
         """Replace all results with a complete data DataFrame."""
+        if "frame" not in data.columns:
+            raise ValueError("results table has no 'frame' column")
         self._data = data
         self._rows_by_frame = data.groupby("frame").indices
         self._tmp_frames = []
@@ -318,7 +320,7 @@ class Video:
         """Write the completed :attr:`data` to a Parquet file.
 
         Any collected embeddings are written to companion files beside ``path``
-        (``<stem>.body_embeddings.parquet`` / ``<stem>.face_embeddings.parquet``).
+        (``body_embeddings.parquet`` / ``face_embeddings.parquet``).
         Raises :class:`ValueError` if there is no completed data to write.
         """
         import pyarrow as pa
@@ -328,17 +330,22 @@ class Video:
             raise ValueError("no data to write; run the pipeline first")
         table = pa.Table.from_pandas(self._data, preserve_index=False)
         pq.write_table(table, str(path))
-        if self._body_embeddings is not None:
-            _write_embeddings(_embeddings_path(path, "body"), self._body_embeddings)
-        if self._face_embeddings is not None:
-            _write_embeddings(_embeddings_path(path, "face"), self._face_embeddings)
+        for kind, embeddings in (
+            ("body", self._body_embeddings),
+            ("face", self._face_embeddings),
+        ):
+            embeddings_path = _embeddings_path(path, kind)
+            if embeddings is None:
+                embeddings_path.unlink(missing_ok=True)
+            else:
+                _write_embeddings(embeddings_path, embeddings)
 
     def load_parquet(self, path: str | Path) -> None:
         """Load results written by :meth:`to_parquet` into this video.
 
         Replaces any current results with the table at ``path`` and its companion
-        embeddings files (``<stem>.body_embeddings.parquet`` /
-        ``<stem>.face_embeddings.parquet``), if present.
+        embeddings files (``body_embeddings.parquet`` /
+        ``face_embeddings.parquet``), if present.
         """
         self.clear()
         self.set_data(pd.read_parquet(path))
@@ -358,7 +365,21 @@ class Video:
 
 
 class GlassesVideo(Video):
-    """Video from a participant's glasses-mounted camera."""
+    """Video and gaze data from a participant's glasses-mounted camera."""
+
+    def __init__(
+        self,
+        id: str = "",
+        path: str | Path | None = None,
+        gaze_path: str | Path | None = None,
+        time_offset: float = 0.0,
+    ) -> None:
+        super().__init__(id, path, time_offset)
+        self.gaze_path = Path(gaze_path) if gaze_path is not None else None
+
+    def set_gaze(self, path: str | Path) -> None:
+        """Set the gaze samples recorded with this video."""
+        self.gaze_path = Path(path)
 
 
 class FixedVideo(Video):

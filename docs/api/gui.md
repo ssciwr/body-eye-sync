@@ -4,27 +4,45 @@
 
 ::: body_eye_sync.gui.main_window
 
-## Pipeline Editor
+## Tabs
 
-::: body_eye_sync.gui.pipeline_editor
+::: body_eye_sync.gui.tabs
 
-## Video Viewer
+::: body_eye_sync.gui.tabs.base
 
-::: body_eye_sync.gui.video_viewer
+::: body_eye_sync.gui.tabs.input_files
 
-## Pydantic Form
+::: body_eye_sync.gui.tabs.alignment
 
-::: body_eye_sync.gui.pydantic_form
+::: body_eye_sync.gui.tabs.video_processing
+
+::: body_eye_sync.gui.tabs.audio_processing
+
+::: body_eye_sync.gui.tabs.post_processing
+
+::: body_eye_sync.gui.tabs.data_export
+
+## Widgets
+
+::: body_eye_sync.gui.widgets
+
+::: body_eye_sync.gui.widgets.pipeline_editor
+
+::: body_eye_sync.gui.widgets.video_viewer
+
+::: body_eye_sync.gui.widgets.pydantic_form
 
 ## Workers
 
-::: body_eye_sync.gui.base_worker
+::: body_eye_sync.gui.workers
 
-::: body_eye_sync.gui.object_tracking_worker
+::: body_eye_sync.gui.workers.base
 
-::: body_eye_sync.gui.face_detection_worker
+::: body_eye_sync.gui.workers.object_tracking
 
-::: body_eye_sync.gui.body_pose_worker
+::: body_eye_sync.gui.workers.face_detection
+
+::: body_eye_sync.gui.workers.body_pose
 
 ## Utilities
 

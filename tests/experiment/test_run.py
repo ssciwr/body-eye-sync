@@ -85,8 +85,11 @@ def _full_pipeline(**overrides):
 
 def _experiment(video_file, **overrides):
     kwargs = dict(
-        name="demo",
-        glasses_videos=[GlassesVideoInput(id="cam1", path=video_file)],
+        glasses_videos=[
+            GlassesVideoInput(
+                id="cam1", path=video_file, gaze_path=video_file.with_suffix(".tsv")
+            )
+        ],
         pipeline=Pipeline(glasses_video=_full_pipeline(), fixed_video=_full_pipeline()),
     )
     kwargs.update(overrides)
@@ -99,7 +102,7 @@ def test_run_writes_parquet_per_input(tmp_path, stub_pipeline):
 
     results = run_experiment(_experiment(video_file))
 
-    assert results == {"cam1": tmp_path / "outputs" / "cam1.parquet"}
+    assert results == {"cam1": tmp_path / "outputs" / "cam1" / "results.parquet"}
     data = Video.from_parquet(results["cam1"]).data
     # One tracked box in frame 0, with face and pose columns merged on.
     assert len(data) == 1
@@ -182,7 +185,7 @@ def test_audio_inputs_are_skipped(tmp_path, stub_pipeline):
 
     # Audio has no pipeline stages yet, so it produces no output at all.
     assert set(results) == {"cam1"}
-    assert not (tmp_path / "outputs" / "mic1.parquet").exists()
+    assert not (tmp_path / "outputs" / "mic1").exists()
 
 
 def test_existing_output_is_skipped_without_force(tmp_path, monkeypatch):
@@ -221,7 +224,7 @@ def test_runs_a_loaded_experiment(tmp_path, stub_pipeline):
     _experiment(video_file).save()
 
     results = run_experiment(Experiment.load(tmp_path))
-    assert results["cam1"] == tmp_path / "outputs" / "cam1.parquet"
+    assert results["cam1"] == tmp_path / "outputs" / "cam1" / "results.parquet"
     assert results["cam1"].exists()
 
 

@@ -21,7 +21,7 @@ from body_eye_sync.experiment.config import (
     StepSpec,
     VideoPipeline,
 )
-from body_eye_sync.gui.pydantic_form import PydanticForm
+from body_eye_sync.gui.widgets.pydantic_form import PydanticForm
 
 #: The pipeline steps the GUI offers, in run order: the ``VideoPipeline`` field
 #: each maps to, its model type, the title shown, and whether it is optional.
