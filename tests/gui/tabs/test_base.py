@@ -81,9 +81,9 @@ def test_alignment_tab_renders_all_videos_without_overlays(qtbot, experiment, da
     )
     tab = AlignmentTab(experiment)
     qtbot.addWidget(tab)
-    assert len(tab.video_viewers) == 4
-    assert tab.grid.itemAtPosition(1, 0).widget() is tab._cells[3]
-    assert all(not viewer.show_overlays for viewer in tab.video_viewers)
+    assert len(tab.video_cards) == 4
+    assert tab.grid.itemAtPosition(1, 0).widget() is tab.video_cards[3]
+    assert all(not card.viewer.show_overlays for card in tab.video_cards)
     button_row = tab.layout().itemAt(1).layout()
     assert not hasattr(tab, "estimate_button")
     assert button_row.indexOf(tab.done_button) >= 0
@@ -105,13 +105,10 @@ def test_alignment_tab_edits_video_time_offset(
     tab = AlignmentTab(experiment)
     tab.experiment_changed.connect(lambda: changed.append(True))
     qtbot.addWidget(tab)
-    controls = tab.video_controls[0]
-    questions = []
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *args, **kwargs: questions.append(args) or QMessageBox.StandardButton.No,
-    )
+    controls = tab.video_cards[0].controls
+    dialogs = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda dialog: dialogs.append(dialog))
+    monkeypatch.setattr(QMessageBox, "clickedButton", lambda _dialog: None)
 
     layout = controls.layout()
     assert controls.set_button.text() == "Set"
@@ -119,36 +116,39 @@ def test_alignment_tab_edits_video_time_offset(
     assert controls.set_button.property("needsOffset") is False
     assert layout.indexOf(controls.up_button) < layout.indexOf(controls.set_button)
 
-    tab.video_viewers[1].set_frame(3)
+    tab.video_cards[1].viewer.set_frame(3)
 
     controls.up_button.click()
     assert experiment.glasses_videos[0].time_offset == pytest.approx(0.05)
-    assert tab.video_viewers[0].current_frame < 0
-    assert tab.video_viewers[0].current_time_seconds == pytest.approx(-0.05)
+    assert tab.video_cards[0].viewer.current_frame < 0
+    assert tab.video_cards[0].viewer.current_time_seconds == pytest.approx(-0.05)
     assert controls.set_button.property("needsOffset") is False
 
     controls.down_button.click()
     assert experiment.glasses_videos[0].time_offset == pytest.approx(0.0)
-    assert tab.video_viewers[0].current_frame == 0
+    assert tab.video_cards[0].viewer.current_frame == 0
     assert controls.set_button.property("needsOffset") is False
 
     controls.down_button.click()
     assert experiment.glasses_videos[0].time_offset == pytest.approx(-0.05)
-    assert tab.video_viewers[0].current_frame > 0
+    assert tab.video_cards[0].viewer.current_frame > 0
 
-    tab.video_viewers[0].set_frame(2)
+    tab.video_cards[0].viewer.set_frame(2)
     assert controls.set_button.property("needsOffset") is True
     assert "#2563eb" in controls.set_button.styleSheet()
     controls.set_button.click()
     assert experiment.glasses_videos[0].time_offset == pytest.approx(
-        -2 / tab.video_viewers[0]._fps,
+        -2 / tab.video_cards[0].viewer._fps,
         abs=0.001,
     )
     assert controls.set_button.property("needsOffset") is False
     assert controls.set_button.styleSheet() == ""
     assert controls.spin.singleStep() == pytest.approx(0.05)
     assert experiment.fixed_videos[0].time_offset == pytest.approx(0.0)
-    assert questions[0][1] == "Set other videos?"
+    assert dialogs[0].text() == (
+        "Do you want to set the offset for only this video, or for all videos?"
+    )
+    assert dialogs[0].defaultButton().text() == "This video"
     assert len(changed) == 4
 
 
@@ -166,25 +166,31 @@ def test_alignment_tab_can_set_other_videos_to_same_video_timestamp(
             fixed_videos=[FixedVideoInput(id="room1", path=path)],
         )
     )
+    clicked = {}
+
+    def click_all_videos(dialog):
+        clicked[id(dialog)] = next(
+            button for button in dialog.buttons() if button.text() == "All videos"
+        )
+
+    monkeypatch.setattr(QMessageBox, "exec", click_all_videos)
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+        QMessageBox, "clickedButton", lambda dialog: clicked[id(dialog)]
     )
     tab = AlignmentTab(experiment)
     qtbot.addWidget(tab)
 
-    tab.video_viewers[0].set_frame(2)
-    tab.video_viewers[1].set_frame(3)
-    source_time = tab.video_viewers[0].current_time_seconds
-    tab.video_controls[0].set_button.click()
+    tab.video_cards[0].viewer.set_frame(2)
+    tab.video_cards[1].viewer.set_frame(3)
+    source_time = tab.video_cards[0].viewer.current_time_seconds
+    tab.video_cards[0].controls.set_button.click()
     assert experiment.glasses_videos[0].time_offset == pytest.approx(
-        -2 / tab.video_viewers[0]._fps, abs=0.001
+        -2 / tab.video_cards[0].viewer._fps, abs=0.001
     )
     assert experiment.fixed_videos[0].time_offset == pytest.approx(
         experiment.glasses_videos[0].time_offset
     )
-    assert tab.video_viewers[1].current_time_seconds == pytest.approx(source_time)
+    assert tab.video_cards[1].viewer.current_time_seconds == pytest.approx(source_time)
 
 
 # Covers finishing video alignment without opening audio controls.

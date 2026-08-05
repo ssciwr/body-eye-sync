@@ -117,7 +117,7 @@ def test_finishing_alignment_saves_offsets_and_moves_to_video_tab(
     window.experiment.folder = tmp_path
     tab = window.tab(AlignmentTab)
     window.tabs.setCurrentWidget(tab)
-    tab.video_controls[0].spin.setValue(1.25)
+    tab.video_cards[0].controls.spin.setValue(1.25)
     tab.done_button.click()
     reloaded = Experiment.load(tmp_path)
     assert reloaded.glasses_videos[0].time_offset == pytest.approx(1.25)
