@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import subprocess
+from pathlib import Path
 
+import av
 import numpy as np
-from imageio_ffmpeg import get_ffmpeg_exe
 
 from body_eye_sync.experiment.video import GlassesVideo
 
@@ -15,6 +15,31 @@ from body_eye_sync.experiment.video import GlassesVideo
 That is effectively taking many samples ("low" for audio, high in reality) and comparing patterns across the clips
 energy meaning how the samples change and envelope rate being
 """
+
+
+def _read_mono_audio_samples(video_path: Path, sample_rate: int) -> np.ndarray | None:
+    """
+    Decode the videos first present audio screen into a format viable for signals sample matching, in this case,
+    decode the audio into as mono float samples at 8k samples a second. Later, we will make envelopes that represent
+    each 400 samples (so 0.05 seconds) and match these (with some logic to prevent repetitive/peaks from messing up
+    our scoring/confidence)
+    """
+    with av.open(str(video_path)) as container:
+        stream = next(iter(container.streams.audio), None)
+        if stream is None:
+            return None
+
+        resampler = av.AudioResampler(format="s16", layout="mono", rate=sample_rate)
+        chunks: list[np.ndarray] = []
+        for frame in container.decode(stream):
+            for resampled in resampler.resample(frame):
+                chunks.append(resampled.to_ndarray().reshape(-1))
+        for resampled in resampler.resample(None):
+            chunks.append(resampled.to_ndarray().reshape(-1))
+
+    if not chunks:
+        return None
+    return np.concatenate(chunks).astype(np.float32, copy=False)
 
 
 def assign_automatic_estimated_offset(
@@ -28,48 +53,17 @@ def assign_automatic_estimated_offset(
 ) -> dict[GlassesVideo, float]:
     offsets = {video: 0.0 for video in videos}
     usable = [video for video in videos if video.video_path is not None]
-    if len(usable) < 2 or (reference is not None and reference not in usable):
-        return offsets
-    if sample_rate <= 0 or envelope_rate <= 0 or not 0.0 < middle_fraction <= 1.0:
-        return offsets
 
-    ffmpeg = get_ffmpeg_exe()
     hop = max(1, round(sample_rate / envelope_rate))
     seconds_per_bin = hop / sample_rate
     prepared: dict[GlassesVideo, tuple[np.ndarray, float]] = {}
-    # todo: document this command
     for video in usable:
-        try:
-            result = subprocess.run(
-                [
-                    ffmpeg,
-                    "-nostdin",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-i",
-                    str(video.video_path),
-                    "-map",
-                    "0:a:0",
-                    "-vn",
-                    "-ac",
-                    "1",
-                    "-ar",
-                    str(sample_rate),
-                    "-f",
-                    "s16le",
-                    "pipe:1",
-                ],
-                check=False,
-                capture_output=True,
-            )
-        except OSError:
-            continue
-        if result.returncode != 0:
-            # can happen e.g. my broken mp4 file.
+        video_path = video.video_path
+        data = _read_mono_audio_samples(video_path, sample_rate)
+        if data is None:
+            # can happen e.g. a broken mp4 file or a video without audio.
             continue
 
-        data = np.frombuffer(result.stdout, dtype=np.int16).astype(np.float32)
         trim = round(data.size * (1.0 - middle_fraction) / 2.0)
         if trim:
             data = data[trim : data.size - trim]
@@ -77,9 +71,16 @@ def assign_automatic_estimated_offset(
         if data.size == 0:
             continue
 
+        audiofied_data = data.reshape(
+            -1, hop
+        )  # break up samples into a multi dimensional list of every 0.05 seconds
+        waveformified_data = np.square(audiofied_data)  # applicable for audio data
         # The most important line of code: this helps to try and match the audio
         # overlap of videos by characterising them.
-        values = np.log1p(np.mean(np.square(data.reshape(-1, hop)), axis=1))
+        values = np.log1p(np.mean(waveformified_data, axis=1))
+        # With defaults, sample_rate=8000 and envelope_rate=20, so hop=400. That means each envelope point summarizes 400 raw samples, i.e. 0.05 seconds
+        # It is not really loudness exactly but a smoothed representation. Logp1 means silence --> clap does not have an extreme range and outsized effect
+        # (which could prevent effective pattern matching based on speech, which has less extreme energy-differnece-before-log-is-applied)
         values -= np.mean(values)
         norm = float(np.linalg.norm(values))
         if norm == 0:

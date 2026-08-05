@@ -98,7 +98,10 @@ class AlignmentTab(BaseTab):
         self._cells: list[QWidget] = []
         self.video_viewers: list[VideoViewer] = []
         self.video_controls: list[_VideoAlignmentControls] = []
-        self.estimate_button = QPushButton("Estimate inter-video offsets automatically")
+        self.estimate_button = QPushButton("Estimate offset")
+        self.estimate_button.setToolTip(
+            "Estimate inter glasses-videos offsets automatically"
+        )
         self.estimate_button.clicked.connect(self._estimate_video_offsets)
         self.done_button = QPushButton("Finish alignment")
         self.done_button.setDefault(True)

@@ -85,7 +85,11 @@ def test_alignment_tab_renders_all_videos_without_overlays(qtbot, experiment, da
     assert tab.grid.itemAtPosition(1, 0).widget() is tab._cells[3]
     assert all(not viewer.show_overlays for viewer in tab.video_viewers)
     button_row = tab.layout().itemAt(1).layout()
-    assert tab.estimate_button.text() == "Estimate inter-video offsets automatically"
+    assert tab.estimate_button.text() == "Estimate offset"
+    assert (
+        tab.estimate_button.toolTip()
+        == "Estimate inter glasses-videos offsets automatically"
+    )
     assert button_row.indexOf(tab.estimate_button) < button_row.indexOf(tab.done_button)
     assert tab.done_button.text() == "Finish alignment"
     assert tab.layout().itemAt(0).layout() is tab.grid
