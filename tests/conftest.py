@@ -1,6 +1,13 @@
+import locale
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def c_numeric_locale():
+    """Undo the system locale a QApplication applies, as the application does."""
+    locale.setlocale(locale.LC_NUMERIC, "C")
 
 
 @pytest.fixture(scope="session")

@@ -17,6 +17,7 @@ dependencies = [
     "opencv-python",
     "packaging",
     "pandas",
+    "pillow",
     "platformdirs",
     "pyarrow",
     "pydantic",

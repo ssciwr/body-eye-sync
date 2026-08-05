@@ -1,3 +1,4 @@
+import locale
 import os
 import sys
 
@@ -45,6 +46,9 @@ def main(experiment):
     from qtpy.QtWidgets import QApplication, QMessageBox
 
     app = QApplication(sys.argv)
+    # Qt sets the locale, which for e.g. DE means decimal points are written with a comma instead of a dot.
+    # This breaks FFmpeg filter options, so we restore the C locale for numeric formatting:
+    locale.setlocale(locale.LC_NUMERIC, "C")
 
     if _media_foundation_missing():
         QMessageBox.critical(
