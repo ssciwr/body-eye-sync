@@ -16,6 +16,9 @@ Alternatively on windows you can download the standalone installer
 [body-eye-sync.exe](https://github.com/ssciwr/body-eye-sync/releases/latest/download/body-eye-sync.exe)
 and run it, then launch Body Eye Sync from the Start menu or desktop shortcut.
 
+Synchronized video grids are decoded and encoded through PyAV; no separate
+`ffmpeg` executable is required.
+
 ## Model Downloads
 
 The first run of a pipeline step may download model weights for Ultralytics,
