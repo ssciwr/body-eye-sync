@@ -5,8 +5,9 @@ from __future__ import annotations
 from math import isfinite
 
 import cv2
-from qtpy.QtCore import Qt, QTimer, Signal, Slot
+from qtpy.QtCore import Qt, QTimer, QUrl, Signal, Slot
 from qtpy.QtGui import QBrush, QImage, QPainter, QPen, QPixmap
+from qtpy.QtMultimedia import QAudioOutput, QMediaPlayer
 from qtpy.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -44,9 +45,14 @@ class VideoViewer(QWidget):
         self._frame_count = 0
         self._fps = 25.0
         self._current = 0
+        self._preroll_seconds: float | None = None
+        self._audio_output = QAudioOutput(self)
+        self._media_player = QMediaPlayer(self)
+        self._media_player.setAudioOutput(self._audio_output)
 
         # the video being displayed; supplies the boxes to draw per frame
         self._video: Video | None = None
+        self.show_overlays = True
         self._overlay_items: list[QGraphicsItem] = []
 
         # video display
@@ -70,11 +76,13 @@ class VideoViewer(QWidget):
         self._spinbox.setEnabled(False)
         self._spinbox.valueChanged.connect(self.set_frame)
 
+        self._time_label = QLabel("0.000 s")
         self._total_label = QLabel("/ 0")
 
         controls = QHBoxLayout()
         controls.addWidget(self._play_button)
         controls.addWidget(self._slider, stretch=1)
+        controls.addWidget(self._time_label)
         controls.addWidget(self._spinbox)
         controls.addWidget(self._total_label)
 
@@ -98,6 +106,7 @@ class VideoViewer(QWidget):
 
         self._video = video
         self._capture = capture
+        self._media_player.setSource(QUrl.fromLocalFile(str(video.video_path)))
         self._fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
         self._timer.setInterval(int(1000 / self._fps))
 
@@ -108,6 +117,7 @@ class VideoViewer(QWidget):
         self._set_frame_count(count)
 
         self._current = -1
+        self._preroll_seconds = None
         self.set_frame(0)
         self._fit()
 
@@ -119,6 +129,9 @@ class VideoViewer(QWidget):
             self._capture = None
         self._video = None
         self._current = -1
+        self._preroll_seconds = None
+        self._media_player.stop()
+        self._media_player.setSource(QUrl())
         self._clear_overlays()
         self._pixmap_item.setPixmap(QPixmap())
         self._scene.setSceneRect(0, 0, 0, 0)
@@ -129,6 +142,17 @@ class VideoViewer(QWidget):
         """Display the frame at ``index`` (0-based), with its tracklet boxes."""
         if self._goto(index):
             self.refresh_overlays()
+
+    # Display the frame closest to ``seconds`` in the video.
+    def set_time_seconds(self, seconds: float, *, allow_negative: bool = False) -> None:
+        if self._fps <= 0.0:
+            self.set_frame(0)
+            return
+        if allow_negative and seconds < 0.0:
+            self._show_preroll_frame(seconds)
+            return
+        frame = round(seconds * self._fps)
+        self.set_frame(max(0, frame))
 
     @Slot(object)
     def show_live_frame(self, frame) -> None:
@@ -150,6 +174,8 @@ class VideoViewer(QWidget):
         """
         self._goto(result.frame_idx)
         self._clear_overlays()
+        if not self.show_overlays:
+            return
         if self._video is not None:
             for box in self._video.boxes_for_frame(self._current):
                 self._add_box(box)
@@ -166,6 +192,8 @@ class VideoViewer(QWidget):
         """
         self._goto(result.frame_idx)
         self._clear_overlays()
+        if not self.show_overlays:
+            return
         if self._video is not None:
             for box in self._video.boxes_for_frame(self._current):
                 self._add_box(box)
@@ -184,7 +212,7 @@ class VideoViewer(QWidget):
     def refresh_overlays(self) -> None:
         """Redraw the current frame's person boxes and any detected faces."""
         self._clear_overlays()
-        if self._video is None or self._current < 0:
+        if not self.show_overlays or self._video is None or self._current < 0:
             return
         for box in self._video.boxes_for_frame(self._current):
             self._add_box(box)
@@ -206,6 +234,15 @@ class VideoViewer(QWidget):
     def frame_count(self) -> int:
         return self._frame_count
 
+    # The playback position represented by the current frame.
+    @property
+    def current_time_seconds(self) -> float:
+        if self._preroll_seconds is not None:
+            return self._preroll_seconds
+        if self._frame_count == 0 or self._fps <= 0.0:
+            return 0.0
+        return self._current / self._fps
+
     def _goto(self, index: int) -> bool:
         """Show the video image at ``index`` and sync controls.
 
@@ -215,6 +252,7 @@ class VideoViewer(QWidget):
         if self._capture is None or self._frame_count == 0:
             return False
         index = max(0, min(int(index), self._frame_count - 1))
+        sequential_playback = self._timer.isActive() and index == self._current + 1
         if index == self._current:
             return False
 
@@ -222,6 +260,7 @@ class VideoViewer(QWidget):
         if frame is None or index == self._current:
             # Nothing decoded, or _read stepped back to the frame already shown.
             return False
+        self._preroll_seconds = None
         self._current = index
         self._show(frame)
 
@@ -230,12 +269,17 @@ class VideoViewer(QWidget):
             control.blockSignals(True)
             control.setValue(index)
             control.blockSignals(False)
+        self._time_label.setText(f"{self.current_time_seconds:.3f} s")
+        if not sequential_playback:
+            self._sync_audio_to_frame()
 
         self.frame_changed.emit(index)
         return True
 
     def _draw_boxes(self, boxes: list[BoundingBox]) -> None:
         self._clear_overlays()
+        if not self.show_overlays:
+            return
         for box in boxes:
             self._add_box(box)
 
@@ -279,6 +323,28 @@ class VideoViewer(QWidget):
         )
         self._pixmap_item.setPixmap(QPixmap.fromImage(image))
         self._scene.setSceneRect(0, 0, width, height)
+
+    # Show the waiting period before a positively-offset video starts.
+    def _show_preroll_frame(self, seconds: float) -> None:
+        self._preroll_seconds = seconds
+        self._current = min(-1, int(seconds * self._fps))
+        self._media_player.pause()
+        pixmap = QPixmap(640, 360)
+        pixmap.fill(Qt.GlobalColor.black)
+        self._clear_overlays()
+        self._pixmap_item.setPixmap(pixmap)
+        self._scene.setSceneRect(0, 0, 640, 360)
+        text = QGraphicsSimpleTextItem(f"{self.current_time_seconds:.3f} s")
+        text.setBrush(QBrush(Qt.GlobalColor.white))
+        text.setPos(280, 170)
+        self._scene.addItem(text)
+        self._overlay_items.append(text)
+        self._time_label.setText(f"{self.current_time_seconds:.3f} s")
+        for control in (self._slider, self._spinbox):
+            control.blockSignals(True)
+            control.setValue(0)
+            control.blockSignals(False)
+        self.frame_changed.emit(self._current)
 
     def _clear_overlays(self) -> None:
         for item in self._overlay_items:
@@ -357,6 +423,16 @@ class VideoViewer(QWidget):
             self._overlay_items.append(dot)
 
     def _advance(self) -> None:
+        if self._preroll_seconds is not None:
+            next_seconds = self._preroll_seconds + 1 / self._fps
+            if next_seconds < 0.0:
+                self._show_preroll_frame(next_seconds)
+                return
+            self.set_frame(0)
+            if self._play_button.isChecked():
+                self._sync_audio_to_frame()
+                self._media_player.play()
+            return
         if self._current + 1 >= self._frame_count:
             self._play_button.setChecked(False)
             return
@@ -365,13 +441,23 @@ class VideoViewer(QWidget):
     def _on_play_toggled(self, playing: bool) -> None:
         self._play_button.setText("Pause" if playing else "Play")
         if playing and self._capture is not None:
+            if self._current >= 0:
+                self._sync_audio_to_frame()
+                self._media_player.play()
             self._timer.start()
         else:
             self._timer.stop()
+            self._media_player.pause()
 
     def _stop(self) -> None:
         self._timer.stop()
+        self._media_player.pause()
         self._play_button.setChecked(False)
+
+    # Keep embedded video audio at the same timestamp as the frame viewer.
+    def _sync_audio_to_frame(self) -> None:
+        self._media_player.setPosition(round(self.current_time_seconds * 1000))
+        # see experiments.md for notes about when this audio could be out of sync with the same files video.
 
     def _fit(self) -> None:
         if not self._pixmap_item.pixmap().isNull():

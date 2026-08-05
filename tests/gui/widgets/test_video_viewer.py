@@ -99,6 +99,27 @@ def test_video_viewer_frame_changed_signal_emits_index(viewer):
     assert seen == [2, 4]
 
 
+# Tests for the frame-time changes:
+# Verifies the viewer's media-time state used by audio playback and alignment.
+def test_video_viewer_tracks_current_media_time(viewer):
+    viewer.set_frame(2)
+
+    assert viewer.current_time_seconds == pytest.approx(2 / viewer._fps)
+    assert viewer._time_label.text().endswith(" s")
+    assert viewer._media_player.source().toLocalFile() == str(viewer.video.video_path)
+
+
+# Positive experiment offsets display as negative pre-roll in the viewer for purposes of aligning the video and
+# understanding what is going on while aligning other videos
+@pytest.mark.parametrize("seconds", [-0.05, -0.25, -0.3])
+def test_video_viewer_can_show_negative_preroll_time(viewer, seconds):
+    viewer.set_time_seconds(seconds, allow_negative=True)
+
+    assert viewer.current_frame < 0
+    assert viewer.current_time_seconds == pytest.approx(seconds)
+    assert viewer._time_label.text() == f"{seconds:.3f} s"
+
+
 def test_video_viewer_set_transport_enabled_toggles_controls(viewer):
     viewer.enable_controls(False)
     assert not viewer._play_button.isEnabled()
@@ -148,3 +169,16 @@ def test_video_viewer_draws_boxes_from_video(qtbot, data_dir):
 
     viewer.set_frame(0)
     assert len(viewer._overlay_items) == 2
+
+
+def test_video_viewer_can_hide_stored_and_live_overlays(qtbot, data_dir):
+    viewer = VideoViewer()
+    viewer.show_overlays = False
+    qtbot.addWidget(viewer)
+    viewer.load(_video(data_dir, _one_box_on_first_frame()))
+    viewer.show_live_frame(
+        SimpleNamespace(frame_idx=2, tracks=np.array([[0, 0, 10, 10, 1, 0.9, 0, 0]]))
+    )
+    assert viewer.current_frame == 1
+    assert not viewer.show_overlays
+    assert viewer._overlay_items == []

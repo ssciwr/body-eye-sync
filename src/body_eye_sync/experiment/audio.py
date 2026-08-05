@@ -14,8 +14,8 @@ if TYPE_CHECKING:
 class Audio:
     """An audio input: its settings and the model outputs computed from it.
 
-    Audio recorded on its own device, such as a directional microphone; the
-    video inputs carry their own audio separately.
+    Audio recorded on its own device, such as a directional microphone.  The inputs carry their own audio separately -
+    meaning embedded audio in video input files is played with the video itself, for example during the Alignment stage.
 
     ``id`` names the input and its output directory, and ``time_offset`` is the
     seconds to add to this recording's own clock to reach experiment time.
