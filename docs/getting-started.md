@@ -2,8 +2,8 @@
 
 The window is a set of tabs, one per stage of working with an experiment:
 **Input files**, **Alignment**, **Timing correction**, **Video processing**,
-**Audio processing**, **Post processing** and **Data export**. Audio
-processing, post processing and data export do nothing so far.
+**Audio processing**, **Post processing** and **Data export**. Audio processing
+and post processing are not implemented yet.
 
 The title bar names the folder the open experiment is saved to, or says
 `[unsaved experiment]` until it has one.
@@ -80,6 +80,19 @@ individual step:
 
 The viewer shows live overlays while a step runs. Use **Cancel** to stop a
 running step; partial results from the cancelled step are discarded.
+
+## Export a Combined Video
+
+The **Data export** tab lists every experiment input, initially checked. Checked
+video inputs appear as labelled cells in a synchronized 25 fps grid; checked
+audio-only inputs contribute audio without adding a cell. Each source carrying
+audio gets its own selectable track.
+
+Select **Include merged audio track** to append a default playback track that
+mixes the synchronized audio from every checked source while retaining the
+individual tracks. **Export combined video** asks where to write the MP4 and
+shows progress while it is rendered. Missing recording intervals become black
+video and silence.
 
 ## Save the Experiment
 

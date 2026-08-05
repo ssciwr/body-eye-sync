@@ -8,13 +8,11 @@ from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.gui.tabs import TAB_TYPES
 from body_eye_sync.gui.tabs.audio_processing import AudioProcessingTab
 from body_eye_sync.gui.tabs.base import BaseTab, PlaceholderTab
-from body_eye_sync.gui.tabs.data_export import DataExportTab
 from body_eye_sync.gui.tabs.post_processing import PostProcessingTab
 
 PLACEHOLDER_TABS = [
     AudioProcessingTab,
     PostProcessingTab,
-    DataExportTab,
 ]
 
 

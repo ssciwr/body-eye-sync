@@ -8,14 +8,16 @@ uninstall_name: body-eye-sync
 channels:
   - conda-forge
 
-# A minimal base: Python, pip, uv and menuinst. The application and all of its
-# dependencies (including CUDA torch) are installed by post_install.bat from the
-# shipped requirements export of uv.lock, so they are NOT listed here.
+# A small base containing the tools that must be available as executables. The
+# application and its Python dependencies (including CUDA torch) are installed
+# by post_install.bat from the shipped requirements export of uv.lock.
 specs:
   - python 3.13.*
   - pip
   - uv
   - menuinst
+  # The GPL build carries libx264, used for the synchronized MP4 output.
+  - "ffmpeg=*=gpl*"
 
 # This is a self-contained application, not a Python distribution: never offer to
 # register the installed Python as the system Python, run `conda init`, or record
