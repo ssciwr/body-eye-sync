@@ -16,6 +16,11 @@ Alternatively on windows you can download the standalone installer
 [body-eye-sync.exe](https://github.com/ssciwr/body-eye-sync/releases/latest/download/body-eye-sync.exe)
 and run it, then launch Body Eye Sync from the Start menu or desktop shortcut.
 
+The standalone installer includes FFmpeg. A pip installation needs an
+`ffmpeg` executable on `PATH` to construct synchronized video grids; it can for
+example be installed from conda-forge with
+`conda install conda-forge::ffmpeg`.
+
 ## Model Downloads
 
 The first run of a pipeline step may download model weights for Ultralytics,

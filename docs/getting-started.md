@@ -3,7 +3,7 @@
 The window is a set of tabs, one per stage of working with an experiment:
 **Input files**, **Alignment**, **Timing correction**, **Video processing**,
 **Audio processing**, **Post processing** and **Data export**. Post processing
-and data export do nothing so far.
+is not implemented yet.
 
 The title bar names the folder the open experiment is saved to, or says
 `[unsaved experiment]` until it has one.
@@ -103,6 +103,20 @@ shares.
 **Run all** runs both in order, as it does for video. The speech turns are
 listed with their times, speaker and text once each step finishes; each input
 keeps its own results, so switching recordings shows that recording's.
+
+## Export a Combined Video
+
+The **Data export** tab lists every experiment input, initially checked. Checked
+video inputs appear as labelled cells in a synchronized 25 fps grid; checked
+audio-only inputs contribute audio without adding a cell. Each source carrying
+audio gets its own selectable track.
+
+Select **Include merged audio track** to append a default playback track that
+mixes the synchronized audio from every checked source while retaining the
+individual tracks. **Export combined video** asks where to write the MP4 and
+shows progress while it is rendered. A same-stem ELAN `.eaf` file is written
+beside it with available speech turns grouped by input-local speaker id. Missing
+recording intervals become black video and silence.
 
 ## Save the Experiment
 

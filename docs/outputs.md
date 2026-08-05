@@ -3,6 +3,51 @@
 Body Eye Sync writes results as Parquet files so they can be loaded directly by
 Python analysis tools such as pandas, Polars, or PyArrow.
 
+## Synchronized Video and ELAN Annotations
+
+The Data export tab creates an MP4 containing the checked video inputs in a
+labelled grid on the shared experiment timeline. Every input starts checked;
+checked audio-only inputs contribute audio without adding a grid cell. The
+output is always 25 fps; source frames are selected by timestamp, so both 25 fps
+and 50 fps recordings remain synchronized. A cell is black before or after its
+recording and wherever the input lost content.
+
+Every checked input that carries audio becomes a separately selectable,
+full-length audio track named after the input id. Its offset, clock scale and
+shifts are applied independently, with silence filling time not covered by that
+recording. Selecting **Include merged audio track** also adds a default playback
+track that mixes all the checked sources while retaining their individual
+tracks.
+
+The tab also writes a same-stem ELAN `.eaf` file beside the MP4. Each selected
+input's available speech results become tiers named
+`<input-id>:speaker_<local-id>`. Turn boundaries are converted from source-local
+time to the exported video's zero-based timeline, and annotation values contain
+transcript text when transcription has run. Speaker ids deliberately remain
+local to each input until post-processing provides experiment-wide identities.
+
+The same export is available through `construct_video_grid`; omit `input_ids`
+to include every input.
+
+```python
+from body_eye_sync.experiment.experiment import Experiment
+from body_eye_sync.export.elan import export_elan
+from body_eye_sync.export.video_grid import construct_video_grid
+
+experiment = Experiment.load("my-experiment")
+video = construct_video_grid(
+    experiment,
+    "my-experiment/synchronized-grid.mp4",
+    input_ids=["room", "glasses_1", "microphone_1"],
+    include_merged_audio=True,
+)
+export_elan(
+    experiment,
+    video,
+    input_ids=["room", "glasses_1", "microphone_1"],
+)
+```
+
 ## Main Output
 
 Each input gets a directory, holding a file per kind of result it has. Each
