@@ -328,7 +328,7 @@ StepSpec = Union[
 ]
 
 
-class _StepPipeline(_Model):
+class StepPipeline(_Model):
     """A set of pipeline steps held as fields, in the order they run.
 
     :attr:`STEP_FIELDS` names them, so a subclass declares its stages once and
@@ -346,7 +346,7 @@ class _StepPipeline(_Model):
         return [step for step in present if step is not None]
 
 
-class VideoPipeline(_StepPipeline):
+class VideoPipeline(StepPipeline):
     """The stages run over a video input.
 
     Both video types use this same set of stages, but as independent blocks, so
@@ -365,7 +365,7 @@ class VideoPipeline(_StepPipeline):
     body_pose: BodyPoseStep | None = None
 
 
-class SpeechPipeline(_StepPipeline):
+class SpeechPipeline(StepPipeline):
     """The stages run over all inputs that contain audio."""
 
     STEP_FIELDS: ClassVar[tuple[str, ...]] = ("diarization", "transcription")

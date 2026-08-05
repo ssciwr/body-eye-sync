@@ -48,6 +48,10 @@
 
 ::: body_eye_sync.gui.workers.body_pose
 
+::: body_eye_sync.gui.workers.diarization
+
+::: body_eye_sync.gui.workers.transcription
+
 ## Utilities
 
 ::: body_eye_sync.gui.utils

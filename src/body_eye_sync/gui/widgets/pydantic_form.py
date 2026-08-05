@@ -16,7 +16,9 @@ Widget mapping:
 * ``list[...]``                        -> :class:`QLineEdit` (comma separated)
 * anything else / ``str``              -> :class:`QLineEdit`
 
-``Literal`` fields (the discriminator tags) are fixed and not shown.
+``Literal`` fields (the discriminator tags) are fixed and not shown. A field
+whose type allows ``None`` is shown as an empty line edit and reads back as
+``None``, so an optional setting can be left unset.
 """
 
 from __future__ import annotations
@@ -54,6 +56,11 @@ def _bounds(field: FieldInfo) -> tuple[float | None, float | None]:
         elif isinstance(constraint, annotated_types.Lt):
             high = constraint.lt
     return low, high
+
+
+def _optional(field: FieldInfo) -> bool:
+    """Whether the field's type allows ``None``, e.g. ``str | None``."""
+    return type(None) in get_args(field.annotation)
 
 
 def _choices(field: FieldInfo) -> list | None:
@@ -142,6 +149,9 @@ class PydanticForm(QWidget):
             elif isinstance(widget, QLineEdit):
                 if isinstance(value, (list, tuple)):
                     widget.setText(", ".join(str(v) for v in value))
+                elif value is None:
+                    # An unset optional value shows as an empty box, not "None".
+                    widget.setText("")
                 else:
                     widget.setText(str(value))
 
@@ -164,10 +174,13 @@ class PydanticForm(QWidget):
             elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
                 values[name] = widget.value()
             elif isinstance(widget, QLineEdit):
+                text = widget.text()
                 if get_origin(field.annotation) is list:
-                    values[name] = _parse_list(widget.text(), field)
+                    values[name] = _parse_list(text, field)
+                elif _optional(field) and not text:
+                    values[name] = None
                 else:
-                    values[name] = widget.text()
+                    values[name] = text
         return values
 
 

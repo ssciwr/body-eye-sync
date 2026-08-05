@@ -29,15 +29,15 @@ class ObjectTrackingWorker(BaseWorker):
         # embeddings_per_track drives the post-pass reduction in Video, not the
         # detector call, so it is not forwarded to detect_tracklets.
         return detect_tracklets(
-            self._video.video_path,
+            self._target.video_path,
             **self._step.model_dump(exclude={"embeddings_per_track"}),
         )
 
     def _accumulate(self, frame) -> None:
-        self._video.add_object_tracking_frame(frame)
+        self._target.add_object_tracking_frame(frame)
 
     def _finalise(self) -> None:
-        self._video.finish_object_tracking()
+        self._target.finish_object_tracking()
 
     def _discard(self) -> None:
-        self._video.discard_object_tracking()
+        self._target.discard_object_tracking()

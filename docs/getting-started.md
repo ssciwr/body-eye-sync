@@ -2,8 +2,8 @@
 
 The window is a set of tabs, one per stage of working with an experiment:
 **Input files**, **Alignment**, **Timing correction**, **Video processing**,
-**Audio processing**, **Post processing** and **Data export**. Audio
-processing, post processing and data export do nothing so far.
+**Audio processing**, **Post processing** and **Data export**. Post processing
+and data export do nothing so far.
 
 The title bar names the folder the open experiment is saved to, or says
 `[unsaved experiment]` until it has one.
@@ -50,7 +50,7 @@ audio could not be lined up against the reference reads **Couldn't match**
 rather than being reported as having kept time -- it may overlap too little, be
 too quiet, or need aligning first.
 
-## Configure the Pipeline
+## Configure the Video Pipeline
 
 The **Video processing** tab shows one video input at a time, chosen with the
 selector above the viewer, with the pipeline editor beside it. Each video type
@@ -80,6 +80,29 @@ individual step:
 
 The viewer shows live overlays while a step runs. Use **Cancel** to stop a
 running step; partial results from the cancelled step are discarded.
+
+## Work Out Who Said What
+
+The **Audio processing** tab does the same for speech. The selector above the
+results lists every input that carries audio -- the separately recorded audio
+inputs, and the video inputs, which are run over their own audio track. Unlike
+the video pipeline, there is a single set of speech settings that every input
+shares.
+
+- **Diarization** splits a recording into speech turns and works out which of
+  them belong to the same voice. It can run as soon as an input with audio is
+  chosen. `num_speakers` caps how many speakers to look for, or `-1` uses
+  `threshold` instead, where a lower value finds more speakers.
+  `embeddings_per_speaker = 32` keeps the best voice embeddings per speaker,
+  for relating speakers across recordings later.
+- **Transcription** is optional and runs once diarization results exist, because
+  its words are attributed to the speech turns diarization found. Leave
+  `language` empty to detect it from the first 30 seconds, or set an ISO 639-1
+  code such as `de`.
+
+**Run all** runs both in order, as it does for video. The speech turns are
+listed with their times, speaker and text once each step finishes; each input
+keeps its own results, so switching recordings shows that recording's.
 
 ## Save the Experiment
 

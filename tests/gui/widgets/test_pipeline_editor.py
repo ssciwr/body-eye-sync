@@ -1,14 +1,21 @@
 from body_eye_sync.experiment.config import (
     BodyPoseStep,
+    DiarizationStep,
     FaceDetectionStep,
     ObjectTrackingStep,
+    SpeechPipeline,
+    TranscriptionStep,
     VideoPipeline,
 )
-from body_eye_sync.gui.widgets.pipeline_editor import PipelineEditor
+from body_eye_sync.gui.widgets.pipeline_editor import (
+    SPEECH_STEPS,
+    VIDEO_STEPS,
+    PipelineEditor,
+)
 
 
-def _editor(qtbot):
-    editor = PipelineEditor()
+def _editor(qtbot, steps=VIDEO_STEPS):
+    editor = PipelineEditor(steps)
     qtbot.addWidget(editor)
     return editor
 
@@ -132,3 +139,24 @@ def test_run_buttons_start_disabled(qtbot):
 
     assert not any(s.run_button.isEnabled() for s in editor._sections)
     assert not editor.run_all_button.isEnabled()
+
+
+def test_speech_steps_edit_a_speech_pipeline(qtbot):
+    editor = _editor(qtbot, SPEECH_STEPS)
+    editor.set_from(SpeechPipeline(transcription=TranscriptionStep(beam_size=3)))
+
+    steps = {type(s): s for s in editor.enabled_steps()}
+    assert list(steps) == [DiarizationStep, TranscriptionStep]
+    assert steps[TranscriptionStep].beam_size == 3
+
+
+def test_speech_transcription_is_the_optional_step(qtbot):
+    editor = _editor(qtbot, SPEECH_STEPS)
+    editor.reset()
+    assert [type(s) for s in editor.enabled_steps()] == [DiarizationStep]
+
+    pipeline = SpeechPipeline(transcription=TranscriptionStep())
+    editor.apply_to(pipeline)
+
+    assert isinstance(pipeline.diarization, DiarizationStep)
+    assert pipeline.transcription is None
