@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from qtpy.QtWidgets import (
-    QApplication,
     QDoubleSpinBox,
     QGridLayout,
     QHBoxLayout,
@@ -16,10 +15,9 @@ from qtpy.QtWidgets import (
 )
 
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.video import GlassesVideo, Video
+from body_eye_sync.experiment.video import Video
 from body_eye_sync.gui.tabs.base import BaseTab
 from body_eye_sync.gui.widgets import VideoViewer
-from body_eye_sync.pipeline.audio_offset import assign_automatic_estimated_offset
 
 _OFFSET_STEP = 0.05
 _SET_BUTTON_ACTIVE_STYLE = (
@@ -98,11 +96,6 @@ class AlignmentTab(BaseTab):
         self._cells: list[QWidget] = []
         self.video_viewers: list[VideoViewer] = []
         self.video_controls: list[_VideoAlignmentControls] = []
-        self.estimate_button = QPushButton("Estimate offset")
-        self.estimate_button.setToolTip(
-            "Estimate inter glasses-videos offsets automatically"
-        )
-        self.estimate_button.clicked.connect(self._estimate_video_offsets)
         self.done_button = QPushButton("Finish alignment")
         self.done_button.setDefault(True)
         self.done_button.clicked.connect(self.finished.emit)
@@ -111,7 +104,6 @@ class AlignmentTab(BaseTab):
         self.grid = QGridLayout()
         layout.addLayout(self.grid, stretch=1)
         buttons = QHBoxLayout()
-        buttons.addWidget(self.estimate_button)
         buttons.addStretch(1)
         buttons.addWidget(self.done_button)
         layout.addLayout(buttons)
@@ -153,37 +145,6 @@ class AlignmentTab(BaseTab):
             self.video_viewers.append(viewer)
             self.video_controls.append(controls)
             self.grid.addWidget(cell, index // 3, index % 3)
-
-    def _estimate_video_offsets(self) -> None:
-        videos = self.experiment.glasses_videos
-        if not videos:
-            self.status_message.emit("No glasses videos to estimate")
-            return
-
-        self.status_message.emit("Estimating offsets...")
-        self.estimate_button.setEnabled(False)
-        QApplication.processEvents()
-        try:
-            offsets = assign_automatic_estimated_offset(*videos)
-        finally:
-            self.estimate_button.setEnabled(True)
-
-        changed = 0
-        for controls in self.video_controls:
-            if not isinstance(controls.video, GlassesVideo):
-                continue
-            offset = offsets.get(controls.video)
-            if offset is None:
-                continue
-            if round(controls.video.time_offset, 3) != round(offset, 3):
-                changed += 1
-            controls.spin.setValue(round(offset, 3))
-
-        self.experiment_changed.emit()
-        if any(round(offset, 3) != 0.0 for offset in offsets.values()):
-            self.status_message.emit(f"Estimated offsets: {changed} changed")
-        else:
-            self.status_message.emit("Estimated offsets: no confident non-zero matches")
 
     def _set_offset_from_current_frame(self, source: _VideoAlignmentControls) -> None:
         source.spin.setValue(round(-source.viewer.current_time_seconds, 3))

@@ -24,7 +24,6 @@ dependencies = [
     "pyside6",
     "insightface",
     "onnxruntime",
-    "av==18.0.0",
 ]
 authors = [
     { name = "SSC" },

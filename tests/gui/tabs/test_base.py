@@ -85,12 +85,8 @@ def test_alignment_tab_renders_all_videos_without_overlays(qtbot, experiment, da
     assert tab.grid.itemAtPosition(1, 0).widget() is tab._cells[3]
     assert all(not viewer.show_overlays for viewer in tab.video_viewers)
     button_row = tab.layout().itemAt(1).layout()
-    assert tab.estimate_button.text() == "Estimate offset"
-    assert (
-        tab.estimate_button.toolTip()
-        == "Estimate inter glasses-videos offsets automatically"
-    )
-    assert button_row.indexOf(tab.estimate_button) < button_row.indexOf(tab.done_button)
+    assert not hasattr(tab, "estimate_button")
+    assert button_row.indexOf(tab.done_button) >= 0
     assert tab.done_button.text() == "Finish alignment"
     assert tab.layout().itemAt(0).layout() is tab.grid
     assert tab.done_button.isDefault()
@@ -189,44 +185,6 @@ def test_alignment_tab_can_set_other_videos_to_same_video_timestamp(
         experiment.glasses_videos[0].time_offset
     )
     assert tab.video_viewers[1].current_time_seconds == pytest.approx(source_time)
-
-
-# Covers applying every automatic glasses-video offset proposal.
-def test_alignment_tab_estimates_glasses_offsets(qtbot, data_dir, monkeypatch):
-    path = data_dir / "three-people.mp4"
-    experiment = Experiment(
-        ExperimentConfig(
-            glasses_videos=[
-                GlassesVideoInput(
-                    id="cam1", path=path, gaze_path=path.with_suffix(".tsv")
-                ),
-                GlassesVideoInput(
-                    id="cam2", path=path, gaze_path=path.with_suffix(".tsv")
-                ),
-            ],
-            fixed_videos=[FixedVideoInput(id="room1", path=path, time_offset=9.0)],
-        )
-    )
-    experiment.glasses_videos[0].time_offset = 4.0
-    experiment.glasses_videos[1].time_offset = 5.0
-    monkeypatch.setattr(
-        "body_eye_sync.gui.tabs.alignment.assign_automatic_estimated_offset",
-        lambda *videos: {videos[0]: 0.0, videos[1]: -1.25},
-    )
-    changed = []
-    statuses = []
-    tab = AlignmentTab(experiment)
-    tab.experiment_changed.connect(lambda: changed.append(True))
-    tab.status_message.connect(statuses.append)
-    qtbot.addWidget(tab)
-
-    tab.estimate_button.click()
-
-    assert experiment.glasses_videos[0].time_offset == 0.0
-    assert experiment.glasses_videos[1].time_offset == pytest.approx(-1.25)
-    assert experiment.fixed_videos[0].time_offset == pytest.approx(9.0)
-    assert statuses[-1] == "Estimated offsets: 2 changed"
-    assert changed
 
 
 # Covers finishing video alignment without opening audio controls.
