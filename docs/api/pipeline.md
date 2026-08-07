@@ -12,6 +12,10 @@
 
 ::: body_eye_sync.pipeline.body_pose
 
+## Transcription
+
+::: body_eye_sync.pipeline.transcription
+
 ## Model Cache
 
 ::: body_eye_sync.pipeline.model_cache

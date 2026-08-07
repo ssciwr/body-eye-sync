@@ -14,9 +14,13 @@
 
 ::: body_eye_sync.gui.tabs.alignment
 
+::: body_eye_sync.gui.tabs.timing_correction
+
 ::: body_eye_sync.gui.tabs.video_processing
 
 ::: body_eye_sync.gui.tabs.audio_processing
+
+::: body_eye_sync.gui.tabs.speech_post_processing
 
 ::: body_eye_sync.gui.tabs.post_processing
 
@@ -32,6 +36,8 @@
 
 ::: body_eye_sync.gui.widgets.pydantic_form
 
+::: body_eye_sync.gui.widgets.auto_height_table
+
 ## Workers
 
 ::: body_eye_sync.gui.workers
@@ -43,6 +49,8 @@
 ::: body_eye_sync.gui.workers.face_detection
 
 ::: body_eye_sync.gui.workers.body_pose
+
+::: body_eye_sync.gui.workers.transcription
 
 ## Utilities
 

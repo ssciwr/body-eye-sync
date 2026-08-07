@@ -24,6 +24,21 @@ class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class TimeShift(_Model):
+    """A stretch of a recording that was never written.
+
+    Some devices stall briefly and carry on without it, so everything after
+    sits earlier on their own clock than it does in the room. ``at`` is where
+    that happens on the recording's own clock and ``seconds`` is how much is
+    missing, which is added to the offset from there on.
+    """
+
+    at: float = Field(
+        description="Where the loss falls on the recording's own clock, in seconds."
+    )
+    seconds: float = Field(gt=0, description="How much content is missing there.")
+
+
 class _Input(_Model):
     """Fields shared by every experiment input, whatever its type.
 
@@ -40,6 +55,20 @@ class _Input(_Model):
             "Seconds to add to this input's own clock to place it on the shared "
             "experiment timeline."
         ),
+    )
+
+    time_scale: float = Field(
+        1.0,
+        gt=0,
+        description=(
+            "Rate of experiment time per second of this input's own clock. "
+            "Values slightly different from one compensate independent device clocks."
+        ),
+    )
+
+    time_shifts: list[TimeShift] = Field(
+        default_factory=list,
+        description=("Content the recording lost partway through, if any."),
     )
 
     @field_validator("id")
@@ -193,11 +222,83 @@ class BodyPoseStep(_Model):
     )
 
 
+class TranscriptionStep(_Model):
+    """Speech transcription. Fields mirror ``transcribe``."""
+
+    model_name: str = Field(
+        "primeline/whisper-large-v3-turbo-german",
+        description=(
+            "Whisper model. The primeLine models are accuracy-tuned for German; "
+            "large-v3 is the strongest general multilingual choice."
+        ),
+        json_schema_extra={
+            "choices": [
+                "primeline/whisper-large-v3-turbo-german",
+                "primeline/whisper-large-v3-german",
+                "large-v3",
+                "large-v3-turbo",
+                "distil-large-v3",
+                "tiny",
+                "base",
+                "small",
+                "medium",
+            ]
+        },
+    )
+    language: str | None = Field(
+        "de",
+        description=(
+            "ISO 639-1 language code of the recording, e.g. 'de'. German is the "
+            "accuracy-first default; leave unset to detect the language from the "
+            "first 30 seconds."
+        ),
+    )
+    beam_size: int = Field(5, ge=1, description="Decoding beam width.")
+    device: str = Field(
+        "auto",
+        description=(
+            "Where to run Whisper. 'auto' uses a GPU when one can actually be "
+            "loaded, and the CPU otherwise."
+        ),
+        json_schema_extra={"choices": ["auto", "cpu", "cuda"]},
+    )
+    vad_filter: bool = Field(
+        True,
+        description=(
+            "Skip silent stretches, which speeds up the pass and suppresses text "
+            "invented over silence."
+        ),
+    )
+
+
 # A pipeline stage for type hints
-StepSpec = Union[ObjectTrackingStep, FaceDetectionStep, BodyPoseStep]
+StepSpec = Union[
+    ObjectTrackingStep,
+    FaceDetectionStep,
+    BodyPoseStep,
+    TranscriptionStep,
+]
 
 
-class VideoPipeline(_Model):
+class StepPipeline(_Model):
+    """A set of pipeline steps held as fields, in the order they run.
+
+    :attr:`STEP_FIELDS` names them, so a subclass declares its stages once and
+    gets :attr:`steps` from that. An optional stage that is switched off is
+    ``None`` and simply does not run.
+    """
+
+    #: The pipeline step fields, in run order.
+    STEP_FIELDS: ClassVar[tuple[str, ...]] = ()
+
+    @property
+    def steps(self) -> list[StepSpec]:
+        """The pipeline stages that will run, in order."""
+        present = (getattr(self, name) for name in self.STEP_FIELDS)
+        return [step for step in present if step is not None]
+
+
+class VideoPipeline(StepPipeline):
     """The stages run over a video input.
 
     Both video types use this same set of stages, but as independent blocks, so
@@ -205,7 +306,6 @@ class VideoPipeline(_Model):
     cameras.
     """
 
-    # The pipeline step fields, in run order
     STEP_FIELDS: ClassVar[tuple[str, ...]] = (
         "object_tracking",
         "face_detection",
@@ -216,26 +316,17 @@ class VideoPipeline(_Model):
     face_detection: FaceDetectionStep | None = None
     body_pose: BodyPoseStep | None = None
 
-    @property
-    def steps(self) -> list[StepSpec]:
-        """The pipeline stages that will run, in order."""
-        present = (getattr(self, name) for name in self.STEP_FIELDS)
-        return [step for step in present if step is not None]
 
+class SpeechPipeline(StepPipeline):
+    """The stages run over all inputs that contain audio.
 
-class AudioPipeline(_Model):
-    """The stages run over an audio input.
-
-    There are none yet: audio is currently only loaded and placed on the
-    timeline. Diarization and transcription stages belong here.
+    Transcription is the only one: it says what was said, and who said it is
+    settled afterwards, by comparing the experiment's recordings with each other.
     """
 
-    STEP_FIELDS: ClassVar[tuple[str, ...]] = ()
+    STEP_FIELDS: ClassVar[tuple[str, ...]] = ("transcription",)
 
-    @property
-    def steps(self) -> list[StepSpec]:
-        """The pipeline stages that will run, in order."""
-        return []
+    transcription: TranscriptionStep = Field(default_factory=TranscriptionStep)
 
 
 class Pipeline(_Model):
@@ -243,7 +334,7 @@ class Pipeline(_Model):
 
     glasses_video: VideoPipeline = Field(default_factory=VideoPipeline)
     fixed_video: VideoPipeline = Field(default_factory=VideoPipeline)
-    audio: AudioPipeline = Field(default_factory=AudioPipeline)
+    speech: SpeechPipeline | None = Field(default_factory=SpeechPipeline)
 
 
 class ExperimentConfig(_Model):

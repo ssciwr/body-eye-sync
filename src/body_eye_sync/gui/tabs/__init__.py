@@ -13,14 +13,18 @@ from body_eye_sync.gui.tabs.base import BaseTab, PlaceholderTab
 from body_eye_sync.gui.tabs.data_export import DataExportTab
 from body_eye_sync.gui.tabs.input_files import InputFilesTab
 from body_eye_sync.gui.tabs.post_processing import PostProcessingTab
+from body_eye_sync.gui.tabs.speech_post_processing import SpeechPostProcessingTab
+from body_eye_sync.gui.tabs.timing_correction import TimingCorrectionTab
 from body_eye_sync.gui.tabs.video_processing import VideoProcessingTab
 
 # The tabs in the order that they should be displayed
 TAB_TYPES: tuple[type[BaseTab], ...] = (
     InputFilesTab,
     AlignmentTab,
+    TimingCorrectionTab,
     VideoProcessingTab,
     AudioProcessingTab,
+    SpeechPostProcessingTab,
     PostProcessingTab,
     DataExportTab,
 )
@@ -34,5 +38,7 @@ __all__ = [
     "InputFilesTab",
     "PlaceholderTab",
     "PostProcessingTab",
+    "SpeechPostProcessingTab",
+    "TimingCorrectionTab",
     "VideoProcessingTab",
 ]

@@ -18,7 +18,6 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QSplitter,
     QVBoxLayout,
@@ -36,7 +35,7 @@ from body_eye_sync.experiment.config import (
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import GlassesVideo, Video
 from body_eye_sync.gui.tabs.base import BaseTab
-from body_eye_sync.gui.widgets import PipelineEditor, VideoViewer
+from body_eye_sync.gui.widgets import VIDEO_STEPS, PipelineEditor, VideoViewer
 from body_eye_sync.gui.workers import (
     BodyPoseWorker,
     FaceDetectionWorker,
@@ -70,7 +69,6 @@ class VideoProcessingTab(BaseTab):
         self._worker: (
             ObjectTrackingWorker | FaceDetectionWorker | BodyPoseWorker | None
         ) = None
-        self._in_setup = False
         #: Remaining step types queued by "Run all"; consumed one at a time as
         #: each step finishes, so later steps see earlier steps' results.
         self._pending_steps: list[type] = []
@@ -82,9 +80,6 @@ class VideoProcessingTab(BaseTab):
 
         self.video_viewer = VideoViewer()
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setVisible(False)
         self.cancel_button.clicked.connect(self._cancel_run)
@@ -94,7 +89,7 @@ class VideoProcessingTab(BaseTab):
         top_bar.addWidget(self.video_selector, stretch=1)
 
         bottom_bar = QHBoxLayout()
-        bottom_bar.addWidget(self.progress_bar, stretch=1)
+        bottom_bar.addStretch(1)
         bottom_bar.addWidget(self.cancel_button)
 
         viewer_layout = QVBoxLayout()
@@ -107,7 +102,7 @@ class VideoProcessingTab(BaseTab):
 
         # The pipeline editor is the authority for the shown video's pipeline
         # block. The splitter lets the user give it as much room as they want.
-        self.pipeline_editor = PipelineEditor()
+        self.pipeline_editor = PipelineEditor(VIDEO_STEPS)
         self.pipeline_editor.changed.connect(self._on_pipeline_edited)
         self.pipeline_editor.run_requested.connect(self._start_step)
         self.pipeline_editor.run_all_requested.connect(self._start_run_all)
@@ -319,22 +314,15 @@ class VideoProcessingTab(BaseTab):
         self._set_running(True)
         # Weights are built/downloaded before the first frame is processed, so
         # show a busy bar until the first frame arrives.
-        self._in_setup = True
-        self.progress_bar.setRange(0, 0)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("Downloading weights…")
+        self.progress_changed.emit(0, 0, "Downloading weights…")
 
     @Slot(object)
     def _on_new_frame(self, frame) -> None:
+        # The first frame turns the busy "downloading" bar into a determinate
+        # one, which reporting a total takes care of on its own.
         total = self.video_viewer.frame_count
-        if self._in_setup:
-            # First frame processed: switch from the busy "downloading" bar to a
-            # determinate progress bar (a 0..0 range stays busy if total unknown).
-            self._in_setup = False
-            self.progress_bar.setRange(0, total)
-            self.progress_bar.setFormat("%p%" if total else "Object tracking…")
-        if total:
-            self.progress_bar.setValue(frame.frame_idx)
+        label = f"{self._worker.operation_name}…"
+        self.progress_changed.emit(frame.frame_idx if total else 0, total, label)
 
     def _cancel_run(self) -> None:
         if self._worker is not None:
@@ -404,7 +392,6 @@ class VideoProcessingTab(BaseTab):
         self.video_selector.setEnabled(not running and bool(self._videos))
         self.pipeline_editor.setEnabled(not running and self.video() is not None)
         self.video_viewer.enable_controls(not running)
-        self.progress_bar.setVisible(running)
         self.cancel_button.setVisible(running)
         self.cancel_button.setEnabled(True)
         self.cancel_button.setText("Cancel")

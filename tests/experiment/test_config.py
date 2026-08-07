@@ -4,7 +4,8 @@ from pydantic import ValidationError
 from body_eye_sync.experiment.config import (
     CURRENT_VERSION,
     AudioInput,
-    AudioPipeline,
+    SpeechPipeline,
+    TranscriptionStep,
     BodyPoseStep,
     ExperimentConfig,
     FaceDetectionStep,
@@ -83,8 +84,13 @@ def test_tracking_only_pipeline_is_valid():
     assert [type(s) for s in pipeline.steps] == [ObjectTrackingStep]
 
 
-def test_audio_pipeline_has_no_steps_yet():
-    assert AudioPipeline().steps == []
+def test_audio_pipeline_transcribes_by_default():
+    pipeline = SpeechPipeline()
+    assert [type(s) for s in pipeline.steps] == [TranscriptionStep]
+    assert (
+        pipeline.transcription.model_name == "primeline/whisper-large-v3-turbo-german"
+    )
+    assert pipeline.transcription.language == "de"
 
 
 def test_version_defaults_to_current():

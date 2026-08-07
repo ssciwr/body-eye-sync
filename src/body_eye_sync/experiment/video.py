@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-import heapq
-import itertools
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
 
+from body_eye_sync.experiment.embeddings import (
+    TopK,
+    read_embeddings,
+    write_embeddings,
+)
+from body_eye_sync.experiment.speech import Speech
+from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.pipeline.object_tracking import BoundingBox, tracks_to_dataframe
 from body_eye_sync.pipeline.face_detection import (
     FACE_COLUMNS,
@@ -30,71 +36,12 @@ from body_eye_sync.pipeline.body_pose import (
 _EMBEDDING_COLUMNS = ["track_id", "frame", "score", "embedding"]
 
 
-class _TrackTopK:
-    """Keeps the best-K embeddings per track id as ``float16``, ranked by score."""
-
-    def __init__(self, k: int) -> None:
-        self._k = k
-        self._heaps: dict[int, list] = {}
-        self._counter = itertools.count()
-
-    def add(self, track_id: int, frame: int, score: float, embedding) -> None:
-        if self._k <= 0 or embedding is None:
-            return
-        vec = np.asarray(embedding, dtype=np.float16)
-        # A per-track min-heap keyed by score keeps the K highest scoring; the
-        # counter breaks score ties so the arrays are never compared.
-        item = (float(score), next(self._counter), int(frame), vec)
-        heap = self._heaps.setdefault(int(track_id), [])
-        if len(heap) < self._k:
-            heapq.heappush(heap, item)
-        elif item[0] > heap[0][0]:
-            heapq.heapreplace(heap, item)
-
-    def to_frame(self) -> pd.DataFrame | None:
-        """Best-first table of the kept embeddings, or ``None`` if none were kept."""
-        rows = []
-        for track_id, heap in self._heaps.items():
-            for score, _, frame, vec in sorted(heap, key=lambda x: x[0], reverse=True):
-                rows.append((track_id, frame, score, vec))
-        if not rows:
-            return None
-        return pd.DataFrame(rows, columns=_EMBEDDING_COLUMNS)
+def _embeddings_filename(kind: str) -> str:
+    """The file one kind of embedding is stored in, inside an output directory."""
+    return f"{kind}_embeddings.parquet"
 
 
-def _embeddings_path(path: str | Path, kind: str) -> Path:
-    """Companion embeddings file beside a main output."""
-    path = Path(path)
-    return path.with_name(f"{kind}_embeddings.parquet")
-
-
-def _write_embeddings(path: Path, table: pd.DataFrame) -> None:
-    """Write a best-K embeddings table as fixed-size ``float16`` vectors."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    matrix = np.stack(table["embedding"].to_numpy())
-    _, dim = matrix.shape
-    values = pa.array(matrix.reshape(-1), type=pa.float16())
-    out = pa.table(
-        {
-            "track_id": pa.array(table["track_id"].to_numpy(), pa.int64()),
-            "frame": pa.array(table["frame"].to_numpy(), pa.int64()),
-            "score": pa.array(table["score"].to_numpy(), pa.float32()),
-            "embedding": pa.FixedSizeListArray.from_arrays(values, dim),
-        }
-    )
-    pq.write_table(out, str(path))
-
-
-def _read_embeddings(path: Path) -> pd.DataFrame:
-    """Load a companion embeddings file back into a table of ``float16`` vectors."""
-    import pyarrow.parquet as pq
-
-    return pq.read_table(str(path)).to_pandas()
-
-
-class Video:
+class Video(Timeline):
     """A video input: its settings and the model outputs computed from it.
 
     ``id`` names the input and its output directory, and ``time_offset`` is the
@@ -106,17 +53,26 @@ class Video:
     Face detection runs as a later pass over those tracked boxes, accumulating
     per frame and folding its columns onto the matching rows in
     :meth:`finish_face_detection`. Body-pose detection follows the same pattern.
+
+    A camera also records audio, so the speech stages can run over this video's
+    own track, with their results stored in :attr:`speech`.
     """
+
+    #: The tracked boxes, this input's main result.
+    _RESULTS_FILENAME: ClassVar[str] = "results.parquet"
 
     def __init__(
         self,
         id: str = "",
         path: str | Path | None = None,
-        time_offset: float = 0.0,
+        **timeline,
     ) -> None:
+        # ``timeline`` is where this input sits on the experiment clock; see
+        # :class:`~body_eye_sync.experiment.timeline.Timeline`.
+        super().__init__(**timeline)
         self.id = id
         self.video_path = Path(path) if path is not None else None
-        self.time_offset = time_offset
+        self.speech = Speech()
         # Persistent results.
         self._data: pd.DataFrame | None = None
         self._rows_by_frame: dict[int, np.ndarray] = {}
@@ -127,13 +83,21 @@ class Video:
         self._tmp_frames: list[tuple[int, np.ndarray]] = []
         self._tmp_face_frames: list[FaceFrameResult] = []
         self._tmp_pose_frames: list[PoseFrameResult] = []
-        self._tmp_body_topk = _TrackTopK(0)
-        self._tmp_face_topk = _TrackTopK(0)
+        self._tmp_body_topk = TopK(0, _EMBEDDING_COLUMNS)
+        self._tmp_face_topk = TopK(0, _EMBEDDING_COLUMNS)
 
-    def set_video(self, path: str | Path) -> None:
-        """Set the current video, invalidating any previous model outputs."""
-        self.clear()
-        self.video_path = Path(path)
+    @classmethod
+    def from_config(cls, spec, resolve) -> "Video":
+        """This input as its stored form describes it.
+
+        ``resolve`` turns a stored path into the one to read at runtime, which
+        only the experiment holding the folder can do.
+        """
+        return cls(spec.id, resolve(spec.path), **cls.timeline_kwargs(spec))
+
+    @property
+    def path(self) -> Path | None:
+        return self.video_path
 
     def begin_object_tracking(self, embeddings_per_track: int = 0) -> None:
         """Drop any previous model outputs.
@@ -143,7 +107,7 @@ class Video:
         identity clustering; ``0`` keeps none.
         """
         self.clear()
-        self._tmp_body_topk = _TrackTopK(embeddings_per_track)
+        self._tmp_body_topk = TopK(embeddings_per_track, _EMBEDDING_COLUMNS)
 
     def add_object_tracking_frame(self, frame) -> None:
         """Accumulate a BoxMOT per-frame result, converting to 0-based indices"""
@@ -201,7 +165,7 @@ class Video:
             if present:
                 self.set_data(self._data.drop(columns=present))
         self._tmp_face_frames = []
-        self._tmp_face_topk = _TrackTopK(embeddings_per_track)
+        self._tmp_face_topk = TopK(embeddings_per_track, _EMBEDDING_COLUMNS)
         self._face_embeddings = None
 
     def add_face_detection_frame(self, result: FaceFrameResult) -> None:
@@ -224,7 +188,7 @@ class Video:
     def discard_face_detection(self) -> None:
         """Drop a cancelled or failed pass; the tracked boxes are left intact."""
         self._tmp_face_frames = []
-        self._tmp_face_topk = _TrackTopK(0)
+        self._tmp_face_topk = TopK(0, _EMBEDDING_COLUMNS)
         self._face_embeddings = None
 
     def faces_for_frame(self, frame_index: int) -> list[FaceBox]:
@@ -282,16 +246,6 @@ class Video:
         """All tracked detections as a DataFrame, or ``None`` until complete."""
         return self._data
 
-    @property
-    def body_embeddings(self) -> pd.DataFrame | None:
-        """Best-K body-appearance embeddings per tracklet, or ``None``."""
-        return self._body_embeddings
-
-    @property
-    def face_embeddings(self) -> pd.DataFrame | None:
-        """Best-K face embeddings per tracklet, or ``None``."""
-        return self._face_embeddings
-
     def boxes_for_frame(self, frame_index: int) -> list[BoundingBox]:
         """Object bounding boxes for frame ``frame_index`` (0-based)."""
         if self._data is None:
@@ -308,59 +262,66 @@ class Video:
     def clear(self) -> None:
         self._data = None
         self._rows_by_frame = {}
+        self.speech.clear()
         self._tmp_frames = []
         self._tmp_face_frames = []
         self._tmp_pose_frames = []
-        self._tmp_body_topk = _TrackTopK(0)
-        self._tmp_face_topk = _TrackTopK(0)
+        self._tmp_body_topk = TopK(0, _EMBEDDING_COLUMNS)
+        self._tmp_face_topk = TopK(0, _EMBEDDING_COLUMNS)
         self._body_embeddings = None
         self._face_embeddings = None
 
-    def to_parquet(self, path: str | Path) -> None:
-        """Write the completed :attr:`data` to a Parquet file.
+    def has_data(self) -> bool:
+        """Whether this video has completed tracking results in memory."""
+        return self._data is not None
 
-        Any collected embeddings are written to companion files beside ``path``
-        (``body_embeddings.parquet`` / ``face_embeddings.parquet``).
-        Raises :class:`ValueError` if there is no completed data to write.
-        """
+    def has_results(self, directory: str | Path) -> bool:
+        """Whether ``directory`` already holds results for a video."""
+        return (Path(directory) / self._RESULTS_FILENAME).exists()
+
+    def save(self, directory: str | Path) -> None:
+        """Write these results into ``directory``, one file per kind of result."""
         import pyarrow as pa
         import pyarrow.parquet as pq
 
         if self._data is None:
             raise ValueError("no data to write; run the pipeline first")
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
         table = pa.Table.from_pandas(self._data, preserve_index=False)
-        pq.write_table(table, str(path))
+        pq.write_table(table, str(directory / self._RESULTS_FILENAME))
         for kind, embeddings in (
             ("body", self._body_embeddings),
             ("face", self._face_embeddings),
         ):
-            embeddings_path = _embeddings_path(path, kind)
+            embeddings_path = directory / _embeddings_filename(kind)
             if embeddings is None:
                 embeddings_path.unlink(missing_ok=True)
             else:
-                _write_embeddings(embeddings_path, embeddings)
+                write_embeddings(embeddings_path, embeddings)
+        self.speech.save(directory)
 
-    def load_parquet(self, path: str | Path) -> None:
-        """Load results written by :meth:`to_parquet` into this video.
-
-        Replaces any current results with the table at ``path`` and its companion
-        embeddings files (``body_embeddings.parquet`` /
-        ``face_embeddings.parquet``), if present.
-        """
+    def load(self, directory: str | Path) -> None:
+        """Load results written by :meth:`save`, if ``directory`` holds any."""
+        directory = Path(directory)
         self.clear()
-        self.set_data(pd.read_parquet(path))
-        body_path = _embeddings_path(path, "body")
+        self.speech.load(directory)
+        results_path = directory / self._RESULTS_FILENAME
+        if not results_path.exists():
+            return
+        self.set_data(pd.read_parquet(results_path))
+        body_path = directory / _embeddings_filename("body")
         if body_path.exists():
-            self._body_embeddings = _read_embeddings(body_path)
-        face_path = _embeddings_path(path, "face")
+            self._body_embeddings = read_embeddings(body_path)
+        face_path = directory / _embeddings_filename("face")
         if face_path.exists():
-            self._face_embeddings = _read_embeddings(face_path)
+            self._face_embeddings = read_embeddings(face_path)
 
     @classmethod
-    def from_parquet(cls, path: str | Path) -> "Video":
-        """A new :class:`Video` loaded from a Parquet file (see :meth:`load_parquet`)."""
+    def from_directory(cls, directory: str | Path) -> "Video":
+        """A new :class:`Video` loaded from an output directory (see :meth:`load`)."""
         video = cls()
-        video.load_parquet(path)
+        video.load(directory)
         return video
 
 
@@ -372,10 +333,20 @@ class GlassesVideo(Video):
         id: str = "",
         path: str | Path | None = None,
         gaze_path: str | Path | None = None,
-        time_offset: float = 0.0,
+        **timeline,
     ) -> None:
-        super().__init__(id, path, time_offset)
+        super().__init__(id, path, **timeline)
         self.gaze_path = Path(gaze_path) if gaze_path is not None else None
+
+    @classmethod
+    def from_config(cls, spec, resolve) -> "GlassesVideo":
+        """As :meth:`Video.from_config`, and the gaze file recorded with it."""
+        return cls(
+            spec.id,
+            resolve(spec.path),
+            resolve(spec.gaze_path),
+            **cls.timeline_kwargs(spec),
+        )
 
     def set_gaze(self, path: str | Path) -> None:
         """Set the gaze samples recorded with this video."""

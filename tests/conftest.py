@@ -1,6 +1,18 @@
+import locale
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def c_numeric_locale():
+    """Undo the system locale a QApplication applies, as the application does.
+
+    Creating a QApplication calls ``setlocale(LC_ALL, "")`` once per session and
+    leaves it set for every later test, so without this a comma-decimal system
+    locale makes FFmpeg reject filter options written with a decimal point.
+    """
+    locale.setlocale(locale.LC_NUMERIC, "C")
 
 
 @pytest.fixture(scope="session")

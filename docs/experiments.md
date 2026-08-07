@@ -9,11 +9,21 @@ an `outputs/` directory.
 my-experiment/
 ├─ experiment.yaml
 └─ outputs/
-   └─ camera-1/
-      ├─ results.parquet
-      ├─ body_embeddings.parquet
-      └─ face_embeddings.parquet
+   ├─ camera-1/
+   │  ├─ results.parquet
+   │  ├─ body_embeddings.parquet
+   │  ├─ face_embeddings.parquet
+   │  ├─ transcript_segments.parquet
+   │  └─ transcript_words.parquet
+   ├─ p1-mic/
+   │  ├─ transcript_segments.parquet
+   │  └─ transcript_words.parquet
+   └─ speech_turns.parquet
 ```
+
+A camera records audio too, so a video input can have speech results as well as
+frame ones. They are the same files an audio input produces, because the same
+stages made them.
 
 ## Configuration Format
 
@@ -32,6 +42,10 @@ fixed_videos:
   - id: camera-1
     path: videos/camera-1.mp4
     time_offset: -1.25
+    time_scale: 1.000031
+    time_shifts:
+      - at: 512.4
+        seconds: 0.18
 audio:
   - id: p1-mic
     path: audio/p1.wav
@@ -59,7 +73,12 @@ pipeline:
       detector: yolo26m
     face_detection: null
     body_pose: null
-  audio: {}
+  speech:
+    transcription:
+      model_name: primeline/whisper-large-v3-turbo-german
+      language: de
+      beam_size: 5
+      vad_filter: true
 ```
 
 ## Inputs
@@ -67,9 +86,31 @@ pipeline:
 Inputs are grouped by type, each in its own list. Every input needs an `id` that
 is unique across *all* the lists, since it names that input's output directory;
 for the same reason it has to be usable as a filename, so it cannot be empty or
-contain a path separator. Each
-also has a `time_offset` in seconds, which is added to that input's own clock to
-place it on the experiment's shared timeline; it defaults to `0.0`.
+contain a path separator.
+
+Each input also carries where it sits on the experiment's shared timeline. All
+three fields are optional, and the defaults describe a device that started with
+the experiment and kept time:
+
+- `time_offset`: seconds added to this input's own clock to reach experiment
+  time, since every device was switched on at its own moment. Defaults to `0.0`.
+- `time_scale`: experiment seconds per second of this input's own clock. Values
+  slightly away from `1.0` compensate a clock that ran fast or slow. Defaults to
+  `1.0`.
+- `time_shifts`: content the recording lost partway through, if any. Each entry
+  has an `at`, where the loss falls on the recording's own clock, and `seconds`,
+  how much is missing there, which is added to the offset from that point on.
+  Defaults to none.
+
+The Alignment tab fills in `time_offset`; the Timing correction tab measures
+`time_shifts`, and `time_scale` too when its Fit drift box is ticked, and
+refines the offset of any input that needs them. Its Clear corrections button
+puts both back to their defaults. All three can also
+be edited by hand. Because a lost stretch was never
+recorded, the mapping is not symmetric: every moment an input holds has an
+experiment time, but a stretch of experiment time covered by a `time_shift` has
+nowhere in that recording to map to, and `Timeline.to_local_time` returns `None`
+there rather than the nearest frame it does have.
 
 This file is the on-disk form. At runtime each input is a `GlassesVideo`,
 `FixedVideo` or `Audio` that owns these settings alongside its results, reached
@@ -93,14 +134,24 @@ what a new one starts as before any files have been added to it.
 
 ## Pipeline
 
-Each type of input has its own block under `pipeline`, so e.g. a room camera can
-be tracked with a different detector than the glasses cameras, or skip a stage
-they run. Omit a block to use its defaults.
+Each type of *video* input has its own block under `pipeline`, so e.g. a room
+camera can be tracked with a different detector than the glasses cameras, or skip
+a stage they run. Omit a block to use its defaults.
 
 For the video blocks — `glasses_video` and `fixed_video` — `object_tracking` is
 required, while `face_detection` and `body_pose` are optional; omit either key or
-set it to `null` to skip that stage. The `audio` block has no stages yet, so
-audio inputs are currently only loaded and placed on the timeline.
+set it to `null` to skip that stage.
+
+The `speech` block is not per input type. It runs over every input that carries
+audio — the audio inputs, and any video whose camera recorded a sound track —
+since the stages and their settings do not depend on where the audio came from.
+Set `speech: null` to skip speech entirely. A video with no audio track is
+skipped quietly rather than failing: there is simply no speech in it to find.
+
+Transcription is the only stage in the block. It says what was said, not who
+said it: every microphone in the room hears everybody, so one recording on its
+own cannot tell the voices apart. Speakers are worked out afterwards, by
+comparing the experiment's recordings with each other.
 
 ## Object Tracking
 
@@ -130,3 +181,25 @@ person box:
 
 - `model_name`: YOLO pose weights.
 - `conf`: minimum pose confidence.
+
+## Transcription
+
+Transcription runs [faster-whisper][fw] over the whole recording, keeping the
+segments it produces and the timing of every word within them. Whisper is run
+over the whole recording rather than in pieces: it transcribes far better with
+surrounding context, and cutting the audio up would clip words in half.
+
+- `model_name`: Whisper model. The default
+  `primeline/whisper-large-v3-turbo-german` is accuracy-tuned for German;
+  `primeline/whisper-large-v3-german` is its full-size alternative, and
+  `large-v3` is the accuracy-first multilingual model. Standard Transformers
+  checkpoints are converted to FP16 CTranslate2 weights on first use and then
+  loaded from the shared model cache. The `tiny`/`base` models trade
+  substantial accuracy for speed and are mainly useful for tests or previews.
+- `language`: ISO 639-1 code, defaulting to `de` for the German model. Change it
+  for another language, or leave it unset to detect from the first 30 seconds.
+- `beam_size`: decoding beam width.
+- `vad_filter`: skip silent stretches. This speeds up the pass and suppresses
+  the text Whisper otherwise invents to fill silence.
+
+[fw]: https://github.com/SYSTRAN/faster-whisper
