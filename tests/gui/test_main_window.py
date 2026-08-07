@@ -10,11 +10,16 @@ from body_eye_sync.experiment.config import (
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import Video
 from body_eye_sync.gui import MainWindow
-from body_eye_sync.gui.tabs import TAB_TYPES, InputFilesTab, VideoProcessingTab
+from body_eye_sync.gui.tabs import (
+    TAB_TYPES,
+    InputFilesTab,
+    VideoProcessingTab,
+)
 
 TAB_TITLES = [
     "Input files",
     "Alignment",
+    "Timing correction",
     "Video processing",
     "Audio processing",
     "Post processing",
@@ -81,7 +86,9 @@ def test_window_has_icon(window):
 
 
 def test_the_tabs_cover_the_whole_window(window):
-    assert window.centralWidget() is window.tabs
+    assert window.centralWidget() is window.central
+    assert window.central.layout().itemAt(0).widget() is window.tabs
+    assert window.central.layout().itemAt(1).widget() is window.progress_bar
     assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == TAB_TITLES
 
 
@@ -98,7 +105,7 @@ def test_a_new_window_starts_with_an_empty_unsaved_experiment(window):
 
 
 def test_adding_an_input_reaches_the_other_tabs(window, data_dir):
-    window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
+    window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
 
     video_tab = window.tab(VideoProcessingTab)
     assert video_tab.video() is window.experiment.glasses_videos[0]
@@ -124,7 +131,7 @@ def test_open_experiment_without_video_inputs_is_fine(window, tmp_path, data_dir
     # Audio-only experiments have nothing for the video tab to show, which is
     # not an error: the other tabs still have their inputs.
     experiment = Experiment(ExperimentConfig(), tmp_path)
-    InputFilesTab(experiment).add_audio([tmp_path / "mic1.wav"])
+    InputFilesTab(experiment).audio_section.add_files([tmp_path / "mic1.wav"])
     experiment.save()
 
     window._load_experiment(tmp_path)
@@ -162,7 +169,7 @@ def _prompt_answer(monkeypatch, button):
 
 
 def test_new_experiment_starts_over(window, data_dir, monkeypatch):
-    window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
+    window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
     asked = _prompt_answer(monkeypatch, QMessageBox.StandardButton.Discard)
 
     window._new_experiment()
@@ -176,7 +183,7 @@ def test_new_experiment_starts_over(window, data_dir, monkeypatch):
 
 
 def test_save_writes_the_experiment_and_its_results(window, data_dir, tmp_path):
-    window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
+    window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
     window.experiment.glasses_videos[0].set_data(
         pd.DataFrame({"frame": [0], "track_id": [1], "conf": [0.9]})
     )
@@ -189,8 +196,8 @@ def test_save_writes_the_experiment_and_its_results(window, data_dir, tmp_path):
     assert [type(s) for s in reloaded.pipeline.glasses_video.steps] == [
         ObjectTrackingStep
     ]
-    output = reloaded.output_path(reloaded.glasses_videos[0])
-    assert Video.from_parquet(output).data["track_id"].tolist() == [1]
+    output = reloaded.output_dir_for(reloaded.glasses_videos[0])
+    assert Video.from_directory(output).data["track_id"].tolist() == [1]
 
 
 def _answer_save_dialogs(monkeypatch, location, name=("", True)):
@@ -210,7 +217,7 @@ def test_a_first_save_creates_the_folder_it_is_named(
 ):
     # A folder chooser can only pick a folder that exists, so the name of the
     # one to make is asked for separately -- and made by the save itself.
-    window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
+    window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
     _answer_save_dialogs(monkeypatch, tmp_path, name=("my-study", True))
 
     window._save_experiment()
@@ -222,7 +229,7 @@ def test_a_first_save_creates_the_folder_it_is_named(
 def test_a_first_save_without_a_name_uses_the_chosen_folder(
     window, data_dir, tmp_path, monkeypatch
 ):
-    window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
+    window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
     _answer_save_dialogs(monkeypatch, tmp_path, name=("  ", True))
 
     window._save_experiment()
@@ -266,7 +273,7 @@ def test_a_save_that_fails_is_reported_rather_than_raised(
 
 
 def test_save_then_open_round_trips_through_the_window(window, data_dir, tmp_path):
-    window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
+    window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
     window.tab(VideoProcessingTab).pipeline_editor._sections[1].setChecked(True)
     window.experiment.folder = tmp_path
     window._save_experiment()
@@ -342,10 +349,25 @@ def test_a_busy_tab_locks_the_other_tabs(window):
     assert all(window.tabs.isTabEnabled(i) for i in range(window.tabs.count()))
 
 
+def test_the_active_tab_reports_progress_in_the_global_bar(window):
+    running = window.tab(VideoProcessingTab)
+
+    running.busy_changed.emit(True)
+    running.progress_changed.emit(25, 100, "Processing video…")
+
+    assert window.progress_bar.isVisibleTo(window)
+    assert window.progress_bar.maximum() == 100
+    assert window.progress_bar.value() == 25
+    assert window.progress_bar.format() == "Processing video… — %p%"
+
+    running.busy_changed.emit(False)
+    assert not window.progress_bar.isVisibleTo(window)
+
+
 def test_closing_with_unsaved_changes_can_save_them_first(
     window, data_dir, tmp_path, monkeypatch
 ):
-    window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
+    window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
     window.experiment.folder = tmp_path
     asked = _prompt_answer(monkeypatch, QMessageBox.StandardButton.Save)
 
@@ -356,7 +378,7 @@ def test_closing_with_unsaved_changes_can_save_them_first(
 
 
 def test_closing_can_discard_unsaved_changes(window, data_dir, tmp_path, monkeypatch):
-    window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
+    window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
     window.experiment.folder = tmp_path
     _prompt_answer(monkeypatch, QMessageBox.StandardButton.Discard)
 
@@ -366,7 +388,7 @@ def test_closing_can_discard_unsaved_changes(window, data_dir, tmp_path, monkeyp
 
 
 def test_backing_out_of_the_prompt_keeps_the_window_open(window, data_dir, monkeypatch):
-    window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
+    window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
     _prompt_answer(monkeypatch, QMessageBox.StandardButton.Cancel)
 
     assert not window.close()
@@ -377,7 +399,7 @@ def test_backing_out_of_the_prompt_keeps_the_window_open(window, data_dir, monke
 def test_closing_a_saved_experiment_asks_nothing(
     window, data_dir, tmp_path, monkeypatch
 ):
-    window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
+    window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
     window.experiment.folder = tmp_path
     window._save_experiment()
     asked = _prompt_answer(monkeypatch, QMessageBox.StandardButton.Cancel)
@@ -390,7 +412,7 @@ def test_closing_a_saved_experiment_asks_nothing(
 def test_a_run_and_a_pipeline_edit_count_as_unsaved_changes(window, data_dir):
     # Not just the inputs: the pipeline settings and computed results are the
     # experiment too, and are lost just as easily.
-    window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
+    window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
     window._dirty = False
 
     window.tab(VideoProcessingTab).pipeline_editor.changed.emit()
