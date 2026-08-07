@@ -12,7 +12,9 @@ from typing import ClassVar
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.experiment import Experiment
+from body_eye_sync.experiment.video import Video
 
 
 class BaseTab(QWidget):
@@ -24,6 +26,8 @@ class BaseTab(QWidget):
     status_message = Signal(str)
     experiment_changed = Signal()
     busy_changed = Signal(bool)
+    # current value, maximum value (zero means indeterminate), operation label:
+    progress_changed = Signal(int, int, str)
 
     def __init__(self, experiment: Experiment) -> None:
         super().__init__()
@@ -32,6 +36,12 @@ class BaseTab(QWidget):
     def set_experiment(self, experiment: Experiment) -> None:
         self.experiment = experiment
         self.refresh()
+
+    def _inputs(self) -> dict[str, Video | Audio]:
+        """The experiment's inputs that have a recording, keyed by id."""
+        return {
+            data.id: data for data in self.experiment.inputs if data.path is not None
+        }
 
     def refresh(self) -> None:
         """Re-read the experiment, which may have been changed elsewhere."""

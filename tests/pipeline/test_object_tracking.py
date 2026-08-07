@@ -100,7 +100,7 @@ def test_detect_tracklets_populates_body_embeddings(data_dir):
         video.add_object_tracking_frame(frame)
     video.finish_object_tracking()
 
-    emb = video.body_embeddings
+    emb = video._body_embeddings
     assert emb is not None, "BoxMOT did not expose ReID embeddings"
     assert emb.groupby("track_id").size().max() <= 2  # best-K bound honoured
     assert emb["embedding"].iloc[0].dtype == np.float16

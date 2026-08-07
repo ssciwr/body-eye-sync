@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 # An experiment lives in a folder: this config file plus an outputs/ subfolder.
 CONFIG_FILENAME = "experiment.yaml"
 OUTPUTS_DIRNAME = "outputs"
-RESULTS_FILENAME = "results.parquet"
 
 
 class Experiment:
@@ -42,25 +41,16 @@ class Experiment:
         self.folder = Path(folder) if folder is not None else None
         self.pipeline: Pipeline = config.pipeline
         self.glasses_videos = [
-            GlassesVideo(
-                spec.id,
-                self._resolve(spec.path),
-                self._resolve(spec.gaze_path),
-                spec.time_offset,
-            )
+            GlassesVideo.from_config(spec, self._resolve)
             for spec in config.glasses_videos
         ]
         self.fixed_videos = [
-            FixedVideo(spec.id, self._resolve(spec.path), spec.time_offset)
-            for spec in config.fixed_videos
+            FixedVideo.from_config(spec, self._resolve) for spec in config.fixed_videos
         ]
         glasses_by_id = {video.id: video for video in self.glasses_videos}
         self.audio = [
-            Audio(
-                spec.id,
-                self._resolve(spec.path),
-                spec.time_offset,
-                glasses_by_id.get(spec.glasses_video),
+            Audio.from_config(
+                spec, self._resolve, glasses_by_id.get(spec.glasses_video)
             )
             for spec in config.audio
         ]
@@ -75,12 +65,7 @@ class Experiment:
     def add_glasses_video(self, spec: GlassesVideoInput) -> GlassesVideo:
         """Add a glasses video input, returning its :class:`GlassesVideo`."""
         self._check_id(spec.id)
-        video = GlassesVideo(
-            spec.id,
-            self._resolve(spec.path),
-            self._resolve(spec.gaze_path),
-            spec.time_offset,
-        )
+        video = GlassesVideo.from_config(spec, self._resolve)
         self._discard_results(video.id)
         self.glasses_videos.append(video)
         return video
@@ -88,7 +73,7 @@ class Experiment:
     def add_fixed_video(self, spec: FixedVideoInput) -> FixedVideo:
         """Add a fixed video input, returning its :class:`FixedVideo`."""
         self._check_id(spec.id)
-        video = FixedVideo(spec.id, self._resolve(spec.path), spec.time_offset)
+        video = FixedVideo.from_config(spec, self._resolve)
         self._discard_results(video.id)
         self.fixed_videos.append(video)
         return video
@@ -107,9 +92,7 @@ class Experiment:
             )
             if glasses_video is None:
                 raise ValueError(f"unknown glasses video id: {spec.glasses_video!r}")
-        audio = Audio(
-            spec.id, self._resolve(spec.path), spec.time_offset, glasses_video
-        )
+        audio = Audio.from_config(spec, self._resolve, glasses_video)
         self._discard_results(audio.id)
         self.audio.append(audio)
         return audio
@@ -178,22 +161,23 @@ class Experiment:
         """The application-owned output directory for one input."""
         return self.output_dir / input_id
 
-    def output_path(self, data: Video | Audio) -> Path:
-        """Main Parquet output path inside an input's output directory."""
-        return self._input_output_dir(data.id) / RESULTS_FILENAME
+    def output_dir_for(self, data: Video | Audio) -> Path:
+        """The output directory an input owns, inside :attr:`output_dir`."""
+        return self._input_output_dir(data.id)
 
     def _load_results(self, data: Video | Audio) -> None:
-        """Fill an input from its output file, if the experiment has one, skip if invalid."""
-        if self.folder is None or not self.output_path(data).exists():
+        """Fill an input from its stored results, skipping any it cannot read."""
+        if self.folder is None:
             return
+        directory = self.output_dir_for(data)
         try:
-            data.load_parquet(self.output_path(data))
+            data.load(directory)
         except (OSError, ValueError) as exc:
             data.clear()
             logger.warning(
                 "ignoring unreadable results for input %r in %s: %s",
                 data.id,
-                self.output_path(data),
+                directory,
                 exc,
             )
 
@@ -213,13 +197,15 @@ class Experiment:
                     id=v.id,
                     path=self._store(v.video_path),
                     gaze_path=self._store(v.gaze_path),
-                    time_offset=v.time_offset,
+                    **v.timeline_config(),
                 )
                 for v in self.glasses_videos
             ],
             fixed_videos=[
                 FixedVideoInput(
-                    id=v.id, path=self._store(v.video_path), time_offset=v.time_offset
+                    id=v.id,
+                    path=self._store(v.video_path),
+                    **v.timeline_config(),
                 )
                 for v in self.fixed_videos
             ],
@@ -227,7 +213,7 @@ class Experiment:
                 AudioInput(
                     id=a.id,
                     path=self._store(a.audio_path),
-                    time_offset=a.time_offset,
+                    **a.timeline_config(),
                     glasses_video=(
                         a.glasses_video.id if a.glasses_video is not None else None
                     ),
@@ -265,7 +251,5 @@ class Experiment:
         with (folder / CONFIG_FILENAME).open("w", encoding="utf-8") as f:
             yaml.safe_dump(self.config().model_dump(mode="json"), f, sort_keys=False)
         for data in self.inputs:
-            if data.data is not None:
-                destination = self.output_path(data)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                data.to_parquet(destination)
+            if data.has_data():
+                data.save(self.output_dir_for(data))

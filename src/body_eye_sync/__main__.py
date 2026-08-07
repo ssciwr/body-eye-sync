@@ -1,3 +1,4 @@
+import locale
 import os
 import sys
 
@@ -38,6 +39,17 @@ def _media_foundation_missing() -> bool:
     return False
 
 
+def _use_c_numeric_locale() -> None:
+    """Keep C number formatting after Qt has applied the system locale.
+
+    Constructing a ``QApplication`` calls ``setlocale(LC_ALL, "")``. Where the
+    system locale writes decimals with a comma, FFmpeg then rejects the filter
+    options we build with a decimal point, such as ``atempo=0.8``. Qt formats
+    numbers through ``QLocale``, so restoring this one category costs nothing.
+    """
+    locale.setlocale(locale.LC_NUMERIC, "C")
+
+
 @click.command()
 @click.argument("experiment", required=False)
 @click.version_option(package_name="body-eye-sync", prog_name="body-eye-sync")
@@ -45,6 +57,7 @@ def main(experiment):
     from qtpy.QtWidgets import QApplication, QMessageBox
 
     app = QApplication(sys.argv)
+    _use_c_numeric_locale()
 
     if _media_foundation_missing():
         QMessageBox.critical(
