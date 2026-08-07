@@ -329,14 +329,17 @@ class VideoViewer(QWidget):
         self._preroll_seconds = seconds
         self._current = min(-1, int(seconds * self._fps))
         self._media_player.pause()
-        pixmap = QPixmap(640, 360)
+        pixmap = QPixmap(self._pixmap_item.pixmap().size())
         pixmap.fill(Qt.GlobalColor.black)
         self._clear_overlays()
         self._pixmap_item.setPixmap(pixmap)
-        self._scene.setSceneRect(0, 0, 640, 360)
+        self._scene.setSceneRect(0, 0, pixmap.width(), pixmap.height())
         text = QGraphicsSimpleTextItem(f"{self.current_time_seconds:.3f} s")
         text.setBrush(QBrush(Qt.GlobalColor.white))
-        text.setPos(280, 170)
+        text.setPos(
+            (pixmap.width() - text.boundingRect().width()) / 2,
+            (pixmap.height() - text.boundingRect().height()) / 2,
+        )
         self._scene.addItem(text)
         self._overlay_items.append(text)
         self._time_label.setText(f"{self.current_time_seconds:.3f} s")
