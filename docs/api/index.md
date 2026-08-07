@@ -10,6 +10,8 @@ the application:
 - Preprocessing functions that put the recordings on a shared timeline.
 - Pipeline functions for object tracking, face detection, and body-pose
   detection.
+- Postprocessing functions that compare the recordings with each other, such as
+  working out who spoke when.
 - Exporters for synchronized media and external analysis formats.
 - GUI widgets and entry points.
 

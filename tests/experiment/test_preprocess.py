@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from body_eye_sync.experiment import prepare as prepare_module
+from body_eye_sync.experiment import preprocess as preprocess_module
 from body_eye_sync.experiment.config import (
     AudioInput,
     ExperimentConfig,
@@ -10,7 +10,7 @@ from body_eye_sync.experiment.config import (
 )
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.timeline import Shift, Timeline
-from body_eye_sync.experiment.prepare import (
+from body_eye_sync.experiment.preprocess import (
     align_experiment,
     apply_timing_corrections,
     clear_timing_corrections,
@@ -53,7 +53,7 @@ def test_recordings_keys_inputs_by_id(tmp_path):
 def test_align_experiment_writes_the_offsets_onto_the_inputs(tmp_path, monkeypatch):
     experiment = _experiment(tmp_path)
     monkeypatch.setattr(
-        prepare_module,
+        preprocess_module,
         "align_media",
         lambda paths, **kwargs: Alignment(offsets={"cam1": 0.0, "mic1": 1.5}),
     )
@@ -67,7 +67,7 @@ def test_align_experiment_writes_the_offsets_onto_the_inputs(tmp_path, monkeypat
 def test_align_experiment_needs_two_recordings(tmp_path, monkeypatch):
     experiment = _experiment(tmp_path, ids=("cam1",))
     monkeypatch.setattr(
-        prepare_module,
+        preprocess_module,
         "align_media",
         lambda paths, **kwargs: pytest.fail("should not measure a lone recording"),
     )

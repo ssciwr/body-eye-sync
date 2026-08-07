@@ -30,16 +30,16 @@ class FaceDetectionWorker(BaseWorker):
         # embeddings_per_track drives the post-pass reduction in Video, not the
         # detector call, so it is not forwarded to detect_faces.
         return detect_faces(
-            self._video.video_path,
-            self._video.all_boxes_by_frame(),
+            self._target.video_path,
+            self._target.all_boxes_by_frame(),
             **self._step.model_dump(exclude={"embeddings_per_track"}),
         )
 
     def _accumulate(self, result) -> None:
-        self._video.add_face_detection_frame(result)
+        self._target.add_face_detection_frame(result)
 
     def _finalise(self) -> None:
-        self._video.finish_face_detection()
+        self._target.finish_face_detection()
 
     def _discard(self) -> None:
-        self._video.discard_face_detection()
+        self._target.discard_face_detection()

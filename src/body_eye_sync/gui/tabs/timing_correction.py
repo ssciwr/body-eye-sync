@@ -26,7 +26,7 @@ from qtpy.QtWidgets import (
 
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.timeline import Shift, Timeline
-from body_eye_sync.experiment.prepare import (
+from body_eye_sync.experiment.preprocess import (
     apply_timing_corrections,
     clear_timing_corrections,
     has_timing_corrections,
@@ -46,6 +46,8 @@ from body_eye_sync.preprocessing.timing_correction import (
 
 _ID, _OFFSET, _GAPS = range(3)
 _COLUMNS = ["Id", "Offset", "Gaps"]
+
+_LABEL = "Analysing timing…"
 
 
 def _offset_text(offset: float) -> str:
@@ -272,12 +274,6 @@ class TimingCorrectionTab(BaseTab):
     def is_busy(self) -> bool:
         return self._thread is not None
 
-    def shutdown(self) -> None:
-        if self._worker is not None:
-            self._worker.cancel()
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-
     def _clear_corrections(self) -> None:
         if self._thread is not None or not clear_timing_corrections(self.experiment):
             return
@@ -300,16 +296,18 @@ class TimingCorrectionTab(BaseTab):
         self._analysis_signature = None
         self._show_plot(False)
         self._set_running(True)
-        self.progress_changed.emit(0, 100, "Analysing timing…")
+        self.progress_changed.emit(0, 100, _LABEL)
         self._worker = _Worker(paths, offsets, self._settings())
-        self._worker.progress.connect(
-            lambda value: self.progress_changed.emit(value, 100, "Analysing timing…")
-        )
+        self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_correction_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.cancelled.connect(self._on_cancelled)
         self._thread = threading.Thread(target=self._worker.run, daemon=True)
         self._thread.start()
+
+    @Slot(int)
+    def _on_progress(self, percent: int) -> None:
+        self.progress_changed.emit(percent, 100, _LABEL)
 
     @Slot(object)
     def _on_correction_finished(self, analysis: TimingCorrectionAnalysis) -> None:

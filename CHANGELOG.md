@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- add speech transcription, attribution, ELAN export, and GUI audio processing / speech post-processing tabs [#44](https://github.com/ssciwr/body-eye-sync/pull/44)
 - add synchronised video export functionality and GUI export tab [#43](https://github.com/ssciwr/body-eye-sync/pull/43)
 - add automatic recording alignment and Timing correction tab to detect and fix clock drift and gaps [#38](https://github.com/ssciwr/body-eye-sync/pull/38)
 - add Alignment tab to align recordings [#41](https://github.com/ssciwr/body-eye-sync/pull/41)

@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
             )
             self.tabs.addTab(tab, tab_type.title)
             self.tab_widgets.append(tab)
+        self.tabs.currentChanged.connect(self._on_current_tab_changed)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(True)
@@ -161,12 +162,14 @@ class MainWindow(QMainWindow):
             tab.set_experiment(experiment)
         self._update_title()
 
-    def _on_experiment_changed(self, source: BaseTab) -> None:
-        """One tab changed the experiment: the others re-read it, and it is dirty."""
+    def _on_experiment_changed(self, _source: BaseTab) -> None:
+        """Mark experiment as having unsaved changes."""
         self._dirty = True
-        for tab in self.tab_widgets:
-            if tab is not source:
-                tab.refresh()
+
+    def _on_current_tab_changed(self, index: int) -> None:
+        """Refresh a tab when it is opened."""
+        if 0 <= index < len(self.tab_widgets):
+            self.tab_widgets[index].refresh()
 
     def _on_tab_finished(self, source: BaseTab) -> None:
         if self._dirty and not self._save_experiment():

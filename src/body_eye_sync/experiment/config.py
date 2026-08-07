@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar, Union
+from typing import Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -12,11 +12,14 @@ CURRENT_VERSION = 1
 
 
 def validate_input_id(input_id: str) -> str:
-    """Return an input id, having checked it can be used as a filename."""
+    """Return an input id, having checked it is safe for generated names."""
     if not input_id:
         raise ValueError("input id cannot be empty")
-    if any(char in input_id for char in ("/", "\\")) or input_id in (".", ".."):
-        raise ValueError(f"input id cannot be used as a filename: {input_id!r}")
+    if any(char in input_id for char in ("/", "\\", "[", "]")) or input_id in (
+        ".",
+        "..",
+    ):
+        raise ValueError(f"input id cannot contain reserved characters: {input_id!r}")
     return input_id
 
 
@@ -220,29 +223,142 @@ class BodyPoseStep(_Model):
     )
 
 
+class TranscriptionStep(_Model):
+    """Speech transcription. Fields mirror ``transcribe``."""
+
+    model_name: str = Field(
+        "primeline/whisper-large-v3-turbo-german",
+        description=(
+            "Whisper model. The primeLine models are accuracy-tuned for German; "
+            "CrisperWhisper models produce verbatim transcripts; large-v3 is "
+            "the strongest general multilingual choice."
+        ),
+        json_schema_extra={
+            "choices": [
+                "primeline/whisper-large-v3-turbo-german",
+                "primeline/whisper-large-v3-german",
+                "nyralabs/CrisperWhisper2.0_large",
+                "nyralabs/CrisperWhisper2.0_medium",
+                "large-v3",
+                "large-v3-turbo",
+                "distil-large-v3",
+                "tiny",
+                "base",
+                "small",
+                "medium",
+            ]
+        },
+    )
+    language: str | None = Field(
+        "de",
+        description=(
+            "ISO 639-1 language code of the recording, e.g. 'de'. German is the "
+            "accuracy-first default; leave unset to detect the language from the "
+            "first 30 seconds."
+        ),
+    )
+    beam_size: int = Field(5, ge=1, description="Decoding beam width.")
+    device: str = Field(
+        "auto",
+        description=(
+            "Where to run Whisper. 'auto' uses a GPU when one can actually be "
+            "loaded, and the CPU otherwise."
+        ),
+        json_schema_extra={"choices": ["auto", "cpu", "cuda"]},
+    )
+    vad_filter: bool = Field(
+        True,
+        description=(
+            "Skip silent stretches, which speeds up the pass and suppresses text "
+            "invented over silence."
+        ),
+    )
+
+
+class SpeechPostProcessingSettings(_Model):
+    """How transcripts are combined to form experiment-wide speaker turns."""
+
+    split_gap_seconds: float = Field(
+        0.75,
+        ge=0,
+        description=(
+            "Split a segment when consecutive words are separated by at "
+            "least this many seconds. Sentence-ending punctuation also splits."
+        ),
+    )
+    split_on_sentence_end: bool = Field(
+        True,
+        description="Split after words ending in sentence punctuation (. ! ? …).",
+    )
+    split_on_comma: bool = Field(
+        True,
+        description=(
+            "Split at commas when both adjacent clauses meet the minimum word "
+            "count and duration below."
+        ),
+    )
+    minimum_clause_words: int = Field(
+        4,
+        ge=1,
+        description=("Minimum number of words required on each side of a comma split."),
+    )
+    minimum_clause_seconds: float = Field(
+        0.5,
+        ge=0,
+        description=(
+            "Minimum duration required on each side of a comma split, in seconds."
+        ),
+    )
+    floor_percentile: float = Field(
+        10.0,
+        ge=0,
+        le=100,
+        description=(
+            "Use this percentile of each recording's levels as its quiet floor."
+        ),
+    )
+    live_above_floor_db: float = Field(
+        10.0,
+        ge=0,
+        description=(
+            "A recording counts as carrying speech when its level is this "
+            "many dB above its own quiet floor."
+        ),
+    )
+    ownership_share: float = Field(
+        0.5,
+        ge=0,
+        le=1,
+        description=(
+            "Keep a piece when this recording is the loudest for more than this "
+            "fraction of its active frames, or live for more than this fraction of all frames."
+        ),
+    )
+    fuzzy_agreement: float = Field(
+        0.6,
+        ge=0,
+        le=1,
+        description=(
+            "Treat overlapping text as the same voice when its "
+            "normalized character similarity exceeds this fraction."
+        ),
+    )
+
+
 # A pipeline stage for type hints
-StepSpec = Union[ObjectTrackingStep, FaceDetectionStep, BodyPoseStep]
+StepSpec = Union[
+    ObjectTrackingStep,
+    FaceDetectionStep,
+    BodyPoseStep,
+    TranscriptionStep,
+]
 
 
-class _StepPipeline(_Model):
-    """A set of pipeline steps held as fields, in the order they run.
-
-    :attr:`STEP_FIELDS` names them, so a subclass declares its stages once and
-    gets :attr:`steps` from that. An optional stage that is switched off is
-    ``None`` and simply does not run.
-    """
-
-    #: The pipeline step fields, in run order.
-    STEP_FIELDS: ClassVar[tuple[str, ...]] = ()
-
-    @property
-    def steps(self) -> list[StepSpec]:
-        """The pipeline stages that will run, in order."""
-        present = (getattr(self, name) for name in self.STEP_FIELDS)
-        return [step for step in present if step is not None]
+class StepPipeline(_Model):
+    """Base class for pipeline configurations edited by the shared GUI."""
 
 
-class VideoPipeline(_StepPipeline):
+class VideoPipeline(StepPipeline):
     """The stages run over a video input.
 
     Both video types use this same set of stages, but as independent blocks, so
@@ -250,25 +366,19 @@ class VideoPipeline(_StepPipeline):
     cameras.
     """
 
-    STEP_FIELDS: ClassVar[tuple[str, ...]] = (
-        "object_tracking",
-        "face_detection",
-        "body_pose",
-    )
-
     object_tracking: ObjectTrackingStep = Field(default_factory=ObjectTrackingStep)
     face_detection: FaceDetectionStep | None = None
     body_pose: BodyPoseStep | None = None
 
 
-class AudioPipeline(_StepPipeline):
-    """The stages run over an audio input.
+class SpeechPipeline(StepPipeline):
+    """The stages run over all inputs that contain audio.
 
-    There are none yet: audio is currently only loaded and placed on the
-    timeline. Diarization and transcription stages belong here.
+    Transcription is the only one: it says what was said, and who said it is
+    settled afterwards, by comparing the experiment's recordings with each other.
     """
 
-    STEP_FIELDS: ClassVar[tuple[str, ...]] = ()
+    transcription: TranscriptionStep = Field(default_factory=TranscriptionStep)
 
 
 class Pipeline(_Model):
@@ -276,7 +386,10 @@ class Pipeline(_Model):
 
     glasses_video: VideoPipeline = Field(default_factory=VideoPipeline)
     fixed_video: VideoPipeline = Field(default_factory=VideoPipeline)
-    audio: AudioPipeline = Field(default_factory=AudioPipeline)
+    speech: SpeechPipeline | None = Field(default_factory=SpeechPipeline)
+    speech_post_processing: SpeechPostProcessingSettings = Field(
+        default_factory=SpeechPostProcessingSettings
+    )
 
 
 class ExperimentConfig(_Model):

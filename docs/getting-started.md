@@ -2,8 +2,8 @@
 
 The window is a set of tabs, one per stage of working with an experiment:
 **Input files**, **Alignment**, **Timing correction**, **Video processing**,
-**Audio processing**, **Post processing** and **Data export**. Audio processing
-and post processing are not implemented yet.
+**Audio processing**, **Speech post processing**, **Post processing** and
+**Data export**. Post processing does nothing so far.
 
 The title bar names the folder the open experiment is saved to, or says
 `[unsaved experiment]` until it has one.
@@ -37,7 +37,7 @@ for the whole recording, and detects and corrects:
 
 - **Gaps** -- stretches where a device stalled and didn't write leading to missing content
 
-## Configure the Pipeline
+## Configure the Video Pipeline
 
 The **Video processing** tab shows one video input at a time, chosen with the
 selector above the viewer, with the pipeline editor beside it. Each video type
@@ -68,12 +68,43 @@ individual step:
 The viewer shows live overlays while a step runs. Use **Cancel** to stop a
 running step; partial results from the cancelled step are discarded.
 
+## Transcribe the Speech
+
+The **Audio processing** tab transcribes the speech in every input that carries audio.
+
+- `model_name` picks the Whisper model. The default
+  `primeline/whisper-large-v3-turbo-german` is fine-tuned for highly accurate
+  German transcription. `primeline/whisper-large-v3-german` is the full-size
+  German alternative, while `large-v3` is the strongest general multilingual
+  choice.
+- `language` takes an ISO 639-1 code and defaults to `de`, matching the German
+  model. Change it when selecting a multilingual model for another language, or
+  leave it empty to detect the language from the first 30 seconds.
+- `device` defaults to `auto`, which uses a GPU when the machine has one, and can
+  be set to `cpu` or `cuda` to choose.
+- `vad_filter` skips silent stretches.
+
+## Work Out Who Said What
+
+The **Speech post processing** tab turns those transcripts into one table of
+speech turns for the whole experiment, with a speaker against each.
+It uses the loudness of each glasses recording to decide who was speaking at any
+given moment, since the glasses microphone hears its own wearer far louder than anyone else in the room.
+If multiple recordings contain the same speech segment, only the loudest one is taken to be the speaker.
+However if the recordings contain different speech segments, they are all kept and attributed to the loudest
+speaker for each segment.
+
 ## Export a Combined Video
 
 You can export a single video that shows every aligned video input in a grid,
 with an audio track for each input, and optionally an additional merge audio track
 that combines the audio from all inputs. And missing recording intervals become black
 video and silence.
+
+If the experiment has speech turns, they are written beside the video as it is
+exported, in a `.eaf` ELAN file named after it. Each speaker has a tier of readable
+speech turns and a dependent `<speaker>-words` tier carrying precise
+word timings.
 
 ## Save the Experiment
 
@@ -83,6 +114,8 @@ the folder you chose. Later saves go straight there. Body Eye Sync writes:
 
 - `experiment.yaml` with the experiment definition.
 - `outputs/<input-id>/results.parquet` for completed model outputs.
+- `outputs/speech_turns.parquet` for the experiment's speech turns, which belong
+  to no single input.
 - Optional companion embedding files when embeddings were collected.
 
 Saved experiments can be reopened in the GUI or processed through the CLI.

@@ -1,8 +1,8 @@
 @echo off
 REM Install the dependencies exported from uv.lock, selecting the CUDA 12.6
-REM Torch wheels. uv verifies every hash available in the exported requirements;
-REM the PyTorch index currently omits hashes for some Torchvision wheels. This is
-REM the multi-GB download, and constructor shows little progress until it finishes.
+REM Torch wheels. Versions are pinned by the committed lockfile, but hashes are
+REM omitted because the PyTorch index does not publish them for every wheel. This
+REM is the multi-GB download, and constructor shows little progress until it finishes.
 REM uv comes from the conda-forge `uv` package listed in construct.yaml specs,
 REM which installs it at this fixed location inside the prefix.
 set "UV_EXE=%PREFIX%\Library\bin\uv.exe"

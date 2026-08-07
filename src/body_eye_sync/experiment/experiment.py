@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 from pathlib import Path
 
 import yaml
@@ -18,6 +17,7 @@ from body_eye_sync.experiment.config import (
     Pipeline,
     validate_input_id,
 )
+from body_eye_sync.experiment.speech_turns import SpeechTurns
 from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo, Video
 
@@ -68,8 +68,13 @@ class Experiment:
             )
             for spec in config.audio
         ]
+        self.speech_turns = SpeechTurns()
+
+    def _load_stored_data(self) -> None:
+        """Load any existing outputs owned by this experiment from its folder."""
         for data in self.inputs:
             self._load_results(data)
+        self._load_speech_turns()
 
     @property
     def inputs(self) -> list[Video | Audio]:
@@ -85,7 +90,6 @@ class Experiment:
             gaze_path=self._resolve(spec.gaze_path),
             timeline=Timeline.from_config(spec.timeline),
         )
-        self._discard_results(video.id)
         self.glasses_videos.append(video)
         return video
 
@@ -97,7 +101,6 @@ class Experiment:
             path=self._resolve(spec.path),
             timeline=Timeline.from_config(spec.timeline),
         )
-        self._discard_results(video.id)
         self.fixed_videos.append(video)
         return video
 
@@ -121,7 +124,6 @@ class Experiment:
             glasses_video=glasses_video,
             timeline=Timeline.from_config(spec.timeline),
         )
-        self._discard_results(audio.id)
         self.audio.append(audio)
         return audio
 
@@ -148,20 +150,25 @@ class Experiment:
         if new_id == data.id:
             return
         self._check_id(new_id)
+        old_id = data.id
+        old_output_dir = None
         if self.folder is not None:
-            old_output_dir = self._input_output_dir(data.id)
-            new_output_dir = self._input_output_dir(new_id)
-            if new_output_dir.exists():
-                raise ValueError(f"outputs already exist for input id: {new_id!r}")
-            if old_output_dir.exists():
-                old_output_dir.rename(new_output_dir)
+            old_output_dir = self.output_dir_for(data)
         data.id = new_id
+        if old_output_dir is not None and old_output_dir.exists():
+            try:
+                old_output_dir.rename(self.output_dir_for(data))
+            except OSError:
+                data.id = old_id
+                raise
 
     def _check_id(self, input_id: str) -> None:
         """Check an id can name an output directory, and nothing else uses it."""
         validate_input_id(input_id)
         if any(data.id == input_id for data in self.inputs):
             raise ValueError(f"duplicate input id: {input_id!r}")
+        if self.folder is not None and (self.output_dir / input_id).exists():
+            raise ValueError(f"outputs already exist for input id: {input_id!r}")
 
     def _require_folder(self) -> Path:
         if self.folder is None:
@@ -185,13 +192,9 @@ class Experiment:
         """Where per-input Parquet outputs live, inside the folder."""
         return self._require_folder() / OUTPUTS_DIRNAME
 
-    def _input_output_dir(self, input_id: str) -> Path:
-        """The application-owned output directory for one input."""
-        return self.output_dir / input_id
-
     def output_dir_for(self, data: Video | Audio) -> Path:
         """The output directory an input owns, inside :attr:`output_dir`."""
-        return self._input_output_dir(data.id)
+        return self.output_dir / data.id
 
     def _load_results(self, data: Video | Audio) -> None:
         """Fill an input from its stored results, skipping any it cannot read."""
@@ -209,13 +212,17 @@ class Experiment:
                 exc,
             )
 
-    def _discard_results(self, input_id: str) -> None:
-        """Delete the application-owned outputs left behind under an input id."""
+    def _load_speech_turns(self) -> None:
+        """Fill the experiment's speech turns from its output directory."""
         if self.folder is None:
             return
-        path = self._input_output_dir(input_id)
-        if path.exists():
-            shutil.rmtree(path)
+        try:
+            self.speech_turns.load(self.output_dir)
+        except (OSError, ValueError) as exc:
+            self.speech_turns.clear()
+            logger.warning(
+                "ignoring unreadable speech turns in %s: %s", self.output_dir, exc
+            )
 
     def config(self) -> ExperimentConfig:
         """The experiment in its on-disk form."""
@@ -263,7 +270,9 @@ class Experiment:
                 f"experiment version {version} is newer than supported "
                 f"{CURRENT_VERSION}; please upgrade body-eye-sync"
             )
-        return cls(ExperimentConfig.model_validate(data), folder)
+        experiment = cls(ExperimentConfig.model_validate(data), folder)
+        experiment._load_stored_data()
+        return experiment
 
     def save(self, folder: str | Path | None = None) -> None:
         """Write the experiment, and every input's results, into the folder.
@@ -281,3 +290,5 @@ class Experiment:
         for data in self.inputs:
             if data.has_data():
                 data.save(self.output_dir_for(data))
+        if self.speech_turns.has_data():
+            self.speech_turns.save(self.output_dir)

@@ -332,16 +332,16 @@ def test_set_experiment_without_videos_clears_the_viewer(tab):
 
 
 def test_editing_the_pipeline_updates_the_experiment(tab):
-    assert [type(s) for s in tab.experiment.pipeline.glasses_video.steps] == [
-        ObjectTrackingStep
-    ]
+    pipeline = tab.experiment.pipeline.glasses_video
+    assert isinstance(pipeline.object_tracking, ObjectTrackingStep)
+    assert pipeline.face_detection is None
+    assert pipeline.body_pose is None
 
     _section(tab, FaceDetectionStep).setChecked(True)
 
-    assert [type(s) for s in tab.experiment.pipeline.glasses_video.steps] == [
-        ObjectTrackingStep,
-        FaceDetectionStep,
-    ]
+    assert isinstance(pipeline.object_tracking, ObjectTrackingStep)
+    assert isinstance(pipeline.face_detection, FaceDetectionStep)
+    assert pipeline.body_pose is None
 
 
 def test_a_loaded_pipeline_populates_the_editor(qtbot, data_dir):
