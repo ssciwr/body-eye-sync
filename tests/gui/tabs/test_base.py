@@ -1,5 +1,7 @@
 """The tab base class, and the placeholder tabs that are nothing more than it."""
 
+from types import SimpleNamespace
+
 import pytest
 from qtpy.QtWidgets import QLabel, QMessageBox, QPushButton
 
@@ -8,6 +10,7 @@ from body_eye_sync.experiment.config import (
     ExperimentConfig,
     FixedVideoInput,
     GlassesVideoInput,
+    TimelineConfig,
 )
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.gui.tabs import TAB_TYPES
@@ -90,17 +93,69 @@ def test_alignment_tab_renders_all_videos_without_overlays(qtbot, experiment, da
         "room1",
         "room2",
     ]
-    button_row = tab.layout().itemAt(1).layout()
+    button_row = tab.layout().itemAt(2).layout()
     assert not hasattr(tab, "estimate_button")
+    assert tab.layout().itemAt(0).widget() is tab.align_button
+    assert tab.align_button.text() == "Automatic alignment"
     assert button_row.indexOf(tab.reset_timeline_button) < button_row.indexOf(
         tab.play_all_button
     )
     assert not hasattr(tab, "shared_timeline_label")
     assert button_row.indexOf(tab.done_button) >= 0
     assert tab.done_button.text() == "Finish alignment"
-    assert tab.layout().itemAt(0).widget() is tab.scroll_area
+    assert tab.layout().itemAt(1).widget() is tab.scroll_area
     assert tab.scroll_area.widget() is tab.video_grid_widget
     assert tab.done_button.isDefault()
+
+
+def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
+    qtbot, data_dir, monkeypatch
+):
+    path = data_dir / "three-people.mp4"
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="room1", path=path),
+                FixedVideoInput(id="room2", path=path),
+            ]
+        )
+    )
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    changed = []
+    busy = []
+    progress = []
+    tab.experiment_changed.connect(lambda: changed.append(True))
+    tab.busy_changed.connect(busy.append)
+    tab.progress_changed.connect(lambda *values: progress.append(values))
+
+    def align(current_experiment, *, progress):
+        current_experiment.fixed_videos[0].timeline.offset = 0.125
+        current_experiment.fixed_videos[1].timeline.offset = 0.375
+        progress(0.5)
+        return SimpleNamespace(offsets={"room1": 0.125, "room2": 0.375})
+
+    monkeypatch.setattr(
+        "body_eye_sync.gui.tabs.alignment.align_experiment",
+        align,
+    )
+
+    tab.align_button.click()
+
+    assert [card.controls.spin.value() for card in tab.video_cards] == pytest.approx(
+        [0.125, 0.375]
+    )
+    assert changed == [True]
+    assert busy == [True, False]
+    assert progress == [
+        (0, 100, "Aligning recordings…"),
+        (50, 100, "Aligning recordings…"),
+    ]
+    assert tab.align_button.isEnabled()
+
+    tab.video_cards[1].controls.up_button.click()
+
+    assert experiment.fixed_videos[1].timeline.offset == pytest.approx(0.425)
 
 
 # Covers the video offset controls used during manual alignment.
@@ -141,20 +196,20 @@ def test_alignment_tab_edits_video_time_offset(
     tab.video_cards[1].viewer.set_frame(3)
 
     controls.up_button.click()
-    assert experiment.glasses_videos[0].time_offset == pytest.approx(0.05)
+    assert experiment.glasses_videos[0].timeline.offset == pytest.approx(0.05)
     assert tab.video_cards[0].viewer.current_frame < 0
     assert tab.video_cards[0].viewer.current_time_seconds == pytest.approx(-0.05)
     assert controls.set_button.property("needsOffset") is False
     assert not controls.set_button.isEnabled()
 
     controls.down_button.click()
-    assert experiment.glasses_videos[0].time_offset == pytest.approx(0.0)
+    assert experiment.glasses_videos[0].timeline.offset == pytest.approx(0.0)
     assert tab.video_cards[0].viewer.current_frame == 0
     assert controls.set_button.property("needsOffset") is False
     assert not controls.set_button.isEnabled()
 
     controls.down_button.click()
-    assert experiment.glasses_videos[0].time_offset == pytest.approx(-0.05)
+    assert experiment.glasses_videos[0].timeline.offset == pytest.approx(-0.05)
     assert tab.video_cards[0].viewer.current_frame > 0
 
     tab.video_cards[0].viewer.set_frame(2)
@@ -163,14 +218,14 @@ def test_alignment_tab_edits_video_time_offset(
     assert controls.set_button.isEnabled()
     assert "#2563eb" in controls.set_button.styleSheet()
     controls.set_button.click()
-    assert experiment.glasses_videos[0].time_offset == pytest.approx(
+    assert experiment.glasses_videos[0].timeline.offset == pytest.approx(
         expected_offset,
         abs=0.001,
     )
     assert controls.set_button.property("needsOffset") is False
     assert not controls.set_button.isEnabled()
     assert controls.spin.singleStep() == pytest.approx(0.05)
-    assert experiment.fixed_videos[0].time_offset == pytest.approx(0.0)
+    assert experiment.fixed_videos[0].timeline.offset == pytest.approx(0.0)
     assert tab.video_cards[1].viewer.current_time_seconds == pytest.approx(0.0)
     assert tab.video_cards[0].shared_timeline_label.text() == (
         "Shared Timeline point 0.000 s"
@@ -195,7 +250,11 @@ def test_alignment_tab_applies_zero_offset_to_all_videos(qtbot, data_dir, monkey
                     id="cam1", path=path, gaze_path=path.with_suffix(".tsv")
                 )
             ],
-            fixed_videos=[FixedVideoInput(id="room1", path=path, time_offset=0.25)],
+            fixed_videos=[
+                FixedVideoInput(
+                    id="room1", path=path, timeline=TimelineConfig(offset=0.25)
+                )
+            ],
         )
     )
     clicked = {}
@@ -216,10 +275,10 @@ def test_alignment_tab_applies_zero_offset_to_all_videos(qtbot, data_dir, monkey
     tab.video_cards[1].viewer.set_frame(3)
     source_time = tab.video_cards[0].viewer.current_time_seconds
     tab.video_cards[0].controls.set_button.click()
-    assert experiment.glasses_videos[0].time_offset == pytest.approx(
+    assert experiment.glasses_videos[0].timeline.offset == pytest.approx(
         -source_time, abs=0.001
     )
-    assert experiment.fixed_videos[0].time_offset == pytest.approx(-source_time)
+    assert experiment.fixed_videos[0].timeline.offset == pytest.approx(-source_time)
     assert tab.video_cards[1].viewer.current_time_seconds == pytest.approx(source_time)
     assert tab.video_cards[0].shared_timeline_label.text() == (
         "Shared Timeline point 0.000 s"
@@ -243,7 +302,7 @@ def test_alignment_zero_button_ignores_closed_dialog(
     card = tab.video_cards[0]
     card.viewer.set_frame(2)
     card.controls.set_button.click()
-    assert experiment.fixed_videos[0].time_offset == pytest.approx(0.0)
+    assert experiment.fixed_videos[0].timeline.offset == pytest.approx(0.0)
     assert card.controls.set_button.property("needsOffset") is True
 
 
@@ -262,7 +321,7 @@ def test_alignment_tab_marks_negative_shared_timeline_preview(
 
     path = data_dir / "three-people.mp4"
     experiment.add_fixed_video(
-        FixedVideoInput(id="room1", path=path, time_offset=-0.12)
+        FixedVideoInput(id="room1", path=path, timeline=TimelineConfig(offset=-0.12))
     )
     tab = AlignmentTab(experiment)
     qtbot.addWidget(tab)
@@ -299,7 +358,9 @@ def test_alignment_tab_play_all_uses_shared_timeline(
     experiment.add_glasses_video(
         GlassesVideoInput(id="cam1", path=path, gaze_path=path.with_suffix(".tsv"))
     )
-    experiment.add_fixed_video(FixedVideoInput(id="room1", path=path, time_offset=0.04))
+    experiment.add_fixed_video(
+        FixedVideoInput(id="room1", path=path, timeline=TimelineConfig(offset=0.04))
+    )
     tab = AlignmentTab(experiment)
     qtbot.addWidget(tab)
     tab.video_cards[0].viewer.set_frame(1)

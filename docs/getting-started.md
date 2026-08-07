@@ -1,9 +1,9 @@
 # Getting Started
 
 The window is a set of tabs, one per stage of working with an experiment:
-**Input files**, **Alignment**, **Video processing**, **Audio processing**,
-**Post processing** and **Data export**. Only input files and video processing
-do anything so far.
+**Input files**, **Alignment**, **Timing correction**, **Video processing**,
+**Audio processing**, **Post processing** and **Data export**. Audio
+processing, post processing and data export do nothing so far.
 
 The title bar names the folder the open experiment is saved to, or says
 `[unsaved experiment]` until it has one.
@@ -25,6 +25,17 @@ A glasses video also needs the gaze file the same device recorded. If it sits
 beside the video it is picked up automatically; otherwise you are asked for it,
 and a video with no gaze file is not added. The **Gaze file** column shows which
 one is in use, and changes it.
+
+## Place the Inputs on One Timeline
+
+Every recording starts whenever its device was switched on, so nothing relates
+them until each input's offset is known. In the **Alignment** tab thre is a button
+to automatically align the inputs, and you can also manually set the offset for each video.
+
+The **Timing correction** tab then checks whether a single offset actually held
+for the whole recording, and detects and corrects:
+
+- **Gaps** -- stretches where a device stalled and didn't write leading to missing content
 
 ## Configure the Pipeline
 

@@ -35,7 +35,7 @@ def test_body_embeddings_keep_best_k_per_track_by_confidence():
     video.add_object_tracking_frame(_tracking_frame(3, [_row(1, 0.7)], [[0, 0, 1, 0]]))
     video.finish_object_tracking()
 
-    emb = video.body_embeddings
+    emb = video._body_embeddings
     assert emb is not None
     assert emb["track_id"].unique().tolist() == [1]
     # The two highest-confidence detections are kept, best first.
@@ -51,7 +51,7 @@ def test_body_embeddings_skip_nonfinite_predicted_tracks():
         _tracking_frame(1, [_row(1, 0.9)], [[np.nan, np.nan, np.nan]])
     )
     video.finish_object_tracking()
-    assert video.body_embeddings is None
+    assert video._body_embeddings is None
 
 
 def test_embeddings_disabled_when_k_zero():
@@ -59,7 +59,7 @@ def test_embeddings_disabled_when_k_zero():
     video.begin_object_tracking(embeddings_per_track=0)
     video.add_object_tracking_frame(_tracking_frame(1, [_row(1, 0.9)], [[1, 2, 3]]))
     video.finish_object_tracking()
-    assert video.body_embeddings is None
+    assert video._body_embeddings is None
 
 
 def _tracked_video(rows):
@@ -84,21 +84,20 @@ def test_face_embeddings_best_k_and_fp16_round_trip(tmp_path):
     video.add_face_detection_frame(FaceFrameResult(1, [_face(1, 0.8, [0, 1, 0])]))
     video.finish_face_detection()
 
-    emb = video.face_embeddings
+    emb = video._face_embeddings
     assert emb is not None
     assert len(emb) == 1  # best-1 by face score
     assert emb["score"].iloc[0] == pytest.approx(0.8)
     # Face embeddings do not leak into the main dataframe.
     assert "embedding" not in video.data.columns
 
-    path = tmp_path / "cam1" / "results.parquet"
-    path.parent.mkdir()
-    video.to_parquet(path)
-    assert (path.parent / "face_embeddings.parquet").exists()
-    assert not (path.parent / "body_embeddings.parquet").exists()
+    directory = tmp_path / "cam1"
+    video.save(directory)
+    assert (directory / "face_embeddings.parquet").exists()
+    assert not (directory / "body_embeddings.parquet").exists()
 
-    loaded = Video.from_parquet(path)
-    loaded_emb = loaded.face_embeddings
+    loaded = Video.from_directory(directory)
+    loaded_emb = loaded._face_embeddings
     assert len(loaded_emb) == 1
     assert loaded_emb["embedding"].iloc[0].dtype == np.float16
     np.testing.assert_array_equal(
@@ -108,13 +107,13 @@ def test_face_embeddings_best_k_and_fp16_round_trip(tmp_path):
 
 def test_no_companion_files_written_without_embeddings(tmp_path):
     video = _tracked_video([[0, 1, 0, 0, 10, 10, 0.9]])
-    path = tmp_path / "cam1" / "results.parquet"
-    path.parent.mkdir()
-    (path.parent / "face_embeddings.parquet").write_bytes(b"stale")
-    (path.parent / "body_embeddings.parquet").write_bytes(b"stale")
+    directory = tmp_path / "cam1"
+    directory.mkdir()
+    (directory / "face_embeddings.parquet").write_bytes(b"stale")
+    (directory / "body_embeddings.parquet").write_bytes(b"stale")
 
-    video.to_parquet(path)
+    video.save(directory)
 
-    assert path.exists()
-    assert not (path.parent / "face_embeddings.parquet").exists()
-    assert not (path.parent / "body_embeddings.parquet").exists()
+    assert (directory / "results.parquet").exists()
+    assert not (directory / "face_embeddings.parquet").exists()
+    assert not (directory / "body_embeddings.parquet").exists()

@@ -12,6 +12,7 @@ from body_eye_sync.experiment.config import (
     GlassesVideoInput,
     ObjectTrackingStep,
     Pipeline,
+    TimelineConfig,
     VideoPipeline,
 )
 
@@ -102,11 +103,23 @@ def test_a_glasses_video_needs_its_gaze_file():
         GlassesVideoInput(id="cam1", path="v.mp4")
 
 
-def test_time_offset_defaults_to_zero():
+def test_timeline_defaults_to_an_uncorrected_clock():
     assert (
-        GlassesVideoInput(id="cam1", path="v.mp4", gaze_path="v.tsv").time_offset == 0.0
+        GlassesVideoInput(id="cam1", path="v.mp4", gaze_path="v.tsv").timeline
+        == TimelineConfig()
     )
-    assert AudioInput(id="mic1", path="a.wav").time_offset == 0.0
+    assert AudioInput(id="mic1", path="a.wav").timeline == TimelineConfig()
+
+
+def test_timeline_is_nested_in_the_serialised_input():
+    stored = AudioInput(
+        id="mic1",
+        path="a.wav",
+        timeline=TimelineConfig(offset=1.25),
+    ).model_dump(mode="json")
+
+    assert stored["timeline"] == {"offset": 1.25, "shifts": []}
+    assert "time_offset" not in stored
 
 
 def test_inputs_are_stored_in_typed_lists():

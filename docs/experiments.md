@@ -27,16 +27,24 @@ glasses_videos:
   - id: p1-glasses
     path: videos/p1.mp4
     gaze_path: videos/p1-gaze.tsv
-    time_offset: 0.0
+    timeline:
+      offset: 0.0
+      shifts: []
 fixed_videos:
   - id: camera-1
     path: videos/camera-1.mp4
-    time_offset: -1.25
+    timeline:
+      offset: -1.25
+      shifts:
+        - at: 512.4
+          seconds: 0.18
 audio:
   - id: p1-mic
     path: audio/p1.wav
     glasses_video: p1-glasses
-    time_offset: 0.0
+    timeline:
+      offset: 0.0
+      shifts: []
 pipeline:
   glasses_video:
     object_tracking:
@@ -67,19 +75,28 @@ pipeline:
 Inputs are grouped by type, each in its own list. Every input needs an `id` that
 is unique across *all* the lists, since it names that input's output directory;
 for the same reason it has to be usable as a filename, so it cannot be empty or
-contain a path separator. Each
-also has a `time_offset` in seconds, which is added to that input's own clock to
-place it on the experiment's shared timeline; it defaults to `0.0`.
+contain a path separator.
 
-This file is the on-disk form. At runtime each input is a `GlassesVideo`,
-`FixedVideo` or `Audio` that owns these settings alongside its results, reached
-through `Experiment.glasses_videos`, `.fixed_videos` and `.audio`. Inputs are
-added, removed and renamed through `Experiment` so their ids stay unique.
+Each input has a `timeline` describing where it sits on the experiment's shared
+clock. The defaults describe a device that started with the experiment and kept
+time:
+
+- `offset`: seconds added to this input's own clock to reach experiment
+  time, since every device was switched on at its own moment. Defaults to `0.0`.
+- `shifts`: content the recording lost partway through, if any. Each entry
+  has an `at`, where the loss falls on the recording's own clock, and `seconds`,
+  how much is missing there, which is added to the offset from that point on.
+  Defaults to none.
+
+This file is the on-disk form. At runtime each `GlassesVideo`, `FixedVideo` or
+`Audio` owns a `Timeline` object alongside its results, reached through
+`Experiment.glasses_videos`, `.fixed_videos` and `.audio`. Inputs are added,
+removed and renamed through `Experiment` so their ids stay unique.
 
 - `glasses_videos`: video recorded by a participant's glasses-mounted camera.
   This is the input that carries eye tracking, so it needs a `gaze_path` as well
   as a `path`: the gaze samples the same device recorded, as a TSV file. They
-  share the video's clock, and so its `time_offset`. Video formats with audio,
+  share the video's clock, and so its `timeline`. Video formats with audio,
   such as MP4, include that audio during video playback. The assumption here is that if audio becomes misaligned during
   recordings, it should be fixed in preprocessing (e.g. to set the audio to a mid point throughout the audio, or to
   split into separate clips where audio-video synchronise. It would be hard for us to manage a "second kind of offset"

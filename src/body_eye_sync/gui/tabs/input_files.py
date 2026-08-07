@@ -18,8 +18,6 @@ from qtpy.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
-    QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -34,6 +32,7 @@ from body_eye_sync.experiment.config import (
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import GlassesVideo, Video
 from body_eye_sync.gui.tabs.base import BaseTab
+from body_eye_sync.gui.widgets.auto_height_table import AutoHeightTable
 
 VIDEO_FILTER = (
     "Video (formats with audio like MP4 will include the related audio) "
@@ -150,11 +149,6 @@ AUDIO = _InputKind(
 INPUT_KINDS = (GLASSES_VIDEOS, FIXED_VIDEOS, AUDIO)
 
 
-def _input_path(data: Video | Audio) -> Path:
-    """The file an input was recorded to, whichever kind of input it is."""
-    return data.video_path if isinstance(data, Video) else data.audio_path
-
-
 def _file_label(path: Path | None) -> str:
     """How a file reads in a cell: its name, flagged if it is not there."""
     if path is None:
@@ -206,17 +200,11 @@ class _InputSection(QGroupBox):
         self._updating = False
 
         headers = [*_COLUMNS, *(column.title for column in kind.extra_columns)]
-        self.table = QTableWidget(0, len(headers))
-        self.table.setHorizontalHeaderLabels(headers)
-        self.table.verticalHeader().setVisible(False)
+        self.table = AutoHeightTable(headers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.horizontalHeader().setSectionResizeMode(
             _FILE, QHeaderView.ResizeMode.Stretch
         )
-        # The section grows with its rows and the page scrolls, rather than each
-        # table scrolling within a height the user has to set.
-        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.table.itemChanged.connect(self._on_item_changed)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
 
@@ -260,7 +248,7 @@ class _InputSection(QGroupBox):
         for row, data in enumerate(self._inputs):
             if data.id in selected:
                 self.table.selectRow(row)
-        self._fit_to_rows()
+        self.table.fit_to_rows()
         self._update_button_state()
 
     def selected_inputs(self) -> list[Video | Audio]:
@@ -290,17 +278,10 @@ class _InputSection(QGroupBox):
         if added:
             self.changed.emit()
 
-    def _fit_to_rows(self) -> None:
-        """Make the table exactly as tall as its header and rows."""
-        height = self.table.horizontalHeader().height() + 2 * self.table.frameWidth()
-        for row in range(self.table.rowCount()):
-            height += self.table.rowHeight(row)
-        self.table.setFixedHeight(height)
-
     def _fill_row(self, row: int, data: Video | Audio) -> None:
         self.table.setItem(row, _ID, QTableWidgetItem(data.id))
 
-        path = _input_path(data)
+        path = data.path
         path_item = QTableWidgetItem(str(path))
         path_item.setFlags(path_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         if path is not None and not path.exists():

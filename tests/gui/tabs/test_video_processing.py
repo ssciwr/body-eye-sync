@@ -140,14 +140,13 @@ def test_run_object_tracking_populates_state_and_overlays(qtbot, tab):
     assert tab.video().data["track_id"].nunique() == 3
     # Object tracking drives the video, so it ends on the last frame with that
     # frame's boxes drawn (3 people -> 3 rects + 3 labels).
-    assert tab.video_viewer.current_frame == tab.video_viewer.frame_count - 1
+    assert tab.video_viewer._current == tab.video_viewer.frame_count - 1
     assert len(tab.video_viewer._overlay_items) == 6
     # Controls are restored and the worker thread is cleaned up once done.
     assert _run_button(tab, ObjectTrackingStep).isEnabled()
     assert _run_button(tab, FaceDetectionStep).isEnabled()
     assert _run_button(tab, BodyPoseStep).isEnabled()
     assert tab.video_viewer._play_button.isEnabled()
-    assert not tab.progress_bar.isVisibleTo(tab)
     assert not tab.cancel_button.isVisibleTo(tab)
 
 
@@ -168,12 +167,12 @@ def test_run_face_detection_populates_state_and_overlays(qtbot, tab):
     assert data["track_id"].nunique() == 3
     assert data["face_score"].notna().any()
     # Real face embeddings were captured (K=32 default) for later clustering.
-    face_emb = tab.video().face_embeddings
+    face_emb = tab.video()._face_embeddings
     assert face_emb is not None
     assert face_emb["embedding"].iloc[0].dtype == np.float16
     # Ends on the last frame drawing that frame's person boxes and faces.
     last = tab.video_viewer.frame_count - 1
-    assert tab.video_viewer.current_frame == last
+    assert tab.video_viewer._current == last
     assert tab.video().faces_for_frame(last)
 
 
@@ -237,7 +236,7 @@ def test_refresh_keeps_showing_the_same_video(tab, data_dir):
 
     assert tab.video() is tab.experiment.fixed_videos[0]
     # The video was not reloaded, so playback stayed where it was.
-    assert tab.video_viewer.current_frame == 2
+    assert tab.video_viewer._current == 2
 
 
 def test_inputs_that_changed_during_a_run_are_re_read_when_it_ends(
@@ -403,7 +402,11 @@ def test_invalid_step_settings_abort_the_run(tab, monkeypatch, fast_object_track
 def test_the_video_is_locked_while_a_step_runs(qtbot, tab):
     assert tab.video_viewer._play_button.isEnabled()
     busy = []
+    progress = []
     tab.busy_changed.connect(busy.append)
+    tab.progress_changed.connect(
+        lambda value, maximum, label: progress.append((value, maximum, label))
+    )
 
     tab._start_step(ObjectTrackingStep)
 
@@ -412,8 +415,8 @@ def test_the_video_is_locked_while_a_step_runs(qtbot, tab):
     assert not tab.video_viewer._play_button.isEnabled()
     assert not tab.video_viewer._slider.isEnabled()
     assert not tab.video_selector.isEnabled()
-    assert tab.progress_bar.isVisibleTo(tab)
     assert busy == [True]
+    assert progress[0] == (0, 0, "Downloading weights…")
 
     qtbot.waitUntil(lambda: not tab.is_busy(), timeout=60000)
     assert tab.video_viewer._play_button.isEnabled()
