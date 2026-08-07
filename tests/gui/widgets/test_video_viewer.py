@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -106,7 +107,7 @@ def test_video_viewer_tracks_current_media_time(viewer):
 
     assert viewer.current_time_seconds == pytest.approx(2 / viewer._fps)
     assert viewer._time_label.text().endswith(" s")
-    assert viewer._media_player.source().toLocalFile() == str(viewer.video.video_path)
+    assert Path(viewer._media_player.source().toLocalFile()) == viewer.video.video_path
 
 
 # Positive experiment offsets display as negative pre-roll in the viewer for purposes of aligning the video and
