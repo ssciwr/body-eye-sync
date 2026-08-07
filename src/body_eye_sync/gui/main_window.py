@@ -11,7 +11,10 @@ from qtpy.QtWidgets import (
     QInputDialog,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from pydantic import ValidationError
@@ -43,6 +46,7 @@ class MainWindow(QMainWindow):
         self.experiment = _new_experiment()
         self._update_title()
         self._busy = False
+        self._busy_source: BaseTab | None = None
         self._dirty = False
 
         self._build_menu_bar()
@@ -58,9 +62,24 @@ class MainWindow(QMainWindow):
             tab.busy_changed.connect(
                 lambda busy, source=tab: self._set_busy(busy, source)
             )
+            tab.progress_changed.connect(
+                lambda value, maximum, label, source=tab: self._set_progress(
+                    source, value, maximum, label
+                )
+            )
             self.tabs.addTab(tab, tab_type.title)
             self.tab_widgets.append(tab)
-        self.setCentralWidget(self.tabs)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setVisible(False)
+
+        self.central = QWidget()
+        central_layout = QVBoxLayout(self.central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.addWidget(self.tabs, stretch=1)
+        central_layout.addWidget(self.progress_bar)
+        self.setCentralWidget(self.central)
 
     def tab(self, tab_type: type[BaseTab]) -> BaseTab:
         """The window's instance of ``tab_type``."""
@@ -200,12 +219,38 @@ class MainWindow(QMainWindow):
 
     def _set_busy(self, busy: bool, source: BaseTab | None = None) -> None:
         """Lock other tabs and actions while the source tab is busy."""
+        if busy:
+            self._busy_source = source
+            self.progress_bar.setRange(0, 0)
+            self.progress_bar.setFormat("Working…")
+            self.progress_bar.setVisible(True)
+        elif self._busy_source is None or source is self._busy_source:
+            self._busy_source = None
+            self.progress_bar.setVisible(False)
         self._busy = busy
         self.new_action.setEnabled(not busy)
         self.open_action.setEnabled(not busy)
         self.save_action.setEnabled(not busy)
         for index, tab in enumerate(self.tab_widgets):
             self.tabs.setTabEnabled(index, not busy or tab is source)
+
+    def _set_progress(
+        self,
+        source: BaseTab,
+        value: int,
+        maximum: int,
+        label: str,
+    ) -> None:
+        """Display progress reported by the tab that owns the active task."""
+        if source is not self._busy_source:
+            return
+        maximum = max(0, maximum)
+        self.progress_bar.setRange(0, maximum)
+        if maximum:
+            self.progress_bar.setValue(max(0, min(value, maximum)))
+            self.progress_bar.setFormat(f"{label} — %p%" if label else "%p%")
+        else:
+            self.progress_bar.setFormat(label or "Working…")
 
     def closeEvent(self, event) -> None:
         if not self._confirm_discarding_changes():

@@ -7,6 +7,7 @@ These pages focus on the modules that are useful for understanding or extending
 the application:
 
 - Experiment configuration, runtime loading/saving, and batch execution.
+- Preprocessing functions that put the recordings on a shared timeline.
 - Pipeline functions for object tracking, face detection, and body-pose
   detection.
 - GUI widgets and entry points.

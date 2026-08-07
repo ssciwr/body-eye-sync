@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+
 import pytest
 
 from body_eye_sync.experiment.video import Video
@@ -139,12 +140,16 @@ def test_discard_body_pose_detection_keeps_tracked_boxes():
     assert video.poses_for_frame(0) == []
 
 
-def test_set_video_invalidates_tracklets():
-    video = Video()
+def test_clear_invalidates_tracklets():
+    video = Video(path="some/video.mp4")
     video.set_data(_data())
-    video.set_video("some/video.mp4")
+
+    video.clear()
+
     assert video.data is None
     assert video.boxes_for_frame(0) == []
+    # The recording itself is not a result, so it survives.
+    assert video.video_path.name == "video.mp4"
 
 
 def test_all_boxes_by_frame_groups_tracked_boxes():

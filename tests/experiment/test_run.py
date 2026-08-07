@@ -102,8 +102,8 @@ def test_run_writes_parquet_per_input(tmp_path, stub_pipeline):
 
     results = run_experiment(_experiment(video_file))
 
-    assert results == {"cam1": tmp_path / "outputs" / "cam1" / "results.parquet"}
-    data = Video.from_parquet(results["cam1"]).data
+    assert results == {"cam1": tmp_path / "outputs" / "cam1"}
+    data = Video.from_directory(results["cam1"]).data
     # One tracked box in frame 0, with face and pose columns merged on.
     assert len(data) == 1
     assert data["face_score"].notna().all()
@@ -192,7 +192,7 @@ def test_existing_output_is_skipped_without_force(tmp_path, monkeypatch):
     video_file = tmp_path / "clip.mp4"
     video_file.touch()
     exp = _experiment(video_file)
-    destination = exp.output_path(exp.glasses_videos[0])
+    destination = exp.output_dir_for(exp.glasses_videos[0]) / "results.parquet"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(b"stale")
 
@@ -202,7 +202,7 @@ def test_existing_output_is_skipped_without_force(tmp_path, monkeypatch):
     monkeypatch.setattr(run_module, "detect_tracklets", boom)
 
     results = run_experiment(exp)
-    assert results["cam1"] == destination
+    assert results["cam1"] == destination.parent
     assert destination.read_bytes() == b"stale"  # untouched
 
 
@@ -210,12 +210,12 @@ def test_force_reruns_and_overwrites(tmp_path, stub_pipeline):
     video_file = tmp_path / "clip.mp4"
     video_file.touch()
     exp = _experiment(video_file)
-    destination = exp.output_path(exp.glasses_videos[0])
+    destination = exp.output_dir_for(exp.glasses_videos[0]) / "results.parquet"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(b"stale")
 
     results = run_experiment(exp, force=True)
-    assert Video.from_parquet(results["cam1"]).data is not None
+    assert Video.from_directory(results["cam1"]).data is not None
 
 
 def test_runs_a_loaded_experiment(tmp_path, stub_pipeline):
@@ -224,8 +224,8 @@ def test_runs_a_loaded_experiment(tmp_path, stub_pipeline):
     _experiment(video_file).save()
 
     results = run_experiment(Experiment.load(tmp_path))
-    assert results["cam1"] == tmp_path / "outputs" / "cam1" / "results.parquet"
-    assert results["cam1"].exists()
+    assert results["cam1"] == tmp_path / "outputs" / "cam1"
+    assert (results["cam1"] / "results.parquet").exists()
 
 
 def test_missing_video_raises(tmp_path, stub_pipeline):
