@@ -6,17 +6,19 @@ from typing import Iterator
 
 from qtpy.QtCore import QObject, Signal, Slot
 
-from body_eye_sync.experiment.video import Video
-
 
 class BaseWorker(QObject):
-    """Runs a video pipeline off the GUI thread, into a :class:`Video`.
+    """Runs one pipeline step off the GUI thread, into the results it computes.
 
+    ``target`` is what the step writes into: a
+    :class:`~body_eye_sync.experiment.video.Video` for the video stages, a
+    :class:`~body_eye_sync.experiment.speech.Speech` for the speech ones.
     Subclasses supply the per-run work: :meth:`_items` yields each computed
-    frame/result, :meth:`_accumulate` stores one into the video, :meth:`_finalise`
+    frame/result, :meth:`_accumulate` stores one into the target, :meth:`_finalise`
     folds the accumulated results once the run completes, and :meth:`_discard`
-    rolls the video back if the run is cancelled or fails. Each item is emitted
-    via ``new_frame`` so the GUI can draw it live; ``finished`` (after
+    rolls the target back if the run is cancelled or fails. Each item is emitted
+    via ``new_frame`` so the GUI can show it live, and a step that can say how far
+    through it is reports that as a fraction via ``progress``; ``finished`` (after
     :meth:`_finalise`) or ``cancelled`` (after :meth:`_discard`) fires once the
     run ends, and any exception is reported via ``failed`` with a traceback (also
     after :meth:`_discard`). ``operation_name`` labels the run for the GUI.
@@ -26,13 +28,14 @@ class BaseWorker(QObject):
     operation_name: str = ""
 
     new_frame = Signal(object)
+    progress = Signal(float)
     finished = Signal()
     failed = Signal(str, str)
     cancelled = Signal()
 
-    def __init__(self, video: Video) -> None:
+    def __init__(self, target) -> None:
         super().__init__()
-        self._video = video
+        self._target = target
         self._cancel = threading.Event()
 
     def cancel(self) -> None:
@@ -64,13 +67,13 @@ class BaseWorker(QObject):
         raise NotImplementedError
 
     def _accumulate(self, item) -> None:
-        """Store one computed item into the video."""
+        """Store one computed item into the target."""
         raise NotImplementedError
 
     def _finalise(self) -> None:
-        """Fold the accumulated items into the video's stored data."""
+        """Fold the accumulated items into the target's stored results."""
         raise NotImplementedError
 
     def _discard(self) -> None:
-        """Roll the video back when the run is cancelled or fails."""
+        """Roll the target back when the run is cancelled or fails."""
         raise NotImplementedError

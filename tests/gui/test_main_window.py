@@ -22,6 +22,7 @@ TAB_TITLES = [
     "Timing correction",
     "Video processing",
     "Audio processing",
+    "Speech post processing",
     "Post processing",
     "Data export",
 ]

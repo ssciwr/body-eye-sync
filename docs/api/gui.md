@@ -20,6 +20,8 @@
 
 ::: body_eye_sync.gui.tabs.audio_processing
 
+::: body_eye_sync.gui.tabs.speech_post_processing
+
 ::: body_eye_sync.gui.tabs.post_processing
 
 ::: body_eye_sync.gui.tabs.data_export
@@ -47,6 +49,8 @@
 ::: body_eye_sync.gui.workers.face_detection
 
 ::: body_eye_sync.gui.workers.body_pose
+
+::: body_eye_sync.gui.workers.transcription
 
 ## Utilities
 

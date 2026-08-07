@@ -7,3 +7,7 @@ changing it.
 ## Synchronized Video Grid
 
 ::: body_eye_sync.export.video_grid
+
+## ELAN Annotations
+
+::: body_eye_sync.export.elan

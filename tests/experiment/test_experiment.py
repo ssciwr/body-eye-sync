@@ -352,19 +352,38 @@ def test_save_writes_results_for_every_input_type(tmp_path):
     )
     exp.glasses_videos[0].set_data(_tracks())
     exp.fixed_videos[0].set_data(_tracks())
-    exp.audio[0].set_data(pd.DataFrame({"start": [0.0], "end": [1.0]}))
+    exp.audio[0].speech.set_data(
+        pd.DataFrame(
+            {"segment_id": [0], "start": [0.0], "end": [1.0], "text": ["hallo"]}
+        )
+    )
     exp.save()
 
-    # Every input owns a directory, with its results inside.
+    # Each input's main output is named for what that output holds.
     assert sorted(
         p.relative_to(tmp_path / "outputs").as_posix()
         for p in (tmp_path / "outputs").glob("*/*.parquet")
     ) == [
         "cam1/results.parquet",
-        "mic1/results.parquet",
+        "mic1/transcript_segments.parquet",
         "room/results.parquet",
     ]
-    assert Experiment.load(tmp_path).audio[0].data["end"].tolist() == [1.0]
+    assert Experiment.load(tmp_path).audio[0].speech.data["end"].tolist() == [1.0]
+
+
+def test_video_speech_results_survive_a_save_and_load(tmp_path):
+    exp = Experiment(_config(), tmp_path)
+    video = exp.glasses_videos[0]
+    video.set_data(_tracks())
+    video.speech.set_data(
+        pd.DataFrame({"segment_id": [0], "start": [0.0], "end": [1.0], "speaker": [3]})
+    )
+
+    exp.save()
+
+    reloaded = Experiment.load(tmp_path).glasses_videos[0]
+    assert reloaded.data["track_id"].nunique() == 2
+    assert reloaded.speech.data["speaker"].tolist() == [3]
 
 
 def test_unreadable_results_are_skipped_rather_than_failing_the_load(tmp_path, caplog):

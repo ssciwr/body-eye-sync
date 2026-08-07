@@ -28,6 +28,14 @@
 
 ::: body_eye_sync.experiment.audio
 
+## Speech Results
+
+::: body_eye_sync.experiment.speech
+
 ## Embedding Storage
 
 ::: body_eye_sync.experiment.embeddings
+
+::: body_eye_sync.experiment.speech_turns
+
+::: body_eye_sync.experiment.attribution

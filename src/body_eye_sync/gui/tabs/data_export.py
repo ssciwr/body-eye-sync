@@ -23,6 +23,7 @@ from qtpy.QtWidgets import (
 from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import GlassesVideo, Video
+from body_eye_sync.export.elan import export_elan
 from body_eye_sync.export.video_grid import (
     VideoGridCancelled,
     VideoGridResult,
@@ -265,9 +266,29 @@ class DataExportTab(BaseTab):
     @Slot(object)
     def _on_finished(self, result: VideoGridResult) -> None:
         message = f"Exported combined video to {result.path}"
+        message += self._write_annotations(result)
         self.result_label.setText(message)
         self.status_message.emit(message)
         self._set_running(False)
+
+    def _write_annotations(self, result: VideoGridResult) -> str:
+        """Write the speech turns beside the video, reporting what happened.
+
+        Annotations accompany the video whenever there are speech turns to
+        write, so the two are never out of step with each other. The video is
+        already written by this point, so a failure here is worth saying out
+        loud but must not read as though the export itself failed.
+        """
+        if not self.experiment.speech_turns.has_data():
+            return ""
+        try:
+            annotations = export_elan(self.experiment, result, overwrite=True)
+        except (OSError, ValueError) as exc:
+            return f"; could not write speech annotations: {exc}"
+        return (
+            f"; wrote {annotations.annotations} annotations for "
+            f"{len(annotations.tiers)} speaker(s) to {annotations.path.name}"
+        )
 
     @Slot(str, str)
     def _on_failed(self, message: str, details: str) -> None:

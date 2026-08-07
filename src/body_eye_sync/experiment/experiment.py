@@ -18,6 +18,7 @@ from body_eye_sync.experiment.config import (
     Pipeline,
     validate_input_id,
 )
+from body_eye_sync.experiment.speech_turns import SpeechTurns
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo, Video
 
 logger = logging.getLogger(__name__)
@@ -54,8 +55,13 @@ class Experiment:
             )
             for spec in config.audio
         ]
+        #: Who spoke when, across the whole experiment. Unlike every other
+        #: result this belongs to no single input, since it is worked out by
+        #: comparing the recordings with each other.
+        self.speech_turns = SpeechTurns()
         for data in self.inputs:
             self._load_results(data)
+        self._load_speech_turns()
 
     @property
     def inputs(self) -> list[Video | Audio]:
@@ -181,6 +187,18 @@ class Experiment:
                 exc,
             )
 
+    def _load_speech_turns(self) -> None:
+        """Fill the experiment's speech turns from its output directory."""
+        if self.folder is None:
+            return
+        try:
+            self.speech_turns.load(self.output_dir)
+        except (OSError, ValueError) as exc:
+            self.speech_turns.clear()
+            logger.warning(
+                "ignoring unreadable speech turns in %s: %s", self.output_dir, exc
+            )
+
     def _discard_results(self, input_id: str) -> None:
         """Delete the application-owned outputs left behind under an input id."""
         if self.folder is None:
@@ -253,3 +271,5 @@ class Experiment:
         for data in self.inputs:
             if data.has_data():
                 data.save(self.output_dir_for(data))
+        if self.speech_turns.has_data():
+            self.speech_turns.save(self.output_dir)

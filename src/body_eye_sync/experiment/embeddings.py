@@ -1,9 +1,9 @@
 """Storage for the best-K embedding tables the pipeline stages collect.
 
-A video keeps body-appearance and face embeddings per track. The tables differ
-only in which columns identify a vector, so the on-disk form is shared: every
-column is written as it comes, except ``embedding``, which becomes a
-fixed-size ``float16`` list.
+A video keeps appearance embeddings per track and an audio recording keeps voice
+embeddings per speaker. The tables differ only in which columns identify a
+vector, so the on-disk form is shared: every column is written as it comes,
+except ``embedding``, which becomes a fixed-size ``float16`` list.
 """
 
 from __future__ import annotations
@@ -20,7 +20,8 @@ class TopK:
     """Keeps the best-K embeddings per group as ``float16``, ranked by score.
 
     ``group`` is the identity the vectors are kept per -- a video's ``track_id``
-    -- and ``index`` records where each one came from, a frame number.
+    or a recording's ``speaker`` -- and ``index`` records where each one came
+    from, a frame number or a speech turn.
     """
 
     def __init__(self, k: int, columns: list[str]) -> None:

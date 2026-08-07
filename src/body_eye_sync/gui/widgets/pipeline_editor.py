@@ -1,15 +1,17 @@
 """Editor for an experiment's pipeline: which steps run, and their arguments.
 
-The pipeline structure is hard-coded here -- the known steps and their order --
-while each step's arguments are edited by an auto-generated :class:`PydanticForm`.
-Object tracking is the mandatory base pass; face and body-pose detection are
-optional passes that run over its tracked boxes, so they are toggled on/off.
+The pipeline structure is hard-coded here -- the known steps and their order,
+one list per kind of pipeline -- while each step's arguments are edited by an
+auto-generated :class:`PydanticForm`. Every pipeline has a mandatory base pass
+that the rest build on; those later passes are optional and toggled on/off.
 
 This widget concerns itself only with the *pipeline*; managing the experiment's
 inputs (videos, gaze data, ...) is a separate interface.
 """
 
 from __future__ import annotations
+
+from typing import Sequence
 
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import QGroupBox, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
@@ -18,18 +20,30 @@ from body_eye_sync.experiment.config import (
     BodyPoseStep,
     FaceDetectionStep,
     ObjectTrackingStep,
+    StepPipeline,
     StepSpec,
-    VideoPipeline,
+    TranscriptionStep,
 )
 from body_eye_sync.gui.widgets.pydantic_form import PydanticForm
 
-#: The pipeline steps the GUI offers, in run order: the ``VideoPipeline`` field
-#: each maps to, its model type, the title shown, and whether it is optional.
-#: Object tracking is required; the later passes consume its boxes and are opt-in.
-_STEPS: list[tuple[str, type, str, bool]] = [
+#: One step as the editor takes it: the pipeline field it maps to, its model
+#: type, the title shown, and whether it is optional.
+StepEntry = tuple[str, type, str, bool]
+
+#: The steps of a :class:`~body_eye_sync.experiment.config.VideoPipeline`, in run
+#: order. Object tracking is required; the later passes consume its boxes and are
+#: opt-in.
+VIDEO_STEPS: list[StepEntry] = [
     ("object_tracking", ObjectTrackingStep, "Object tracking", False),
     ("face_detection", FaceDetectionStep, "Face detection", True),
     ("body_pose", BodyPoseStep, "Body pose", True),
+]
+
+#: The steps of a :class:`~body_eye_sync.experiment.config.SpeechPipeline`.
+#: Transcription is the only one, and it is required: it says what was said, and
+#: who said it is settled later, across all of the experiment's recordings.
+SPEECH_STEPS: list[StepEntry] = [
+    ("transcription", TranscriptionStep, "Transcription", False),
 ]
 
 
@@ -108,15 +122,16 @@ class _StepSection(QWidget):
 
 
 class PipelineEditor(QWidget):
-    """Edit an experiment's pipeline steps and their arguments.
+    """Edit one pipeline's steps and their arguments.
 
-    Populate from an experiment with :meth:`set_from` (or :meth:`reset` to
-    defaults), and write the edited values back into one with :meth:`apply_to`.
-    ``changed`` fires on any toggle or field edit. Each step has its own "Run"
-    button (``run_requested``, with the step's type); ``run_all_requested`` fires
-    from the button that runs every enabled step in order. Running is out of
-    scope for this widget -- it only reports the requests, and its buttons'
-    enabled state is driven from outside via
+    ``steps`` says which steps the editor shows, in run order -- :data:`VIDEO_STEPS`
+    or :data:`SPEECH_STEPS`. Populate from a pipeline with :meth:`set_from` (or
+    :meth:`reset` to defaults), and write the edited values back into one with
+    :meth:`apply_to`. ``changed`` fires on any toggle or field edit. Each step has
+    its own "Run" button (``run_requested``, with the step's type);
+    ``run_all_requested`` fires from the button that runs every enabled step in
+    order. Running is out of scope for this widget -- it only reports the
+    requests, and its buttons' enabled state is driven from outside via
     :meth:`set_run_enabled`/:meth:`set_run_all_enabled`.
     """
 
@@ -124,11 +139,13 @@ class PipelineEditor(QWidget):
     run_requested = Signal(object)
     run_all_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, steps: Sequence[StepEntry], parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self._sections: list[_StepSection] = []
         layout = QVBoxLayout(self)
-        for attr_name, step_type, title, optional in _STEPS:
+        for attr_name, step_type, title, optional in steps:
             section = _StepSection(attr_name, step_type, title, optional)
             section.changed.connect(self.changed)
             section.run_requested.connect(
@@ -143,7 +160,7 @@ class PipelineEditor(QWidget):
         layout.addWidget(self.run_all_button)
         layout.addStretch(1)
 
-    def set_from(self, pipeline: VideoPipeline) -> None:
+    def set_from(self, pipeline: StepPipeline) -> None:
         """Populate the editor from ``pipeline``'s stages (no ``changed``)."""
         for section in self._sections:
             section.blockSignals(True)
@@ -157,7 +174,7 @@ class PipelineEditor(QWidget):
             section.reset()
             section.blockSignals(False)
 
-    def apply_to(self, pipeline: VideoPipeline) -> None:
+    def apply_to(self, pipeline: StepPipeline) -> None:
         """Write the edited steps back onto ``pipeline``'s stage fields.
 
         Disabled optional steps become ``None``. All steps are validated before

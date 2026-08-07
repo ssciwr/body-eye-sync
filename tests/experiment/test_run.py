@@ -13,14 +13,18 @@ from body_eye_sync.experiment.config import (
     GlassesVideoInput,
     ObjectTrackingStep,
     Pipeline,
+    SpeechPipeline,
+    TranscriptionStep,
     VideoPipeline,
 )
+from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.run import run_experiment
 from body_eye_sync.experiment.video import Video
 from body_eye_sync.pipeline.face_detection import FaceBox, FaceFrameResult
 from body_eye_sync.pipeline.body_pose import BodyPose, PoseFrameResult
 from body_eye_sync.pipeline.object_tracking import BoundingBox
+from body_eye_sync.pipeline.transcription import TranscriptSegment, Word
 
 
 def _frame(frame_idx, *boxes):
@@ -35,6 +39,10 @@ def _face_result(frame_idx, *faces):
         for tid, x1, y1, x2, y2, score in faces
     ]
     return FaceFrameResult(frame_idx, boxes)
+
+
+def _word(start, end, text):
+    return Word(start, end, text, 0.9)
 
 
 def _pose_result(frame_idx, *poses):
@@ -53,11 +61,29 @@ def stub_pipeline(monkeypatch):
     recording the video it ran on and the kwargs it was given, so tests can
     assert step args are forwarded correctly.
     """
-    calls: dict[str, list[dict]] = {"tracking": [], "face": [], "pose": []}
+    calls: dict[str, list[dict]] = {
+        "tracking": [],
+        "face": [],
+        "pose": [],
+        "transcribe": [],
+    }
 
     def fake_tracklets(video_path, **kwargs):
         calls["tracking"].append({"video": video_path, **kwargs})
         return iter([_frame(1, (0.0, 0.0, 5.0, 5.0, 1, 0.9))])
+
+    def fake_transcribe(audio_path, **kwargs):
+        calls["transcribe"].append({"audio": audio_path, **kwargs})
+        return iter(
+            [
+                TranscriptSegment(
+                    0.0,
+                    2.5,
+                    "hallo welt",
+                    [_word(0.0, 1.0, "hallo"), _word(1.5, 2.5, "welt")],
+                )
+            ]
+        )
 
     def fake_faces(video_path, boxes_by_frame, **kwargs):
         calls["face"].append({"video": video_path, "boxes": boxes_by_frame, **kwargs})
@@ -70,6 +96,7 @@ def stub_pipeline(monkeypatch):
     monkeypatch.setattr(run_module, "detect_tracklets", fake_tracklets)
     monkeypatch.setattr(run_module, "detect_faces", fake_faces)
     monkeypatch.setattr(run_module, "detect_body_poses", fake_poses)
+    monkeypatch.setattr(run_module, "transcribe", fake_transcribe)
     return calls
 
 
@@ -171,21 +198,107 @@ def test_each_video_type_runs_its_own_pipeline_block(tmp_path, stub_pipeline):
     assert [c["video"] for c in stub_pipeline["pose"]] == [glasses_file, room_file]
 
 
-def test_audio_inputs_are_skipped(tmp_path, stub_pipeline):
+def _audio_experiment(tmp_path, **pipeline_overrides):
     video_file = tmp_path / "clip.mp4"
     video_file.touch()
     audio_file = tmp_path / "p1.wav"
     audio_file.touch()
-    exp = _experiment(
+    return _experiment(
         video_file,
         audio=[AudioInput(id="mic1", path=audio_file, glasses_video="cam1")],
+        pipeline=Pipeline(
+            glasses_video=_full_pipeline(),
+            fixed_video=_full_pipeline(),
+            speech=SpeechPipeline(**pipeline_overrides),
+        ),
+    )
+
+
+def test_audio_input_is_transcribed(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path)
+
+    results = run_experiment(exp)
+
+    assert set(results) == {"cam1", "mic1"}
+    audio = Audio.from_directory(results["mic1"])
+    assert audio.speech.data["text"].tolist() == ["hallo welt"]
+    assert audio.speech.words["word"].tolist() == ["hallo", "welt"]
+    # A per-input transcript says what was said, and nothing about who said it.
+    assert "speaker" not in audio.speech.data.columns
+    assert "speaker" not in audio.speech.words.columns
+
+
+def test_speech_runs_over_a_video_own_audio_track(tmp_path, stub_pipeline, data_dir):
+    # A real camera file that carries sound, so the audio-stream probe is the
+    # one that decides here rather than a stub.
+    video_file = tmp_path / "clip.mp4"
+    video_file.write_bytes((data_dir / "three-people-talking.mp4").read_bytes())
+    exp = _experiment(
+        video_file,
+        pipeline=Pipeline(glasses_video=_full_pipeline(), speech=SpeechPipeline()),
     )
 
     results = run_experiment(exp)
 
-    # Audio has no pipeline stages yet, so it produces no output at all.
+    # The camera's transcript lands under the camera, beside its frame results.
+    video_dir = results["cam1"]
+    assert (video_dir / "results.parquet").exists()
+    assert (video_dir / "transcript_segments.parquet").exists()
+    video = Video.from_directory(video_dir)
+    assert video.speech.data["text"].tolist() == ["hallo welt"]
+    # Frame results and speech results stay in their own tables.
+    assert "text" not in video.data.columns
+    # The speech stages read the video file itself; there is no separate audio.
+    assert [c["audio"] for c in stub_pipeline["transcribe"]] == [video_file]
+
+
+def test_a_video_without_an_audio_track_skips_speech(tmp_path, stub_pipeline, data_dir):
+    video_file = tmp_path / "clip.mp4"
+    video_file.write_bytes((data_dir / "three-people.mp4").read_bytes())
+    exp = _experiment(
+        video_file,
+        pipeline=Pipeline(glasses_video=_full_pipeline(), speech=SpeechPipeline()),
+    )
+
+    results = run_experiment(exp)
+
+    # A silent camera is not an error: it just has no speech to find.
+    assert (results["cam1"] / "results.parquet").exists()
+    assert not (results["cam1"] / "transcript_segments.parquet").exists()
+    assert not stub_pipeline["transcribe"]
+
+
+def test_speech_pipeline_off_leaves_audio_inputs_unrun(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path)
+    exp.pipeline.speech = None
+    exp.audio[0].audio_path.unlink()
+
+    results = run_experiment(exp)
+
+    # The audio input has no results of its own without the speech stages.
     assert set(results) == {"cam1"}
+    assert not stub_pipeline["transcribe"]
     assert not (tmp_path / "outputs" / "mic1").exists()
+
+
+def test_run_forwards_audio_step_args(tmp_path, stub_pipeline):
+    exp = _audio_experiment(
+        tmp_path,
+        transcription=TranscriptionStep(model_name="tiny", language="de"),
+    )
+
+    run_experiment(exp)
+
+    assert stub_pipeline["transcribe"][0]["model_name"] == "tiny"
+    assert stub_pipeline["transcribe"][0]["language"] == "de"
+
+
+def test_missing_audio_file_raises(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path)
+    exp.audio[0].audio_path.unlink()
+
+    with pytest.raises(FileNotFoundError, match="mic1"):
+        run_experiment(exp)
 
 
 def test_existing_output_is_skipped_without_force(tmp_path, monkeypatch):
@@ -204,6 +317,19 @@ def test_existing_output_is_skipped_without_force(tmp_path, monkeypatch):
     results = run_experiment(exp)
     assert results["cam1"] == destination.parent
     assert destination.read_bytes() == b"stale"  # untouched
+
+
+def test_existing_audio_output_is_skipped_without_force(tmp_path, stub_pipeline):
+    exp = _audio_experiment(tmp_path)
+    run_experiment(exp)
+    assert len(stub_pipeline["transcribe"]) == 1
+
+    # An audio input names its results differently to a video, so the check has
+    # to be the input's own rather than a fixed filename.
+    results = run_experiment(_audio_experiment(tmp_path))
+
+    assert len(stub_pipeline["transcribe"]) == 1  # not run a second time
+    assert results["mic1"] == tmp_path / "outputs" / "mic1"
 
 
 def test_force_reruns_and_overwrites(tmp_path, stub_pipeline):

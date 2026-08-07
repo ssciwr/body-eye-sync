@@ -2,8 +2,8 @@
 
 The window is a set of tabs, one per stage of working with an experiment:
 **Input files**, **Alignment**, **Timing correction**, **Video processing**,
-**Audio processing**, **Post processing** and **Data export**. Audio processing
-and post processing are not implemented yet.
+**Audio processing**, **Speech post processing**, **Post processing** and
+**Data export**. Post processing does nothing so far.
 
 The title bar names the folder the open experiment is saved to, or says
 `[unsaved experiment]` until it has one.
@@ -84,7 +84,7 @@ which is where a recording that needs no correction already sits. The offsets
 are left alone: those say where each recording starts, which is the Alignment
 tab's answer rather than this one's.
 
-## Configure the Pipeline
+## Configure the Video Pipeline
 
 The **Video processing** tab shows one video input at a time, chosen with the
 selector above the viewer, with the pipeline editor beside it. Each video type
@@ -115,6 +115,71 @@ individual step:
 The viewer shows live overlays while a step runs. Use **Cancel** to stop a
 running step; partial results from the cancelled step are discarded.
 
+## Transcribe the Speech
+
+The **Audio processing** tab transcribes one recording at a time. The selector
+above the results lists every input that carries audio -- the separately recorded
+audio inputs, and the video inputs, which are transcribed from their own audio
+track. Unlike the video pipeline, there is a single set of speech settings that
+every input shares.
+
+- `model_name` picks the Whisper model. The default
+  `primeline/whisper-large-v3-turbo-german` is fine-tuned for highly accurate
+  German transcription. `primeline/whisper-large-v3-german` is the full-size
+  German alternative, while `large-v3` is the strongest general multilingual
+  choice. The primeLine checkpoints are converted once on first use and cached;
+  allow extra time and disk space for that first run.
+- `language` takes an ISO 639-1 code and defaults to `de`, matching the German
+  model. Change it when selecting a multilingual model for another language, or
+  leave it empty to detect the language from the first 30 seconds.
+- `device` defaults to `auto`, which uses a GPU when the machine has one, and can
+  be set to `cpu` or `cuda` to choose.
+- `vad_filter` skips silent stretches. It speeds the pass up and suppresses text
+  Whisper otherwise invents over silence, but it also drops quiet speech, so
+  switch it off when the recording has to catch people further from the
+  microphone.
+
+Transcript segments appear with their times and text as Whisper produces them.
+They are kept as results only when the run finishes successfully; cancelling or
+failing discards the provisional rows. Each input keeps its own completed
+transcript, so switching recordings shows that recording's.
+
+This says what was said, not who said it. Every microphone in the room hears
+everybody, so a single recording cannot tell the voices apart; speakers are
+worked out afterwards, by comparing all of the experiment's recordings with each
+other.
+
+## Work Out Who Said What
+
+The **Speech post processing** tab turns those transcripts into one table of
+speech turns for the whole experiment, with a speaker against each. It acts on
+the experiment rather than on one input, because that is the only way the
+question can be answered: a glasses microphone hears its own wearer far louder
+than anyone else in the room, so whoever's recording is loudest at a given
+moment is whoever is speaking -- and the speaker's name is simply whose
+recording won.
+
+**Attribute speech to speakers** measures how loud each glasses recording is,
+places them all on the experiment clock, and gives each transcribed segment to
+the wearer who was loudest for most of it. Whole segments are attributed rather
+than single words, so a sentence stays intact and its text always comes from one
+recording.
+
+The button stays disabled, saying why, until the experiment is ready for it:
+
+- at least two glasses recordings, since they are compared against each other,
+- each of them transcribed in **Audio processing**,
+- and all of them aligned, since attribution compares them moment by moment.
+
+The last one matters more than it looks. Attribution reads the recordings'
+offsets rather than measuring them, so recordings that were never aligned
+produce confident nonsense instead of an obvious failure.
+
+Turns may overlap: two people talking at once are two turns covering the same
+stretch of time. Speech nobody clearly owns is left out, and so is everyone who
+is not wearing glasses -- a participant without a headset has no recording of
+their own to win, so their speech is attributed to whichever wearer sat closest.
+
 ## Export a Combined Video
 
 The **Data export** tab lists every experiment input, initially checked. Checked
@@ -128,6 +193,14 @@ individual tracks. **Export combined video** asks where to write the MP4 and
 shows progress while it is rendered. Missing recording intervals become black
 video and silence.
 
+If the experiment has speech turns, they are written beside the video as it is
+exported, in a `.eaf` file named after it. Each speaker has a tier of readable
+speech turns and a dependent `<speaker>-words` tier carrying Whisper's precise
+word timings. ELAN offers the annotations when the video is opened, and the two
+line up without any further work because both are on the experiment clock. Run
+**Speech post processing** before exporting to have them; without any turns the
+video is written on its own.
+
 ## Save the Experiment
 
 Use **File -> Save**. The first save asks where to put the experiment and what
@@ -136,6 +209,8 @@ the folder you chose. Later saves go straight there. Body Eye Sync writes:
 
 - `experiment.yaml` with the experiment definition.
 - `outputs/<input-id>/results.parquet` for completed model outputs.
+- `outputs/speech_turns.parquet` for the experiment's speech turns, which belong
+  to no single input.
 - Optional companion embedding files when embeddings were collected.
 
 Saved experiments can be reopened in the GUI or processed through the CLI.

@@ -35,7 +35,7 @@ from body_eye_sync.experiment.config import (
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import GlassesVideo, Video
 from body_eye_sync.gui.tabs.base import BaseTab
-from body_eye_sync.gui.widgets import PipelineEditor, VideoViewer
+from body_eye_sync.gui.widgets import VIDEO_STEPS, PipelineEditor, VideoViewer
 from body_eye_sync.gui.workers import (
     BodyPoseWorker,
     FaceDetectionWorker,
@@ -102,7 +102,7 @@ class VideoProcessingTab(BaseTab):
 
         # The pipeline editor is the authority for the shown video's pipeline
         # block. The splitter lets the user give it as much room as they want.
-        self.pipeline_editor = PipelineEditor()
+        self.pipeline_editor = PipelineEditor(VIDEO_STEPS)
         self.pipeline_editor.changed.connect(self._on_pipeline_edited)
         self.pipeline_editor.run_requested.connect(self._start_step)
         self.pipeline_editor.run_all_requested.connect(self._start_run_all)

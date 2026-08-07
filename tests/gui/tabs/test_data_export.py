@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import pandas as pd
 import pytest
 from qtpy.QtCore import Qt
 
@@ -146,3 +149,84 @@ def test_save_name_gets_an_mp4_extension(qtbot, tab, tmp_path, monkeypatch):
     tab.export_button.click()
 
     assert seen == [chosen.with_suffix(".mp4")]
+
+
+def _turns() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "turn_id": [0, 1],
+            "start": [0.5, 1.2],
+            "end": [1.0, 1.8],
+            "speaker": ["room", "side"],
+            "source": ["room", "side"],
+            "source_segment_id": [0, 0],
+            "text": ["hallo", "wie geht es"],
+        }
+    )
+
+
+def _run_export(qtbot, tab, tmp_path, monkeypatch, output_name="chosen.mp4"):
+    """Run an export whose video step is stubbed out, and return the output path."""
+    output = tmp_path / output_name
+    monkeypatch.setattr(
+        "body_eye_sync.gui.tabs.data_export.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(output), "MP4 video (*.mp4)"),
+    )
+
+    def export(experiment, path, **kwargs):
+        Path(path).write_bytes(b"")
+        return VideoGridResult(
+            path=Path(path),
+            experiment_start=0.0,
+            experiment_end=2.0,
+            columns=1,
+            rows=1,
+            audio_tracks=("room",),
+        )
+
+    monkeypatch.setattr(
+        "body_eye_sync.gui.tabs.data_export.construct_video_grid", export
+    )
+    tab.export_button.click()
+    qtbot.waitUntil(lambda: not tab.is_busy(), timeout=10000)
+    return output
+
+
+def test_annotations_are_written_beside_the_video(qtbot, tab, tmp_path, monkeypatch):
+    tab.experiment.speech_turns.set_data(_turns())
+
+    output = _run_export(qtbot, tab, tmp_path, monkeypatch)
+
+    annotations = output.with_suffix(".eaf")
+    assert annotations.exists()
+    assert annotations.read_text().count("<TIER ") == 2
+    assert "wrote 2 annotations for 2 speaker(s)" in tab.result_label.text()
+
+
+def test_an_experiment_with_no_speech_has_nothing_to_annotate(
+    qtbot, tab, tmp_path, monkeypatch
+):
+    output = _run_export(qtbot, tab, tmp_path, monkeypatch)
+
+    # Nothing to write is not a failure, and not worth mentioning either.
+    assert output.exists()
+    assert not output.with_suffix(".eaf").exists()
+    assert tab.result_label.text() == f"Exported combined video to {output}"
+
+
+def test_a_failed_annotation_write_does_not_hide_the_video(
+    qtbot, tab, tmp_path, monkeypatch
+):
+    tab.experiment.speech_turns.set_data(_turns())
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("body_eye_sync.gui.tabs.data_export.export_elan", boom)
+
+    output = _run_export(qtbot, tab, tmp_path, monkeypatch)
+
+    # The video was written, so that is still reported, with the rest said too.
+    assert output.exists()
+    assert "Exported combined video" in tab.result_label.text()
+    assert "could not write speech annotations: disk full" in tab.result_label.text()

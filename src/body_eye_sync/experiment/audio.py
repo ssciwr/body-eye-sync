@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING
 
-import pandas as pd
-
+from body_eye_sync.experiment.speech import SEGMENTS_FILENAME, Speech
 from body_eye_sync.experiment.timeline import Timeline
 
 if TYPE_CHECKING:
@@ -25,9 +24,6 @@ class Audio(Timeline):
     recording captures, when it is aimed at one.
     """
 
-    #: This recording's results, its only output.
-    _RESULTS_FILENAME: ClassVar[str] = "results.parquet"
-
     def __init__(
         self,
         id: str = "",
@@ -41,7 +37,7 @@ class Audio(Timeline):
         self.id = id
         self.audio_path = Path(path) if path is not None else None
         self.glasses_video = glasses_video
-        self._data: pd.DataFrame | None = None
+        self.speech = Speech()
 
     @classmethod
     def from_config(
@@ -63,40 +59,22 @@ class Audio(Timeline):
     def path(self) -> Path | None:
         return self.audio_path
 
-    def set_data(self, data: pd.DataFrame) -> None:
-        """Replace all results with a complete data DataFrame."""
-        self._data = data
-
-    @property
-    def data(self) -> pd.DataFrame | None:
-        """All results for this recording, or ``None`` until there are any."""
-        return self._data
-
     def clear(self) -> None:
-        self._data = None
+        self.speech.clear()
 
     def has_data(self) -> bool:
-        """Whether this recording has completed results in memory."""
-        return self._data is not None
+        """Whether this recording has a transcript in memory."""
+        return self.speech.data is not None
 
     def has_results(self, directory: str | Path) -> bool:
         """Whether ``directory`` already holds results for a recording."""
-        return (Path(directory) / self._RESULTS_FILENAME).exists()
+        return (Path(directory) / SEGMENTS_FILENAME).exists()
 
     def save(self, directory: str | Path) -> None:
-        """Write these results into ``directory``, a file per kind of result.
-
-        Raises :class:`ValueError` if there is no completed data to write.
-        """
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-
-        if self._data is None:
+        """Write these results into ``directory``, a file per kind of result."""
+        if self.speech.data is None:
             raise ValueError("no data to write; run the pipeline first")
-        directory = Path(directory)
-        directory.mkdir(parents=True, exist_ok=True)
-        table = pa.Table.from_pandas(self._data, preserve_index=False)
-        pq.write_table(table, str(directory / self._RESULTS_FILENAME))
+        self.speech.save(directory)
 
     def load(self, directory: str | Path) -> None:
         """Load results written by :meth:`save`, if ``directory`` holds any.
@@ -104,10 +82,7 @@ class Audio(Timeline):
         Replaces any current results. A directory with nothing in it leaves
         this recording empty rather than failing.
         """
-        self.clear()
-        results_path = Path(directory) / self._RESULTS_FILENAME
-        if results_path.exists():
-            self.set_data(pd.read_parquet(results_path))
+        self.speech.load(directory)
 
     @classmethod
     def from_directory(cls, directory: str | Path) -> "Audio":
