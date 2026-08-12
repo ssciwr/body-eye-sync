@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from qtpy.QtCore import QSize, Signal
+from qtpy.QtCore import QSize, Qt, Signal
 from qtpy.QtWidgets import (
     QDoubleSpinBox,
     QGridLayout,
@@ -39,6 +39,7 @@ class _VideoAlignmentControls(QWidget):
         super().__init__()
         self.video = video
         self.viewer = viewer
+        self._preserve_timeline_on_offset_change = True
 
         self.down_button = QToolButton()
         self.down_button.setText("-")
@@ -78,12 +79,23 @@ class _VideoAlignmentControls(QWidget):
         layout.addWidget(self.set_button)
         layout.addWidget(self.time_label, stretch=1)
 
+    def set_offset(self, offset: float, *, preserve_timeline: bool = True) -> None:
+        self._preserve_timeline_on_offset_change = preserve_timeline
+        self.spin.setValue(offset)
+        self._preserve_timeline_on_offset_change = True
+
     def _offset_changed(self, value: float) -> None:
         offset = round(value, 3)
         if self.video.time_offset == offset:
             return
+        timeline_time = self.viewer.current_time_seconds + self.video.time_offset
         self.video.time_offset = offset
-        self.viewer.set_time_seconds(-offset, allow_negative=True)
+        video_time = (
+            timeline_time - offset
+            if self._preserve_timeline_on_offset_change
+            else -offset
+        )
+        self.viewer.set_time_seconds(video_time, allow_negative=True)
         self._refresh_time_label()
 
     def _refresh_time_label(self, _frame: int = 0) -> None:
@@ -131,9 +143,10 @@ class _VideoAlignmentCard(QWidget):
         return self.load_error is None
 
     def set_offset(self, offset: float) -> None:
-        self.controls.spin.setValue(offset)
+        self.controls.set_offset(offset, preserve_timeline=False)
 
     def set_offset_from_current_time(self) -> None:
+        self.controls.spin.interpretText()
         self.set_offset(round(-self.viewer.current_time_seconds, 3))
 
     def shutdown(self) -> None:
@@ -152,6 +165,10 @@ class AlignmentTab(BaseTab):
         self.play_all_button = QToolButton()
         self.play_all_button.setCheckable(True)
         self.play_all_button.setIconSize(QSize(24, 24))
+        self.play_all_button.setText("All")
+        self.play_all_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
         self.play_all_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
         )
