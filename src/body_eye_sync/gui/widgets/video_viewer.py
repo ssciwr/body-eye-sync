@@ -6,7 +6,7 @@ from math import isfinite
 
 import cv2
 from qtpy.QtCore import Qt, QTimer, QUrl, Signal, Slot
-from qtpy.QtGui import QBrush, QImage, QPainter, QPen, QPixmap
+from qtpy.QtGui import QBrush, QFont, QImage, QPainter, QPen, QPixmap
 from qtpy.QtMultimedia import QAudioOutput, QMediaPlayer
 from qtpy.QtWidgets import (
     QGraphicsEllipseItem,
@@ -22,6 +22,8 @@ from qtpy.QtWidgets import (
     QPushButton,
     QSlider,
     QSpinBox,
+    QStyle,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -68,6 +70,16 @@ class VideoViewer(QWidget):
         self._play_button.setCheckable(True)
         self._play_button.toggled.connect(self._on_play_toggled)
 
+        self._mute_button = QToolButton()
+        self._mute_button.setCheckable(True)
+        self._mute_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
+        )
+        self._mute_button.setToolTip(
+            "Mute audio"
+        )  # gets updated later as state changes.
+        self._mute_button.toggled.connect(self._on_mute_toggled)
+
         self._slider = QSlider(Qt.Orientation.Horizontal)
         self._slider.setEnabled(False)
         self._slider.valueChanged.connect(self.set_frame)
@@ -81,6 +93,7 @@ class VideoViewer(QWidget):
 
         controls = QHBoxLayout()
         controls.addWidget(self._play_button)
+        controls.addWidget(self._mute_button)
         controls.addWidget(self._slider, stretch=1)
         controls.addWidget(self._time_label)
         controls.addWidget(self._spinbox)
@@ -335,6 +348,7 @@ class VideoViewer(QWidget):
         self._pixmap_item.setPixmap(pixmap)
         self._scene.setSceneRect(0, 0, pixmap.width(), pixmap.height())
         text = QGraphicsSimpleTextItem(f"{self.current_time_seconds:.3f} s")
+        text.setFont(QFont(self.font().family(), 50))
         text.setBrush(QBrush(Qt.GlobalColor.white))
         text.setPos(
             (pixmap.width() - text.boundingRect().width()) / 2,
@@ -451,6 +465,17 @@ class VideoViewer(QWidget):
         else:
             self._timer.stop()
             self._media_player.pause()
+
+    def _on_mute_toggled(self, muted: bool) -> None:
+        self._audio_output.setMuted(muted)
+        icon = (
+            QStyle.StandardPixmap.SP_MediaVolumeMuted
+            if muted
+            else QStyle.StandardPixmap.SP_MediaVolume  # just looks empty, noticeably not activated vs the other one.
+        )
+        label = "Unmute audio" if muted else "Mute audio"
+        self._mute_button.setIcon(self.style().standardIcon(icon))
+        self._mute_button.setToolTip(label)
 
     def stop(self) -> None:
         self._timer.stop()

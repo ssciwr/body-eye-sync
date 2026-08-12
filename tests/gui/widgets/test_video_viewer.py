@@ -100,6 +100,25 @@ def test_video_viewer_frame_changed_signal_emits_index(viewer):
     assert seen == [2, 4]
 
 
+# Covers the embedded-audio mute toggle in the viewer controls.
+def test_video_viewer_mute_button_toggles_audio(viewer):
+    viewer._mute_button.click()
+    muted = (
+        viewer._mute_button.isChecked(),
+        viewer._audio_output.isMuted(),
+        viewer._mute_button.toolTip(),
+    )
+    viewer._mute_button.click()
+    unmuted = (
+        viewer._mute_button.isChecked(),
+        viewer._audio_output.isMuted(),
+        viewer._mute_button.toolTip(),
+    )
+    assert viewer._mute_button.isCheckable()
+    assert muted == (True, True, "Unmute audio")
+    assert unmuted == (False, False, "Mute audio")
+
+
 # Tests for the frame-time changes:
 # Verifies the viewer's media-time state used by audio playback and alignment.
 def test_video_viewer_tracks_current_media_time(viewer):
@@ -119,6 +138,7 @@ def test_video_viewer_can_show_negative_preroll_time(viewer, seconds):
     assert viewer.current_frame < 0
     assert viewer.current_time_seconds == pytest.approx(seconds)
     assert viewer._time_label.text() == f"{seconds:.3f} s"
+    assert viewer._overlay_items[0].font().pointSize() == 40
 
 
 def test_video_viewer_set_transport_enabled_toggles_controls(viewer):
