@@ -96,7 +96,7 @@ class VideoViewer(QWidget):
 
     def load(self, video: Video) -> None:
         """Display ``video``, showing its first frame and its boxes (if any)."""
-        self._stop()
+        self.stop()
         if self._capture is not None:
             self._capture.release()
 
@@ -123,7 +123,7 @@ class VideoViewer(QWidget):
 
     def clear(self) -> None:
         """Show nothing at all: no video, no frame and no overlays."""
-        self._stop()
+        self.stop()
         if self._capture is not None:
             self._capture.release()
             self._capture = None
@@ -203,7 +203,7 @@ class VideoViewer(QWidget):
     def enable_controls(self, enable: bool) -> None:
         """Enable or disable the play button and seek controls."""
         if not enable:
-            self._stop()
+            self.stop()
         has_frames = self._frame_count > 0
         self._play_button.setEnabled(enable and has_frames)
         self._slider.setEnabled(enable and has_frames)
@@ -452,7 +452,7 @@ class VideoViewer(QWidget):
             self._timer.stop()
             self._media_player.pause()
 
-    def _stop(self) -> None:
+    def stop(self) -> None:
         self._timer.stop()
         self._media_player.pause()
         self._play_button.setChecked(False)

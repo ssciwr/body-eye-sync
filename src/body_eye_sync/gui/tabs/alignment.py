@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from qtpy.QtCore import Signal
+from qtpy.QtCore import QSize, Signal
 from qtpy.QtWidgets import (
     QDoubleSpinBox,
     QGridLayout,
@@ -10,6 +10,7 @@ from qtpy.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -147,6 +148,15 @@ class AlignmentTab(BaseTab):
     def __init__(self, experiment: Experiment) -> None:
         super().__init__(experiment)
         self.video_cards: list[_VideoAlignmentCard] = []
+        self._play_all_primary: _VideoAlignmentCard | None = None
+        self.play_all_button = QToolButton()
+        self.play_all_button.setCheckable(True)
+        self.play_all_button.setIconSize(QSize(24, 24))
+        self.play_all_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
+        )
+        self.play_all_button.setToolTip("Play all videos")
+        self.play_all_button.toggled.connect(self._on_play_all_toggled)
         self.done_button = QPushButton("Finish alignment")
         self.done_button.setDefault(True)
         self.done_button.clicked.connect(self.finished.emit)
@@ -155,13 +165,15 @@ class AlignmentTab(BaseTab):
         self.grid = QGridLayout()
         layout.addLayout(self.grid, stretch=1)
         buttons = QHBoxLayout()
+        buttons.addWidget(self.play_all_button)
         buttons.addStretch(1)
         buttons.addWidget(self.done_button)
         layout.addLayout(buttons)
         self.refresh()
 
     def refresh(self) -> None:
-        """Render every video input, with at most three viewers per row."""
+        """Render every video input, with at most three videos per row."""
+        self._stop_play_all()
         for card in self.video_cards:
             self.grid.removeWidget(card)
             card.shutdown()
@@ -178,6 +190,10 @@ class AlignmentTab(BaseTab):
 
             self.video_cards.append(card)
             self.grid.addWidget(card, index // _VIDEOS_PER_ROW, index % _VIDEOS_PER_ROW)
+        self.play_all_button.setEnabled(
+            # Only enable Play-all when every card can be played to avoid possible half-playing or mid-play loading states
+            bool(self.video_cards) and all(card.loaded for card in self.video_cards)
+        )
 
     def _set_offset_from_current_frame(self, source: _VideoAlignmentCard) -> None:
         source.set_offset_from_current_time()
@@ -203,3 +219,61 @@ class AlignmentTab(BaseTab):
         for card in loaded_cards:
             if card is not source:
                 card.set_offset(source.video.time_offset)
+
+    def _on_play_all_toggled(self, play: bool) -> None:
+        """
+        Start or stop shared playback; all videos must be loaded.
+        """
+        user_desires_pause = not play
+        if user_desires_pause:
+            self._stop_play_all()  # Cleanly stop all
+            return
+        if not self.video_cards or not all(card.loaded for card in self.video_cards):
+            # To prevent unusual situations with some playing
+            return
+        primary = self.video_cards[0]
+        # This is separate because we only stop videos other than the "primary one"
+        for card in self.video_cards[1:]:
+            card.viewer.stop()
+        self._play_all_primary = primary
+        primary.viewer.frame_changed.connect(self._sync_play_all_viewers)
+        self.play_all_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause)
+        )
+        self.play_all_button.setToolTip("Pause all videos")
+        self._sync_play_all_viewers()
+        if self._play_all_primary is not None:
+            primary.viewer._play_button.setChecked(True)
+
+    def _sync_play_all_viewers(self, _frame: int = 0) -> None:
+        """
+        Use the primary videos current time seconds to icnrement the frames of the other videos.
+        """
+        primary = self._play_all_primary
+        if primary is None:
+            return
+        timeline_time = primary.viewer.current_time_seconds + primary.video.time_offset
+        for card in self.video_cards:
+            if card is not primary:
+                card.viewer.set_time_seconds(
+                    timeline_time - card.video.time_offset,
+                    allow_negative=True,
+                )
+        if primary.viewer.current_frame + 1 >= primary.viewer.frame_count:
+            self._stop_play_all()
+
+    def _stop_play_all(self) -> None:
+        if self._play_all_primary is not None:
+            self._play_all_primary.viewer.frame_changed.disconnect(
+                self._sync_play_all_viewers
+            )
+            self._play_all_primary = None
+        for card in self.video_cards:
+            card.viewer.stop()
+        self.play_all_button.blockSignals(True)
+        self.play_all_button.setChecked(False)
+        self.play_all_button.blockSignals(False)
+        self.play_all_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
+        )
+        self.play_all_button.setToolTip("Play all videos")
