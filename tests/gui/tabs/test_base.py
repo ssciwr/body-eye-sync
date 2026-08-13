@@ -86,6 +86,10 @@ def test_alignment_tab_renders_all_videos_without_overlays(qtbot, experiment, da
     assert all(not card.viewer.show_overlays for card in tab.video_cards)
     button_row = tab.layout().itemAt(1).layout()
     assert not hasattr(tab, "estimate_button")
+    assert button_row.indexOf(tab.reset_timeline_button) < button_row.indexOf(
+        tab.play_all_button
+    )
+    assert not hasattr(tab, "shared_timeline_label")
     assert button_row.indexOf(tab.done_button) >= 0
     assert tab.done_button.text() == "Finish alignment"
     assert tab.layout().itemAt(0).layout() is tab.grid
@@ -107,13 +111,28 @@ def test_alignment_tab_edits_video_time_offset(
     qtbot.addWidget(tab)
     controls = tab.video_cards[0].controls
     dialogs = []
-    monkeypatch.setattr(QMessageBox, "exec", lambda dialog: dialogs.append(dialog))
-    monkeypatch.setattr(QMessageBox, "clickedButton", lambda _dialog: None)
+    clicked = {}
+
+    def click_this_video(dialog):
+        dialogs.append(dialog)
+        clicked[id(dialog)] = next(
+            button for button in dialog.buttons() if button.text() == "This video"
+        )
+
+    monkeypatch.setattr(QMessageBox, "exec", click_this_video)
+    monkeypatch.setattr(
+        QMessageBox, "clickedButton", lambda dialog: clicked[id(dialog)]
+    )
 
     layout = controls.layout()
-    assert controls.set_button.text() == "Set"
-    assert controls.set_button.toolTip() == "Set as offset"
+    assert controls.set_button.text() == "Zero here"
+    assert controls.set_button.toolTip() == (
+        "Set offset so this frame is timeline zero"
+    )
+    assert not hasattr(controls, "time_label")
     assert controls.set_button.property("needsOffset") is False
+    assert not controls.set_button.isEnabled()
+    assert layout.itemAt(0).widget() is controls.down_button
     assert layout.indexOf(controls.up_button) < layout.indexOf(controls.set_button)
 
     tab.video_cards[1].viewer.set_frame(3)
@@ -123,38 +142,48 @@ def test_alignment_tab_edits_video_time_offset(
     assert tab.video_cards[0].viewer.current_frame < 0
     assert tab.video_cards[0].viewer.current_time_seconds == pytest.approx(-0.05)
     assert controls.set_button.property("needsOffset") is False
+    assert not controls.set_button.isEnabled()
 
     controls.down_button.click()
     assert experiment.glasses_videos[0].time_offset == pytest.approx(0.0)
     assert tab.video_cards[0].viewer.current_frame == 0
     assert controls.set_button.property("needsOffset") is False
+    assert not controls.set_button.isEnabled()
 
     controls.down_button.click()
     assert experiment.glasses_videos[0].time_offset == pytest.approx(-0.05)
     assert tab.video_cards[0].viewer.current_frame > 0
 
     tab.video_cards[0].viewer.set_frame(2)
+    expected_offset = -2 / tab.video_cards[0].viewer._fps
     assert controls.set_button.property("needsOffset") is True
+    assert controls.set_button.isEnabled()
     assert "#2563eb" in controls.set_button.styleSheet()
     controls.set_button.click()
     assert experiment.glasses_videos[0].time_offset == pytest.approx(
-        -2 / tab.video_cards[0].viewer._fps,
+        expected_offset,
         abs=0.001,
     )
     assert controls.set_button.property("needsOffset") is False
-    assert controls.set_button.styleSheet() == ""
+    assert not controls.set_button.isEnabled()
     assert controls.spin.singleStep() == pytest.approx(0.05)
     assert experiment.fixed_videos[0].time_offset == pytest.approx(0.0)
+    assert tab.video_cards[1].viewer.current_time_seconds == pytest.approx(0.0)
+    assert tab.video_cards[0].shared_timeline_label.text() == (
+        "Shared Timeline point 0.000 s"
+    )
+    assert tab.video_cards[1].shared_timeline_label.text() == (
+        "Shared Timeline point 0.000 s"
+    )
     assert dialogs[0].text() == (
-        "Do you want to set the offset for only this video, or for all videos?"
+        f"Apply offset {expected_offset:.3f} s to this video, or to all videos?"
     )
     assert dialogs[0].defaultButton().text() == "This video"
     assert len(changed) == 4
 
 
-def test_alignment_tab_can_set_other_videos_to_same_video_timestamp(
-    qtbot, data_dir, monkeypatch
-):
+def test_alignment_tab_applies_zero_offset_to_all_videos(qtbot, data_dir, monkeypatch):
+    # Check that
     path = data_dir / "three-people.mp4"
     experiment = Experiment(
         ExperimentConfig(
@@ -163,7 +192,7 @@ def test_alignment_tab_can_set_other_videos_to_same_video_timestamp(
                     id="cam1", path=path, gaze_path=path.with_suffix(".tsv")
                 )
             ],
-            fixed_videos=[FixedVideoInput(id="room1", path=path)],
+            fixed_videos=[FixedVideoInput(id="room1", path=path, time_offset=0.25)],
         )
     )
     clicked = {}
@@ -185,12 +214,96 @@ def test_alignment_tab_can_set_other_videos_to_same_video_timestamp(
     source_time = tab.video_cards[0].viewer.current_time_seconds
     tab.video_cards[0].controls.set_button.click()
     assert experiment.glasses_videos[0].time_offset == pytest.approx(
-        -2 / tab.video_cards[0].viewer._fps, abs=0.001
+        -source_time, abs=0.001
     )
-    assert experiment.fixed_videos[0].time_offset == pytest.approx(
-        experiment.glasses_videos[0].time_offset
-    )
+    assert experiment.fixed_videos[0].time_offset == pytest.approx(-source_time)
     assert tab.video_cards[1].viewer.current_time_seconds == pytest.approx(source_time)
+    assert tab.video_cards[0].shared_timeline_label.text() == (
+        "Shared Timeline point 0.000 s"
+    )
+    assert tab.video_cards[1].shared_timeline_label.text() == (
+        "Shared Timeline point 0.000 s"
+    )
+
+
+def test_alignment_zero_button_ignores_closed_dialog(
+    qtbot, experiment, data_dir, monkeypatch
+):
+    # closing the dialog does not apply the offset.
+    experiment.add_fixed_video(
+        FixedVideoInput(id="room1", path=data_dir / "three-people.mp4")
+    )
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    monkeypatch.setattr(QMessageBox, "exec", lambda _dialog: None)
+    monkeypatch.setattr(QMessageBox, "clickedButton", lambda _dialog: None)
+    card = tab.video_cards[0]
+    card.viewer.set_frame(2)
+    card.controls.set_button.click()
+    assert experiment.fixed_videos[0].time_offset == pytest.approx(0.0)
+    assert card.controls.set_button.property("needsOffset") is True
+
+
+"""
+Do we calculate the correct shared timeline based on moving 1 frame forward (1/25th of a second --> 0.04)
+AKA does the video_viewers set_frame(1) method of moving forward correctly align with the timeline / offset values?
+
+This uses three_people.mp4 added by Liam (But any 25 fps video will work with the below test - I chose to hardcode
+the fps of the video rather than extract/calculate it as that goes beyond the scope of this test.
+"""
+
+
+def test_alignment_tab_marks_negative_shared_timeline_preview(
+    qtbot, experiment, data_dir
+):
+
+    path = data_dir / "three-people.mp4"
+    experiment.add_fixed_video(
+        FixedVideoInput(id="room1", path=path, time_offset=-0.12)
+    )
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    tab.video_cards[0].viewer.set_frame(1)
+    card = tab.video_cards[0]
+    assert (
+        card.shared_timeline_label.text() == "Shared Timeline point -0.080 s"
+    )  # this is 0.12 - 0.04 (1 Frames duration)
+    assert card._pre_shared_overlay.isVisible()
+    assert not card._shared_start_marker.isHidden()
+    tab.video_cards[0].viewer.set_frame(
+        3
+    )  # now we have gone 3 frames forward or 0.04*3 = 0.12
+    assert card.shared_timeline_label.text() == "Shared Timeline point 0.000 s"
+    tab.video_cards[0].viewer.set_frame(
+        5
+    )  # now we have gone 3 frames forward or 0.04*3 = 0.12
+    assert (
+        card.shared_timeline_label.text() == "Shared Timeline point 0.080 s"
+    )  # the inversion of the above, 2 frames ahead.
+
+
+"""
+Note that here we do not ensure or test against that (A) the user cannot run "Set offset for all videos" if the
+offset is longer than any of the videos (Those will be clamped to their last frame).
+We also don't test that the final length for each video is > 0.
+"""
+
+
+def test_alignment_tab_play_all_uses_shared_timeline(qtbot, experiment, data_dir):
+    path = data_dir / "three-people.mp4"
+    experiment.add_glasses_video(
+        GlassesVideoInput(id="cam1", path=path, gaze_path=path.with_suffix(".tsv"))
+    )
+    experiment.add_fixed_video(FixedVideoInput(id="room1", path=path, time_offset=0.04))
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    tab.video_cards[0].viewer.set_frame(1)
+    tab.play_all_button.click()
+    assert tab.video_cards[1].viewer.current_time_seconds == pytest.approx(0.0)
+    tab.video_cards[0].viewer._advance()
+    tab.play_all_button.click()
+    assert tab.video_cards[0].viewer.current_time_seconds == pytest.approx(0.08)
+    assert tab.video_cards[1].viewer.current_time_seconds == pytest.approx(0.04)
 
 
 # Covers finishing video alignment without opening audio controls.
