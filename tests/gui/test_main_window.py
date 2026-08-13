@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QMessageBox
 
 from body_eye_sync.experiment.config import (
@@ -123,6 +124,46 @@ def test_finishing_alignment_saves_offsets_and_moves_to_video_tab(
     assert reloaded.glasses_videos[0].time_offset == pytest.approx(1.25)
     assert window.tabs.currentWidget() is window.tab(VideoProcessingTab)
     assert not window._dirty
+
+
+"""
+Covers rebuilt alignment cards keeping their committed offset view for the test scenario I encountered that had a bug
+Basically, Can you go from two inputs, make offset draft GUI changes (set video 2 to 30s, see "-30.000 s" on screen,
+and then go back to Input files and add another one
+And still see the correct time previews and offsets (still see "-30.000 s" even if not set).
+
+This test uses fixed videos just because it is easier to mock than providing a TSV for each corresponding glasses videos
+Videos are rendered identically with the video viewer so for this test of video_viewer/Alignment tab UI, there is no difference.
+
+"""
+
+
+def test_alignment_offset_preview_survives_adding_input(window, data_dir, qtbot):
+    path = data_dir / "three-people.mp4"
+    input_tab = window.tab(InputFilesTab)
+    input_tab.add_fixed_videos([path, path])
+    alignment_tab = window.tab(AlignmentTab)
+    window.tabs.setCurrentWidget(alignment_tab)
+    second_card = alignment_tab.video_cards[1]
+    spin = second_card.controls.spin
+    spin.setFocus()
+    spin.lineEdit().selectAll()
+    qtbot.keyClicks(spin.lineEdit(), "30")
+    qtbot.keyClick(
+        spin.lineEdit(), Qt.Key.Key_Tab
+    )  # todo: check this actully functions like tab lose focus (I think so)
+    spin.interpretText()
+    assert second_card.viewer._time_label.text() == "-30.000 s"  # so far, normal.
+
+    window.tabs.setCurrentWidget(input_tab)  # Now we disrupt/change the process
+    input_tab.add_fixed_videos([path])
+    window.tabs.setCurrentWidget(alignment_tab)
+    second_card = alignment_tab.video_cards[1]
+    assert second_card.controls.spin.value() == pytest.approx(30.0)
+    assert (
+        second_card.viewer._time_label.text() == "-30.000 s"
+    )  # this could become out of sync previously to the corresponding fix in this same commit
+    assert second_card.shared_timeline_label.text() == "Shared Timeline point 0.000 s"
 
 
 def test_open_experiment_hands_it_to_every_tab(window, data_dir, tmp_path):
