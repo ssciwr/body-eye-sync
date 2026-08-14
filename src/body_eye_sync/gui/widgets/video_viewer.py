@@ -185,11 +185,23 @@ class VideoViewer(QWidget):
         self, index: int, *, displayed_time_seconds: float | None = None
     ) -> None:
         """Display the frame at ``index`` (0-based), with its tracklet boxes."""
+        previous_time_seconds = self.current_time_seconds
         self._displayed_time_seconds = displayed_time_seconds
         if self._goto(index):
             self.refresh_overlays()
-        elif displayed_time_seconds is not None:
-            self._time_label.setText(f"{displayed_time_seconds:.3f} s")
+            return
+        current_time_seconds = self.current_time_seconds
+        if (
+            displayed_time_seconds is not None
+            or current_time_seconds != previous_time_seconds
+        ):
+            self._time_label.setText(f"{current_time_seconds:.3f} s")
+        if (
+            current_time_seconds != previous_time_seconds
+            and self._capture is not None
+            and self._frame_count > 0
+        ):
+            self.frame_changed.emit(self._current)
 
     # Display the frame closest to ``seconds`` in the video.
     def set_time_seconds(

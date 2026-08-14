@@ -100,6 +100,20 @@ def test_video_viewer_frame_changed_signal_emits_index(viewer):
     assert seen == [2, 4]
 
 
+def test_video_viewer_frame_changed_signal_emits_when_displayed_time_changes(viewer):
+    viewer.set_time_seconds(0.05, show_requested_time=True)
+    current_frame = viewer.current_frame
+    seen = []
+    viewer.frame_changed.connect(seen.append)
+
+    viewer.set_frame(current_frame)
+
+    assert viewer.current_time_seconds == pytest.approx(current_frame / viewer._fps)
+    assert viewer._time_label.text() == f"{current_frame / viewer._fps:.3f} s"
+    assert seen == [current_frame]
+
+
+
 # Covers the embedded-audio mute toggle in the viewer controls.
 def test_video_viewer_mute_button_toggles_audio(viewer):
     viewer._mute_button.click()
