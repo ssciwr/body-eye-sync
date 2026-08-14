@@ -20,6 +20,7 @@ from qtpy.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -111,10 +112,13 @@ class VideoProcessingTab(BaseTab):
         self.pipeline_editor.changed.connect(self._on_pipeline_edited)
         self.pipeline_editor.run_requested.connect(self._start_step)
         self.pipeline_editor.run_all_requested.connect(self._start_run_all)
+        self.pipeline_scroll_area = QScrollArea()
+        self.pipeline_scroll_area.setWidgetResizable(True)
+        self.pipeline_scroll_area.setWidget(self.pipeline_editor)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.addWidget(viewer_side)
-        self.splitter.addWidget(self.pipeline_editor)
+        self.splitter.addWidget(self.pipeline_scroll_area)
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 0)
 
