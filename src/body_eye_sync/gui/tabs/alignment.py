@@ -10,6 +10,8 @@ from qtpy.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QStyle,
     QToolButton,
     QVBoxLayout,
@@ -122,10 +124,12 @@ class _VideoAlignmentCard(QWidget):
 
     def __init__(self, video: Video) -> None:
         super().__init__()
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.video = video
         self.load_error: OSError | None = None
         self.viewer = VideoViewer()
         self.viewer.show_overlays = False
+        self.viewer.match_video_height()
         # This is here to clear viewer issues when .load goes wrong for some reason.
         try:
             self.viewer.load(video)
@@ -209,8 +213,13 @@ class AlignmentTab(BaseTab):
         self.done_button.clicked.connect(self.finished.emit)
 
         layout = QVBoxLayout(self)
-        self.grid = QGridLayout()
-        layout.addLayout(self.grid, stretch=1)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.video_grid_widget = QWidget()
+        self.grid = QGridLayout(self.video_grid_widget)
+        self.grid.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.scroll_area.setWidget(self.video_grid_widget)
+        layout.addWidget(self.scroll_area, stretch=1)
         buttons = QHBoxLayout()
         buttons.addWidget(self.reset_timeline_button)
         buttons.addWidget(self.play_all_button)
@@ -229,6 +238,9 @@ class AlignmentTab(BaseTab):
         self.video_cards = []
 
         videos = [*self.experiment.glasses_videos, *self.experiment.fixed_videos]
+        column_count = min(_VIDEOS_PER_ROW, max(1, len(videos)))
+        for column in range(_VIDEOS_PER_ROW):
+            self.grid.setColumnStretch(column, int(column < column_count))
         for index, video in enumerate(videos):
             card = _VideoAlignmentCard(video)
             if card.load_error is not None:

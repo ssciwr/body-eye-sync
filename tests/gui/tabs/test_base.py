@@ -92,7 +92,8 @@ def test_alignment_tab_renders_all_videos_without_overlays(qtbot, experiment, da
     assert not hasattr(tab, "shared_timeline_label")
     assert button_row.indexOf(tab.done_button) >= 0
     assert tab.done_button.text() == "Finish alignment"
-    assert tab.layout().itemAt(0).layout() is tab.grid
+    assert tab.layout().itemAt(0).widget() is tab.scroll_area
+    assert tab.scroll_area.widget() is tab.video_grid_widget
     assert tab.done_button.isDefault()
 
 
