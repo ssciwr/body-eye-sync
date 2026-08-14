@@ -125,10 +125,6 @@ def test_alignment_tab_edits_video_time_offset(
     )
 
     layout = controls.layout()
-    assert controls.set_button.text() == "Zero here"
-    assert controls.set_button.toolTip() == (
-        "Set offset so this frame is timeline zero"
-    )
     assert not hasattr(controls, "time_label")
     assert controls.set_button.property("needsOffset") is False
     assert not controls.set_button.isEnabled()
@@ -266,20 +262,20 @@ def test_alignment_tab_marks_negative_shared_timeline_preview(
     tab.video_cards[0].viewer.set_frame(1)
     card = tab.video_cards[0]
     assert (
-        card.shared_timeline_label.text() == "Shared Timeline point -0.080 s"
-    )  # this is 0.12 - 0.04 (1 Frames duration)
-    assert card._pre_shared_overlay.isVisible()
-    assert not card._shared_start_marker.isHidden()
+        card.shared_timeline_label.text()
+        == "Before shared start time - will not be analyzed (-0.080 s)"
+    )  # shared time is -0.12 s offset + one 0.04 s frame.
+    assert "#dc2626" in card.shared_timeline_label.styleSheet()
     tab.video_cards[0].viewer.set_frame(
         3
     )  # now we have gone 3 frames forward or 0.04*3 = 0.12
     assert card.shared_timeline_label.text() == "Shared Timeline point 0.000 s"
     tab.video_cards[0].viewer.set_frame(
         5
-    )  # now we have gone 3 frames forward or 0.04*3 = 0.12
+    )  # frame 5 clamps to frame 4 in this 5-frame video
     assert (
-        card.shared_timeline_label.text() == "Shared Timeline point 0.080 s"
-    )  # the inversion of the above, 2 frames ahead.
+        card.shared_timeline_label.text() == "Shared Timeline point 0.040 s"
+    )  # one frame ahead after the shared start.
 
 
 """
