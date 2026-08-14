@@ -24,17 +24,19 @@ from body_eye_sync.gui.widgets import VideoViewer
 _OFFSET_STEP = 0.05
 _VIDEOS_PER_ROW = 3
 _SET_BUTTON_ACTIVE_STYLE = (
-    "QToolButton { background-color: #2563eb; color: white; font-weight: 600; }"
+    "QToolButton { background-color: #2563eb; color: white; font-weight: 600; }"  # blue
 )
-_THIS_VIDEO_BUTTON_STYLE = (
-    "QPushButton { background-color: #16a34a; color: white; font-weight: 600; }"
-)
+_TIMELINE_LABEL_STYLE = "color: #9ca3af;"  # grey
+_PRE_SHARED_LABEL_STYLE = "color: #dc2626; font-weight: 600;"  # red
+_THIS_VIDEO_BUTTON_STYLE = "QPushButton { background-color: #16a34a; color: white; font-weight: 600; }"  # green
 _ALL_VIDEOS_BUTTON_STYLE = (
-    "QPushButton { background-color: #dc2626; color: white; font-weight: 600; }"
+    "QPushButton { background-color: #dc2626; color: white; font-weight: 600; }"  # red
 )
 
 
 class _VideoAlignmentControls(QWidget):
+    timeline_changed = Signal(float)
+
     def __init__(self, video: Video, viewer: VideoViewer) -> None:
         super().__init__()
         self.video = video
@@ -56,10 +58,8 @@ class _VideoAlignmentControls(QWidget):
         self.spin.setMaximumWidth(105)
         self.spin.setValue(video.time_offset)
         self.set_button = QToolButton()
-        self.set_button.setText("Set")
-        self.set_button.setToolTip("Set as offset")
-        self.time_label = QLabel()
-        self.time_label.setToolTip("Video time -> timeline time")
+        self.set_button.setText("Zero here")
+        self.set_button.setToolTip("Set current frame as shared time zero")
 
         self.down_button.clicked.connect(
             lambda _checked=False: self.spin.setValue(self.spin.value() - _OFFSET_STEP)
@@ -68,16 +68,17 @@ class _VideoAlignmentControls(QWidget):
             lambda _checked=False: self.spin.setValue(self.spin.value() + _OFFSET_STEP)
         )
         self.spin.valueChanged.connect(self._offset_changed)
-        self.viewer.frame_changed.connect(self._refresh_time_label)
-        self._refresh_time_label()
+        self.spin.lineEdit().textEdited.connect(self._refresh_timeline_state)
+        self.viewer.frame_changed.connect(self._refresh_timeline_state)
+        self._refresh_timeline_state()
 
         layout = QHBoxLayout(self)
-        layout.addWidget(QLabel("Offset"))
+        layout.setAlignment(Qt.AlignmentFlag.AlignRight)
+        layout.setSpacing(4)
         layout.addWidget(self.down_button)
         layout.addWidget(self.spin)
         layout.addWidget(self.up_button)
         layout.addWidget(self.set_button)
-        layout.addWidget(self.time_label, stretch=1)
 
     def set_offset(self, offset: float, *, preserve_timeline: bool = True) -> None:
         self._preserve_timeline_on_offset_change = preserve_timeline
@@ -88,23 +89,29 @@ class _VideoAlignmentControls(QWidget):
         offset = round(value, 3)
         if self.video.time_offset == offset:
             return
-        timeline_time = self.viewer.current_time_seconds + self.video.time_offset
+        shared_timeline_time = self.viewer.current_time_seconds + self.video.time_offset
         self.video.time_offset = offset
         video_time = (
-            timeline_time - offset
+            shared_timeline_time - offset
             if self._preserve_timeline_on_offset_change
             else -offset
         )
         self.viewer.set_time_seconds(video_time, allow_negative=True)
-        self._refresh_time_label()
+        self._refresh_timeline_state()
 
-    def _refresh_time_label(self, _frame: int = 0) -> None:
-        video_time = self.viewer.current_time_seconds
-        timeline_time = video_time + self.video.time_offset
-        self.time_label.setText(f"{video_time:.3f} -> {timeline_time:.3f} s")
-        active = round(timeline_time, 3) != 0.0
+    def _refresh_timeline_state(self, _frame: object = None) -> None:
+        shared_timeline_time = self.viewer.current_time_seconds + self.offset()
+        active = round(shared_timeline_time, 3) != 0.0
         self.set_button.setProperty("needsOffset", active)
+        self.set_button.setEnabled(active)
         self.set_button.setStyleSheet(_SET_BUTTON_ACTIVE_STYLE if active else "")
+        self.timeline_changed.emit(shared_timeline_time)
+
+    def offset(self) -> float:
+        try:
+            return round(float(self.spin.cleanText()), 3)
+        except ValueError:
+            return round(self.spin.value(), 3)
 
 
 class _VideoAlignmentCard(QWidget):
@@ -127,15 +134,26 @@ class _VideoAlignmentCard(QWidget):
             self.viewer.clear()
 
         self.controls = _VideoAlignmentControls(video, self.viewer)
+        self.shared_timeline_label = QLabel("Shared Timeline point 0.000 s")
+        self.shared_timeline_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.shared_timeline_label.setStyleSheet(_TIMELINE_LABEL_STYLE)
+        self.controls.timeline_changed.connect(self._show_shared_timeline_time)
+        # Reset to avoid out of sync errors (when user changes tab before confirming offset or adds new input)
+        if self.load_error is None:
+            self.viewer.set_time_seconds(-video.time_offset, allow_negative=True)
         if self.load_error is not None:
             self.setEnabled(False)
         self.controls.spin.valueChanged.connect(lambda _value: self.changed.emit())
         self.controls.set_button.clicked.connect(
             lambda _checked=False: self.set_requested.emit(self)
         )
+        self._show_shared_timeline_time(
+            self.viewer.current_time_seconds + self.controls.offset()
+        )
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.viewer)
+        layout.addWidget(self.shared_timeline_label)
         layout.addWidget(self.controls)
 
     @property
@@ -145,9 +163,15 @@ class _VideoAlignmentCard(QWidget):
     def set_offset(self, offset: float) -> None:
         self.controls.set_offset(offset, preserve_timeline=False)
 
-    def set_offset_from_current_time(self) -> None:
-        self.controls.spin.interpretText()
-        self.set_offset(round(-self.viewer.current_time_seconds, 3))
+    def _show_shared_timeline_time(self, seconds: float) -> None:
+        if seconds < 0.0:
+            self.shared_timeline_label.setText(
+                f"Before shared start time - will not be analyzed ({seconds:.3f} s)"
+            )
+            self.shared_timeline_label.setStyleSheet(_PRE_SHARED_LABEL_STYLE)
+            return
+        self.shared_timeline_label.setText(f"Shared Timeline point {seconds:.3f} s")
+        self.shared_timeline_label.setStyleSheet(_TIMELINE_LABEL_STYLE)
 
     def shutdown(self) -> None:
         self.viewer.clear()
@@ -162,6 +186,12 @@ class AlignmentTab(BaseTab):
         super().__init__(experiment)
         self.video_cards: list[_VideoAlignmentCard] = []
         self._play_all_primary: _VideoAlignmentCard | None = None
+        self.reset_timeline_button = QToolButton()
+        self.reset_timeline_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSkipBackward)
+        )
+        self.reset_timeline_button.setToolTip("Go to timeline zero")
+        self.reset_timeline_button.clicked.connect(self._go_to_timeline_zero)
         self.play_all_button = QToolButton()
         self.play_all_button.setCheckable(True)
         self.play_all_button.setIconSize(QSize(24, 24))
@@ -182,6 +212,7 @@ class AlignmentTab(BaseTab):
         self.grid = QGridLayout()
         layout.addLayout(self.grid, stretch=1)
         buttons = QHBoxLayout()
+        buttons.addWidget(self.reset_timeline_button)
         buttons.addWidget(self.play_all_button)
         buttons.addStretch(1)
         buttons.addWidget(self.done_button)
@@ -211,15 +242,16 @@ class AlignmentTab(BaseTab):
             # Only enable Play-all when every card can be played to avoid possible half-playing or mid-play loading states
             bool(self.video_cards) and all(card.loaded for card in self.video_cards)
         )
+        self.reset_timeline_button.setEnabled(
+            any(card.loaded for card in self.video_cards)
+        )
 
     def _set_offset_from_current_frame(self, source: _VideoAlignmentCard) -> None:
-        source.set_offset_from_current_time()
+        offset = round(-source.viewer.current_time_seconds, 3)
         loaded_cards = [card for card in self.video_cards if card.loaded]
         message = QMessageBox(self)
-        message.setWindowTitle("Set offset")
-        message.setText(
-            "Do you want to set the offset for only this video, or for all videos?"
-        )
+        message.setWindowTitle("Zero current frame")
+        message.setText(f"Apply offset {offset:.3f} s to this video, or to all videos?")
         message.setIcon(QMessageBox.Icon.Question)
         this_video_button = message.addButton(
             "This video", QMessageBox.ButtonRole.AcceptRole
@@ -231,11 +263,28 @@ class AlignmentTab(BaseTab):
         all_videos_button.setStyleSheet(_ALL_VIDEOS_BUTTON_STYLE)
         message.setDefaultButton(this_video_button)
         message.exec()
-        if message.clickedButton() is not all_videos_button:
+        clicked_button = message.clickedButton()
+        if clicked_button not in (this_video_button, all_videos_button):
+            return
+        self._stop_play_all()
+        if clicked_button is this_video_button:
+            source.set_offset(offset)
+            self._show_shared_timeline_time(0.0)
             return
         for card in loaded_cards:
-            if card is not source:
-                card.set_offset(source.video.time_offset)
+            card.set_offset(offset)
+
+    def _go_to_timeline_zero(self) -> None:
+        self._stop_play_all()
+        self._show_shared_timeline_time(0.0)
+
+    def _show_shared_timeline_time(self, seconds: float) -> None:
+        for card in self.video_cards:
+            if card.loaded:
+                card.viewer.set_time_seconds(
+                    seconds - card.video.time_offset, allow_negative=True
+                )
+                card.controls._refresh_timeline_state()
 
     def _on_play_all_toggled(self, play: bool) -> None:
         """
@@ -269,11 +318,13 @@ class AlignmentTab(BaseTab):
         primary = self._play_all_primary
         if primary is None:
             return
-        timeline_time = primary.viewer.current_time_seconds + primary.video.time_offset
+        shared_timeline_time = (
+            primary.viewer.current_time_seconds + primary.video.time_offset
+        )
         for card in self.video_cards:
             if card is not primary:
                 card.viewer.set_time_seconds(
-                    timeline_time - card.video.time_offset,
+                    shared_timeline_time - card.video.time_offset,
                     allow_negative=True,
                 )
         if primary.viewer.current_frame + 1 >= primary.viewer.frame_count:
