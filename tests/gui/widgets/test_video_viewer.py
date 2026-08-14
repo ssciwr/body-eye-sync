@@ -138,7 +138,7 @@ def test_video_viewer_can_show_negative_preroll_time(viewer, seconds):
     assert viewer.current_frame < 0
     assert viewer.current_time_seconds == pytest.approx(seconds)
     assert viewer._time_label.text() == f"{seconds:.3f} s"
-    assert viewer._overlay_items[0].font().pointSize() == 40
+    assert viewer._overlay_items[0].font().pointSize() == 50
 
 
 def test_video_viewer_set_transport_enabled_toggles_controls(viewer):
