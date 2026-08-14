@@ -135,6 +135,7 @@ And still see the correct time previews and offsets (still see "-30.000 s" even 
 This test uses fixed videos just because it is easier to mock than providing a TSV for each corresponding glasses videos
 Videos are rendered identically with the video viewer so for this test of video_viewer/Alignment tab UI, there is no difference.
 
+A visual red label appears to warn you when you are previewing frames in a given video viewer which is "before" the shared timeline start/first frame
 """
 
 
