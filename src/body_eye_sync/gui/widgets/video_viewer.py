@@ -20,6 +20,7 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QStyle,
@@ -33,6 +34,20 @@ from body_eye_sync.pipeline.object_tracking import BoundingBox, boxes_from_track
 from body_eye_sync.pipeline.body_pose import SKELETON, BodyPose
 from body_eye_sync.pipeline.face_detection import FaceBox
 from body_eye_sync.gui.utils import get_color
+
+_MINIMUM_VIDEO_VIEW_HEIGHT = 80
+
+
+class _VideoGraphicsView(QGraphicsView):
+    def __init__(self, scene: QGraphicsScene, parent: QWidget | None = None) -> None:
+        super().__init__(scene, parent)
+        self.allow_parent_scroll = False
+
+    def wheelEvent(self, event) -> None:
+        if self.allow_parent_scroll:
+            event.ignore()
+            return
+        super().wheelEvent(event)
 
 
 class VideoViewer(QWidget):
@@ -48,6 +63,8 @@ class VideoViewer(QWidget):
         self._fps = 25.0
         self._current = 0
         self._preroll_seconds: float | None = None
+        self._video_aspect_ratio: float | None = None
+        self._height_matches_video = False
         self._audio_output = QAudioOutput(self)
         self._media_player = QMediaPlayer(self)
         self._media_player.setAudioOutput(self._audio_output)
@@ -61,7 +78,7 @@ class VideoViewer(QWidget):
         self._scene = QGraphicsScene(self)
         self._pixmap_item = QGraphicsPixmapItem()
         self._scene.addItem(self._pixmap_item)
-        self._view = QGraphicsView(self._scene)
+        self._view = _VideoGraphicsView(self._scene)
         self._view.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self._view.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -107,6 +124,16 @@ class VideoViewer(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance)
 
+    def match_video_height(self) -> None:
+        self._height_matches_video = True
+        self._view.allow_parent_scroll = True
+        self._view.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._view.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.match_container_height_to_video_height()
+
     def load(self, video: Video) -> None:
         """Display ``video``, showing its first frame and its boxes (if any)."""
         self.stop()
@@ -132,7 +159,7 @@ class VideoViewer(QWidget):
         self._current = -1
         self._preroll_seconds = None
         self.set_frame(0)
-        self._fit()
+        self.fit_image_at_aspect_ratio()
 
     def clear(self) -> None:
         """Show nothing at all: no video, no frame and no overlays."""
@@ -143,6 +170,7 @@ class VideoViewer(QWidget):
         self._video = None
         self._current = -1
         self._preroll_seconds = None
+        self._video_aspect_ratio = None
         self._media_player.stop()
         self._media_player.setSource(QUrl())
         self._clear_overlays()
@@ -331,6 +359,10 @@ class VideoViewer(QWidget):
 
     def _show(self, frame) -> None:
         height, width = frame.shape[:2]
+        if width <= 0 or height <= 0:
+            raise ValueError("Video frame has no size")
+        self._video_aspect_ratio = width / height
+        self.match_container_height_to_video_height()
         image = QImage(
             frame.data, width, height, frame.strides[0], QImage.Format.Format_BGR888
         )
@@ -487,14 +519,32 @@ class VideoViewer(QWidget):
         self._media_player.setPosition(round(self.current_time_seconds * 1000))
         # see experiments.md for notes about when this audio could be out of sync with the same files video.
 
-    def _fit(self) -> None:
+    def fit_image_at_aspect_ratio(self) -> None:
         if not self._pixmap_item.pixmap().isNull():
             self._view.fitInView(self._pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
 
+    def match_container_height_to_video_height(self) -> None:
+        # Make sure the container height of the wideget matches the actual videos hegiht.
+        if not self._height_matches_video or self._video_aspect_ratio is None:
+            return
+        border_width = self._view.frameWidth()
+        view_width = self._view.width()
+        if view_width <= 0:
+            view_width = self.width()
+        video_width = max(1, view_width - 2 * border_width)
+        video_height = max(
+            _MINIMUM_VIDEO_VIEW_HEIGHT, round(video_width / self._video_aspect_ratio)
+        )
+        view_height = video_height + 2 * border_width
+        if self._view.height() != view_height:
+            self._view.setFixedHeight(view_height)
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._fit()
+        self.match_container_height_to_video_height()
+        self.fit_image_at_aspect_ratio()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        self._fit()
+        self.match_container_height_to_video_height()
+        self.fit_image_at_aspect_ratio()
