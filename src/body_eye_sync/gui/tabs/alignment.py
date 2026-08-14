@@ -60,8 +60,8 @@ class _VideoAlignmentControls(QWidget):
         self.spin.setMaximumWidth(105)
         self.spin.setValue(video.time_offset)
         self.set_button = QToolButton()
-        self.set_button.setText("Zero here")
-        self.set_button.setToolTip("Set current frame as shared time zero")
+        self.set_button.setText("Zero to frame")
+        self.set_button.setToolTip("previewed frame above")
 
         self.down_button.clicked.connect(
             lambda _checked=False: self.spin.setValue(self.spin.value() - _OFFSET_STEP)
@@ -91,18 +91,22 @@ class _VideoAlignmentControls(QWidget):
         offset = round(value, 3)
         if self.video.time_offset == offset:
             return
-        shared_timeline_time = self.viewer.current_time_seconds + self.video.time_offset
-        self.video.time_offset = offset
-        video_time = (
-            shared_timeline_time - offset
+        shared_timeline_time = (
+            self.viewer.current_time_seconds + self.video.time_offset
             if self._preserve_timeline_on_offset_change
-            else -offset
+            else 0.0
         )
-        self.viewer.set_time_seconds(video_time, allow_negative=True)
-        self._refresh_timeline_state()
+        self.video.time_offset = offset
+        video_time = shared_timeline_time - offset
+        self.viewer.set_time_seconds(
+            video_time, allow_negative=True, show_requested_time=True
+        )
+        self._show_timeline_state(shared_timeline_time)
 
     def _refresh_timeline_state(self, _frame: object = None) -> None:
-        shared_timeline_time = self.viewer.current_time_seconds + self.offset()
+        self._show_timeline_state(self.viewer.current_time_seconds + self.offset())
+
+    def _show_timeline_state(self, shared_timeline_time: float) -> None:
         active = round(shared_timeline_time, 3) != 0.0
         self.set_button.setProperty("needsOffset", active)
         self.set_button.setEnabled(active)
@@ -144,15 +148,15 @@ class _VideoAlignmentCard(QWidget):
         self.controls.timeline_changed.connect(self._show_shared_timeline_time)
         # Reset to avoid out of sync errors (when user changes tab before confirming offset or adds new input)
         if self.load_error is None:
-            self.viewer.set_time_seconds(-video.time_offset, allow_negative=True)
+            self.viewer.set_time_seconds(
+                -video.time_offset, allow_negative=True, show_requested_time=True
+            )
+            self.controls._show_timeline_state(0.0)
         if self.load_error is not None:
             self.setEnabled(False)
         self.controls.spin.valueChanged.connect(lambda _value: self.changed.emit())
         self.controls.set_button.clicked.connect(
             lambda _checked=False: self.set_requested.emit(self)
-        )
-        self._show_shared_timeline_time(
-            self.viewer.current_time_seconds + self.controls.offset()
         )
 
         layout = QVBoxLayout(self)
@@ -271,9 +275,11 @@ class AlignmentTab(BaseTab):
         all_videos_button = message.addButton(
             "All videos", QMessageBox.ButtonRole.DestructiveRole
         )
+        cancel_button = message.addButton(QMessageBox.StandardButton.Cancel)
         this_video_button.setStyleSheet(_THIS_VIDEO_BUTTON_STYLE)
         all_videos_button.setStyleSheet(_ALL_VIDEOS_BUTTON_STYLE)
         message.setDefaultButton(this_video_button)
+        message.setEscapeButton(cancel_button)
         message.exec()
         clicked_button = message.clickedButton()
         if clicked_button not in (this_video_button, all_videos_button):
@@ -294,9 +300,11 @@ class AlignmentTab(BaseTab):
         for card in self.video_cards:
             if card.loaded:
                 card.viewer.set_time_seconds(
-                    seconds - card.video.time_offset, allow_negative=True
+                    seconds - card.video.time_offset,
+                    allow_negative=True,
+                    show_requested_time=True,
                 )
-                card.controls._refresh_timeline_state()
+                card.controls._show_timeline_state(seconds)
 
     def _on_play_all_toggled(self, play: bool) -> None:
         """
@@ -338,7 +346,9 @@ class AlignmentTab(BaseTab):
                 card.viewer.set_time_seconds(
                     shared_timeline_time - card.video.time_offset,
                     allow_negative=True,
+                    show_requested_time=True,
                 )
+                card.controls._show_timeline_state(shared_timeline_time)
         if primary.viewer.current_frame + 1 >= primary.viewer.frame_count:
             self._stop_play_all()
 

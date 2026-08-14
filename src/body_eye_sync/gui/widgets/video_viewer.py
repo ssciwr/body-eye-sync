@@ -63,6 +63,7 @@ class VideoViewer(QWidget):
         self._fps = 25.0
         self._current = 0
         self._preroll_seconds: float | None = None
+        self._displayed_time_seconds: float | None = None
         self._video_aspect_ratio: float | None = None
         self._height_matches_video = False
         self._audio_output = QAudioOutput(self)
@@ -170,6 +171,7 @@ class VideoViewer(QWidget):
         self._video = None
         self._current = -1
         self._preroll_seconds = None
+        self._displayed_time_seconds = None
         self._video_aspect_ratio = None
         self._media_player.stop()
         self._media_player.setSource(QUrl())
@@ -179,13 +181,24 @@ class VideoViewer(QWidget):
         self._set_frame_count(0)
         self.enable_controls(False)
 
-    def set_frame(self, index: int) -> None:
+    def set_frame(
+        self, index: int, *, displayed_time_seconds: float | None = None
+    ) -> None:
         """Display the frame at ``index`` (0-based), with its tracklet boxes."""
+        self._displayed_time_seconds = displayed_time_seconds
         if self._goto(index):
             self.refresh_overlays()
+        elif displayed_time_seconds is not None:
+            self._time_label.setText(f"{displayed_time_seconds:.3f} s")
 
     # Display the frame closest to ``seconds`` in the video.
-    def set_time_seconds(self, seconds: float, *, allow_negative: bool = False) -> None:
+    def set_time_seconds(
+        self,
+        seconds: float,
+        *,
+        allow_negative: bool = False,
+        show_requested_time: bool = False,
+    ) -> None:
         if self._fps <= 0.0:
             self.set_frame(0)
             return
@@ -193,7 +206,12 @@ class VideoViewer(QWidget):
             self._show_preroll_frame(seconds)
             return
         frame = round(seconds * self._fps)
-        self.set_frame(max(0, frame))
+        if show_requested_time and frame / self._fps < seconds:
+            frame += 1
+        self.set_frame(
+            max(0, frame),
+            displayed_time_seconds=seconds if show_requested_time else None,
+        )
 
     @Slot(object)
     def show_live_frame(self, frame) -> None:
@@ -280,6 +298,8 @@ class VideoViewer(QWidget):
     def current_time_seconds(self) -> float:
         if self._preroll_seconds is not None:
             return self._preroll_seconds
+        if self._displayed_time_seconds is not None:
+            return self._displayed_time_seconds
         if self._frame_count == 0 or self._fps <= 0.0:
             return 0.0
         return self._current / self._fps
