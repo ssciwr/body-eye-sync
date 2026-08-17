@@ -37,6 +37,7 @@ def viewer(qtbot, data_dir):
     widget = VideoViewer()
     qtbot.addWidget(widget)
     widget.load(_video(data_dir))
+    qtbot.waitUntil(widget._media_player.isSeekable)
     return widget
 
 
