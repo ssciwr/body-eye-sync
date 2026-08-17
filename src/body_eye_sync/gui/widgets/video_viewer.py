@@ -36,6 +36,8 @@ from body_eye_sync.pipeline.face_detection import FaceBox
 from body_eye_sync.gui.utils import get_color
 
 _MINIMUM_VIDEO_VIEW_HEIGHT = 80
+_PLAYBACK_POLL_INTERVAL_MS = 10
+_MAX_SEQUENTIAL_FORWARD_FRAMES = 10
 
 
 class _VideoGraphicsView(QGraphicsView):
@@ -123,15 +125,14 @@ class VideoViewer(QWidget):
 
         # playback timer
         self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._advance)
 
     def match_video_height(self) -> None:
         self._height_matches_video = True
         self._view.allow_parent_scroll = True
         self._view.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        self._view.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
+        self._view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.match_container_height_to_video_height()
 
@@ -149,7 +150,7 @@ class VideoViewer(QWidget):
         self._capture = capture
         self._media_player.setSource(QUrl.fromLocalFile(str(video.video_path)))
         self._fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
-        self._timer.setInterval(int(1000 / self._fps))
+        self._timer.setInterval(max(1, round(1000 / self._fps)))
 
         count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
         for control in (self._slider, self._spinbox):
@@ -182,12 +183,16 @@ class VideoViewer(QWidget):
         self.enable_controls(False)
 
     def set_frame(
-        self, index: int, *, displayed_time_seconds: float | None = None
+        self,
+        index: int,
+        *,
+        displayed_time_seconds: float | None = None,
+        sync_audio: bool = True,
     ) -> None:
-        """Display the frame at ``index`` (0-based), with its tracklet boxes."""
+        """Display frame ``index`` and optionally seek embedded audio to it."""
         previous_time_seconds = self.current_time_seconds
         self._displayed_time_seconds = displayed_time_seconds
-        if self._goto(index):
+        if self._goto(index, sync_audio=sync_audio):
             self.refresh_overlays()
             return
         current_time_seconds = self.current_time_seconds
@@ -196,6 +201,8 @@ class VideoViewer(QWidget):
             or current_time_seconds != previous_time_seconds
         ):
             self._time_label.setText(f"{current_time_seconds:.3f} s")
+        if sync_audio and current_time_seconds != previous_time_seconds:
+            self._sync_audio_to_frame()
         if (
             current_time_seconds != previous_time_seconds
             and self._capture is not None
@@ -210,19 +217,24 @@ class VideoViewer(QWidget):
         *,
         allow_negative: bool = False,
         show_requested_time: bool = False,
+        sync_audio: bool = True,
     ) -> None:
+        """Display the frame selected by ``seconds`` in the source video."""
         if self._fps <= 0.0:
-            self.set_frame(0)
+            self.set_frame(0, sync_audio=sync_audio)
             return
         if allow_negative and seconds < 0.0:
             self._show_preroll_frame(seconds)
             return
-        frame = round(seconds * self._fps)
-        if show_requested_time and frame / self._fps < seconds:
-            frame += 1
+        frame = (
+            int(seconds * self._fps)
+            if show_requested_time
+            else round(seconds * self._fps)
+        )
         self.set_frame(
             max(0, frame),
             displayed_time_seconds=seconds if show_requested_time else None,
+            sync_audio=sync_audio,
         )
 
     @Slot(object)
@@ -316,7 +328,21 @@ class VideoViewer(QWidget):
             return 0.0
         return self._current / self._fps
 
-    def _goto(self, index: int) -> bool:
+    @property
+    def current_media_time_seconds(self) -> float:
+        """Timestamp of the displayed video frame in the source media."""
+        if self._frame_count == 0 or self._fps <= 0.0 or self._current < 0:
+            return 0.0
+        return self._current / self._fps
+
+    @property
+    def playback_time_seconds(self) -> float:
+        """Exact source-media time represented by the playback clock."""
+        if self._timer.isActive() and self._preroll_seconds is None:
+            return self._media_position_seconds()
+        return self.current_time_seconds
+
+    def _goto(self, index: int, *, sync_audio: bool = True) -> bool:
         """Show the video image at ``index`` and sync controls.
 
         Returns ``True`` if the displayed frame actually changed, so callers can
@@ -325,7 +351,6 @@ class VideoViewer(QWidget):
         if self._capture is None or self._frame_count == 0:
             return False
         index = max(0, min(int(index), self._frame_count - 1))
-        sequential_playback = self._timer.isActive() and index == self._current + 1
         if index == self._current:
             return False
 
@@ -343,7 +368,7 @@ class VideoViewer(QWidget):
             control.setValue(index)
             control.blockSignals(False)
         self._time_label.setText(f"{self.current_time_seconds:.3f} s")
-        if not sequential_playback:
+        if sync_audio:
             self._sync_audio_to_frame()
 
         self.frame_changed.emit(index)
@@ -369,24 +394,36 @@ class VideoViewer(QWidget):
     def _read(self, index: int):
         """Read the frame at ``index``, stepping back to the last decodable one.
 
+        Small forward jumps decode and discard the intervening frames because
+        that is substantially cheaper than seeking in compressed video. Larger
+        jumps and all backward moves seek directly.
+
         ``CAP_PROP_FRAME_COUNT`` over-estimates for many codecs, so the trailing
         frames it promises may not actually decode. When a read fails we treat
         everything from ``index`` on as non-existent, shrink the frame count to
         match, and retry the frame before it. Returns
         ``(actual_index, frame)``, or ``(-1, None)`` if nothing decodes.
         """
-        # The capture cursor sits at _current + 1 after the last read, so only
-        # seek (expensive) when the requested frame isn't the next one.
-        sequential = index == self._current + 1
+        forward_frames = index - self._current
+        if 1 <= forward_frames <= _MAX_SEQUENTIAL_FORWARD_FRAMES:
+            last_index = -1
+            last_frame = None
+            for candidate in range(self._current + 1, index + 1):
+                ok, frame = self._capture.read()
+                if not ok:
+                    self._set_frame_count(candidate)
+                    break
+                last_index = candidate
+                last_frame = frame
+            return last_index, last_frame
+
         while index >= 0:
-            if not sequential:
-                self._capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+            self._capture.set(cv2.CAP_PROP_POS_FRAMES, index)
             ok, frame = self._capture.read()
             if ok:
                 return index, frame
             self._set_frame_count(index)
             index -= 1
-            sequential = False
         return -1, None
 
     def _show(self, frame) -> None:
@@ -511,20 +548,37 @@ class VideoViewer(QWidget):
                 return
             self.set_frame(0)
             if self._play_button.isChecked():
-                self._sync_audio_to_frame()
-                self._media_player.play()
+                self._start_media_playback()
             return
-        if self._current + 1 >= self._frame_count:
+        target_frame = self._media_frame_index()
+        if target_frame >= self._frame_count:
+            if self._current < self._frame_count - 1:
+                self.set_frame(self._frame_count - 1, sync_audio=False)
             self._play_button.setChecked(False)
             return
-        self.set_frame(self._current + 1)
+        if target_frame <= self._current:
+            return
+        self.set_frame(target_frame, sync_audio=False)
+
+    def _media_frame_index(self) -> int:
+        """Return the frame containing the media player's current position."""
+        return max(0, int(self._media_position_seconds() * self._fps))
+
+    def _media_position_seconds(self) -> float:
+        return self._media_player.position() / 1000
+
+    def _start_media_playback(self) -> None:
+        self._timer.setInterval(_PLAYBACK_POLL_INTERVAL_MS)
+        self._sync_audio_to_frame()
+        self._media_player.play()
 
     def _on_play_toggled(self, playing: bool) -> None:
         self._play_button.setText("Pause" if playing else "Play")
         if playing and self._capture is not None:
             if self._current >= 0:
-                self._sync_audio_to_frame()
-                self._media_player.play()
+                self._start_media_playback()
+            else:
+                self._timer.setInterval(max(1, round(1000 / self._fps)))
             self._timer.start()
         else:
             self._timer.stop()
@@ -546,7 +600,7 @@ class VideoViewer(QWidget):
         self._media_player.pause()
         self._play_button.setChecked(False)
 
-    # Keep embedded video audio at the same timestamp as the frame viewer.
+    # Seek to an exact requested time when present, otherwise to the frame time.
     def _sync_audio_to_frame(self) -> None:
         self._media_player.setPosition(round(self.current_time_seconds * 1000))
         # see experiments.md for notes about when this audio could be out of sync with the same files video.

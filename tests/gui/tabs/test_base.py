@@ -292,7 +292,9 @@ We also don't test that the final length for each video is > 0.
 """
 
 
-def test_alignment_tab_play_all_uses_shared_timeline(qtbot, experiment, data_dir):
+def test_alignment_tab_play_all_uses_shared_timeline(
+    qtbot, experiment, data_dir, monkeypatch
+):
     path = data_dir / "three-people.mp4"
     experiment.add_glasses_video(
         GlassesVideoInput(id="cam1", path=path, gaze_path=path.with_suffix(".tsv"))
@@ -301,12 +303,47 @@ def test_alignment_tab_play_all_uses_shared_timeline(qtbot, experiment, data_dir
     tab = AlignmentTab(experiment)
     qtbot.addWidget(tab)
     tab.video_cards[0].viewer.set_frame(1)
+    secondary_audio_seeks = []
+    monkeypatch.setattr(
+        tab.video_cards[1].viewer,
+        "_sync_audio_to_frame",
+        lambda: secondary_audio_seeks.append(True),
+    )
     tab.play_all_button.click()
     assert tab.video_cards[1].viewer.current_time_seconds == pytest.approx(0.0)
+    monkeypatch.setattr(
+        tab.video_cards[0].viewer, "_media_position_seconds", lambda: 0.08
+    )
     tab.video_cards[0].viewer._advance()
     tab.play_all_button.click()
     assert tab.video_cards[0].viewer.current_time_seconds == pytest.approx(0.08)
     assert tab.video_cards[1].viewer.current_time_seconds == pytest.approx(0.04)
+    assert secondary_audio_seeks == []
+
+
+def test_alignment_tab_play_all_preserves_exact_start_across_frame_rates(
+    qtbot, experiment, data_dir
+):
+    path = data_dir / "three-people.mp4"
+    experiment.add_fixed_video(FixedVideoInput(id="room1", path=path))
+    experiment.add_fixed_video(FixedVideoInput(id="room2", path=path))
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    primary = tab.video_cards[0].viewer
+    secondary = tab.video_cards[1].viewer
+    secondary._fps = 10.0
+    primary.set_time_seconds(0.05, show_requested_time=True)
+
+    tab.play_all_button.click()
+
+    assert primary.current_time_seconds == pytest.approx(0.05)
+    assert primary.current_media_time_seconds == pytest.approx(0.04)
+    assert secondary.current_time_seconds == pytest.approx(0.05)
+    assert secondary.current_media_time_seconds == pytest.approx(0.0)
+    assert tab.video_cards[1].shared_timeline_label.text() == (
+        "Shared Timeline point 0.050 s"
+    )
+    tab.play_all_button.click()
 
 
 # Covers finishing video alignment without opening audio controls.

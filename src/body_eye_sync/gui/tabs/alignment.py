@@ -347,7 +347,7 @@ class AlignmentTab(BaseTab):
         if primary is None:
             return
         shared_timeline_time = (
-            primary.viewer.current_time_seconds + primary.video.time_offset
+            primary.viewer.playback_time_seconds + primary.video.time_offset
         )
         for card in self.video_cards:
             if card is not primary:
@@ -355,6 +355,7 @@ class AlignmentTab(BaseTab):
                     shared_timeline_time - card.video.time_offset,
                     allow_negative=True,
                     show_requested_time=True,
+                    sync_audio=False,
                 )
                 card.controls._show_timeline_state(shared_timeline_time)
         if primary.viewer.current_frame + 1 >= primary.viewer.frame_count:
