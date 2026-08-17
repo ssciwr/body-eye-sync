@@ -405,7 +405,7 @@ class VideoViewer(QWidget):
         ``(actual_index, frame)``, or ``(-1, None)`` if nothing decodes.
         """
         forward_frames = index - self._current
-        if 1 <= forward_frames <= _MAX_SEQUENTIAL_FORWARD_FRAMES:
+        if self._current >= 0 and 1 <= forward_frames <= _MAX_SEQUENTIAL_FORWARD_FRAMES:
             last_index = -1
             last_frame = None
             for candidate in range(self._current + 1, index + 1):
