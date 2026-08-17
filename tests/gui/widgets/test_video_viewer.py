@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -36,6 +37,7 @@ def viewer(qtbot, data_dir):
     widget = VideoViewer()
     qtbot.addWidget(widget)
     widget.load(_video(data_dir))
+    qtbot.waitUntil(widget._media_player.isSeekable)
     return widget
 
 
@@ -85,10 +87,61 @@ def test_video_viewer_corrects_overestimated_frame_count(viewer):
     assert viewer.frame_count == 5
 
 
-def test_video_viewer_advance_steps_one_frame(viewer):
+def test_video_viewer_decodes_through_small_forward_jump(viewer, monkeypatch):
+    frames = iter(["frame 1", "frame 2", "frame 3"])
+    reads = []
+    seeks = []
+
+    def read():
+        reads.append(True)
+        return True, next(frames)
+
+    capture = SimpleNamespace(
+        read=read,
+        set=lambda _property, index: seeks.append(index),
+    )
+    monkeypatch.setattr(viewer, "_capture", capture)
+    viewer._current = 0
+
+    index, frame = viewer._read(3)
+
+    assert (index, frame) == (3, "frame 3")
+    assert len(reads) == 3
+    assert seeks == []
+
+
+def test_video_viewer_seeks_for_large_forward_jump(viewer, monkeypatch):
+    seeks = []
+    capture = SimpleNamespace(
+        read=lambda: (True, "frame 12"),
+        set=lambda _property, index: seeks.append(index),
+    )
+    monkeypatch.setattr(viewer, "_capture", capture)
+    viewer._current = 0
+
+    index, frame = viewer._read(12)
+
+    assert (index, frame) == (12, "frame 12")
+    assert seeks == [12]
+
+
+def test_video_viewer_advance_uses_media_clock(viewer, monkeypatch):
     viewer.set_frame(0)
+    monkeypatch.setattr(viewer, "_media_frame_index", lambda: 2)
     viewer._advance()
-    assert viewer.current_frame == 1
+    assert viewer.current_frame == 2
+
+
+def test_video_viewer_advance_does_not_repeat_current_frame(viewer, monkeypatch):
+    viewer.set_frame(2)
+    seen = []
+    viewer.frame_changed.connect(seen.append)
+    monkeypatch.setattr(viewer, "_media_frame_index", lambda: 2)
+
+    viewer._advance()
+
+    assert viewer.current_frame == 2
+    assert seen == []
 
 
 def test_video_viewer_frame_changed_signal_emits_index(viewer):
@@ -97,6 +150,78 @@ def test_video_viewer_frame_changed_signal_emits_index(viewer):
     viewer.set_frame(2)
     viewer.set_frame(4)
     assert seen == [2, 4]
+
+
+def test_video_viewer_frame_changed_signal_emits_when_displayed_time_changes(viewer):
+    viewer.set_time_seconds(0.05, show_requested_time=True)
+    current_frame = viewer.current_frame
+    seen = []
+    viewer.frame_changed.connect(seen.append)
+
+    viewer.set_frame(current_frame)
+
+    assert viewer.current_time_seconds == pytest.approx(current_frame / viewer._fps)
+    assert viewer._time_label.text() == f"{current_frame / viewer._fps:.3f} s"
+    assert seen == [current_frame]
+
+
+# Covers the embedded-audio mute toggle in the viewer controls.
+def test_video_viewer_mute_button_toggles_audio(viewer):
+    viewer._mute_button.click()
+    muted = (
+        viewer._mute_button.isChecked(),
+        viewer._audio_output.isMuted(),
+        viewer._mute_button.toolTip(),
+    )
+    viewer._mute_button.click()
+    unmuted = (
+        viewer._mute_button.isChecked(),
+        viewer._audio_output.isMuted(),
+        viewer._mute_button.toolTip(),
+    )
+    assert viewer._mute_button.isCheckable()
+    assert muted == (True, True, "Unmute audio")
+    assert unmuted == (False, False, "Mute audio")
+
+
+# Tests for the frame-time changes:
+# Verifies the viewer's media-time state used by audio playback and alignment.
+def test_video_viewer_tracks_current_media_time(viewer):
+    viewer.set_frame(2)
+
+    assert viewer.current_time_seconds == pytest.approx(2 / viewer._fps)
+    assert viewer._time_label.text().endswith(" s")
+    assert Path(viewer._media_player.source().toLocalFile()) == viewer.video.video_path
+
+
+def test_requested_time_selects_containing_frame_and_seeks_exactly(viewer):
+    viewer.set_time_seconds(0.05, show_requested_time=True)
+
+    assert viewer.current_frame == 1
+    assert viewer.current_time_seconds == pytest.approx(0.05)
+    assert viewer.current_media_time_seconds == pytest.approx(0.04)
+    assert viewer._media_player.position() == 50
+
+
+def test_requested_time_reseeks_within_same_frame(viewer):
+    viewer.set_time_seconds(0.05, show_requested_time=True)
+    viewer.set_time_seconds(0.06, show_requested_time=True)
+
+    assert viewer.current_frame == 1
+    assert viewer.current_time_seconds == pytest.approx(0.06)
+    assert viewer._media_player.position() == 60
+
+
+# Positive experiment offsets display as negative pre-roll in the viewer for purposes of aligning the video and
+# understanding what is going on while aligning other videos
+@pytest.mark.parametrize("seconds", [-0.05, -0.25, -0.3])
+def test_video_viewer_can_show_negative_preroll_time(viewer, seconds):
+    viewer.set_time_seconds(seconds, allow_negative=True)
+
+    assert viewer.current_frame < 0
+    assert viewer.current_time_seconds == pytest.approx(seconds)
+    assert viewer._time_label.text() == f"{seconds:.3f} s"
+    assert viewer._overlay_items[0].font().pointSize() == 50
 
 
 def test_video_viewer_set_transport_enabled_toggles_controls(viewer):
@@ -148,3 +273,16 @@ def test_video_viewer_draws_boxes_from_video(qtbot, data_dir):
 
     viewer.set_frame(0)
     assert len(viewer._overlay_items) == 2
+
+
+def test_video_viewer_can_hide_stored_and_live_overlays(qtbot, data_dir):
+    viewer = VideoViewer()
+    viewer.show_overlays = False
+    qtbot.addWidget(viewer)
+    viewer.load(_video(data_dir, _one_box_on_first_frame()))
+    viewer.show_live_frame(
+        SimpleNamespace(frame_idx=2, tracks=np.array([[0, 0, 10, 10, 1, 0.9, 0, 0]]))
+    )
+    assert viewer.current_frame == 1
+    assert not viewer.show_overlays
+    assert viewer._overlay_items == []

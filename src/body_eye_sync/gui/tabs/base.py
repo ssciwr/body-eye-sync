@@ -24,6 +24,7 @@ class BaseTab(QWidget):
     status_message = Signal(str)
     experiment_changed = Signal()
     busy_changed = Signal(bool)
+    finished = Signal()
 
     def __init__(self, experiment: Experiment) -> None:
         super().__init__()

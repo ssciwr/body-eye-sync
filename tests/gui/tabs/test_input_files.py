@@ -79,12 +79,17 @@ def test_a_section_per_input_type_starting_with_glasses_videos(tab):
 
 def test_an_empty_section_says_so_instead_of_showing_a_table(tab):
     section = tab.glasses_section
+    layout = section.layout()
+    actions = layout.itemAt(2).layout()
 
     assert section.table.rowCount() == 0
     assert not section.table.isVisibleTo(section)
     assert section.empty_label.isVisibleTo(section)
     assert section.empty_label.text() == "No glasses videos yet"
     assert not section.remove_button.isEnabled()
+    assert layout.itemAt(0).widget() is section.empty_label
+    assert layout.itemAt(1).widget() is section.table
+    assert actions.itemAt(1).widget() is section.add_button
 
 
 def test_add_glasses_video_uses_the_filename_as_its_id(tab, changes, data_dir):

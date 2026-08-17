@@ -63,8 +63,8 @@ class FixedVideoInput(_Input):
 class AudioInput(_Input):
     """Audio recorded on its own device, e.g. a directional microphone.
 
-    The video inputs carry their own audio, so this is for separately recorded
-    audio only.
+    Embedded audio in video files is handled as part of video playback; this
+    input is for separate audio files.
     """
 
     glasses_video: str | None = Field(

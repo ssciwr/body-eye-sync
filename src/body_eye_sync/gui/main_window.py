@@ -58,6 +58,7 @@ class MainWindow(QMainWindow):
             tab.busy_changed.connect(
                 lambda busy, source=tab: self._set_busy(busy, source)
             )
+            tab.finished.connect(lambda source=tab: self._on_tab_finished(source))
             self.tabs.addTab(tab, tab_type.title)
             self.tab_widgets.append(tab)
         self.setCentralWidget(self.tabs)
@@ -130,6 +131,13 @@ class MainWindow(QMainWindow):
         for tab in self.tab_widgets:
             if tab is not source:
                 tab.refresh()
+
+    def _on_tab_finished(self, source: BaseTab) -> None:
+        if self._dirty and not self._save_experiment():
+            return
+        index = self.tabs.indexOf(source)
+        if 0 <= index < self.tabs.count() - 1:
+            self.tabs.setCurrentIndex(index + 1)
 
     def _save_experiment(self) -> bool:
         """Write the experiment (config and any computed results) to its folder.

@@ -35,7 +35,10 @@ from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import GlassesVideo, Video
 from body_eye_sync.gui.tabs.base import BaseTab
 
-VIDEO_FILTER = "Video files (*.mp4 *.avi *.mov *.mkv);;All files (*)"
+VIDEO_FILTER = (
+    "Video (formats with audio like MP4 will include the related audio) "
+    "(*.mp4 *.avi *.mov *.mkv);;All files (*)"
+)
 AUDIO_FILTER = "Audio files (*.wav *.mp3 *.flac *.m4a *.ogg *.opus);;All files (*)"
 GAZE_FILTER = "Gaze files (*.tsv *.csv *.txt);;All files (*)"
 
@@ -82,7 +85,7 @@ class _InputKind:
     inputs: Callable[[Experiment], list[Video | Audio]]
     #: Adds one to the experiment, given an unused id, the file it holds and
     #: whatever :attr:`gather` collected.
-    add: Callable[..., None]
+    add: Callable[..., Video | Audio]
     #: Any further files this type needs, asked for as one is added. ``None``
     #: back means the user did not supply them and the input is not added.
     gather: Callable[["_InputSection", Path], dict[str, Path] | None] = (
@@ -225,17 +228,16 @@ class _InputSection(QGroupBox):
         self.remove_button = QPushButton("Remove")
         self.remove_button.clicked.connect(self._remove_selected)
 
-        # The empty-state text shares the button row, so a section with nothing
-        # in it is a single line rather than a mostly empty box.
-        header = QHBoxLayout()
-        header.addWidget(self.empty_label)
-        header.addStretch(1)
-        header.addWidget(self.add_button)
-        header.addWidget(self.remove_button)
+        # The buttons sit below the current rows, where a new input will appear. Preserve sold "line" appearance vs empty box.
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        actions.addWidget(self.add_button)
+        actions.addWidget(self.remove_button)
 
         layout = QVBoxLayout(self)
-        layout.addLayout(header)
+        layout.addWidget(self.empty_label)
         layout.addWidget(self.table)
+        layout.addLayout(actions)
 
         self.refresh()
 
