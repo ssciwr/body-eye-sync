@@ -333,3 +333,19 @@ def test_alignment_tab_finish_emits_finished_without_audio_controls(
     assert "Play mic1" not in [
         button.text() for button in tab.findChildren(QPushButton)
     ]
+
+
+def test_alignment_tab_finish_stops_all_video_playback(qtbot, experiment, data_dir):
+    experiment.add_fixed_video(
+        FixedVideoInput(id="room1", path=data_dir / "three-people.mp4")
+    )
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    viewer = tab.video_cards[0].viewer
+    viewer._play_button.click()
+    assert viewer._timer.isActive()
+
+    tab.done_button.click()
+
+    assert not viewer._timer.isActive()
+    assert not viewer._play_button.isChecked()

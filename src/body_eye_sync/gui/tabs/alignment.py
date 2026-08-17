@@ -218,7 +218,7 @@ class AlignmentTab(BaseTab):
         self.play_all_button.toggled.connect(self._on_play_all_toggled)
         self.done_button = QPushButton("Finish alignment")
         self.done_button.setDefault(True)
-        self.done_button.clicked.connect(self.finished.emit)
+        self.done_button.clicked.connect(self._finish_alignment)
 
         layout = QVBoxLayout(self)
         self.scroll_area = QScrollArea()
@@ -309,6 +309,10 @@ class AlignmentTab(BaseTab):
                     show_requested_time=True,
                 )
                 card.controls._show_timeline_state(seconds)
+
+    def _finish_alignment(self) -> None:
+        self._stop_play_all()
+        self.finished.emit()
 
     def _on_play_all_toggled(self, play: bool) -> None:
         """
