@@ -84,6 +84,12 @@ def test_alignment_tab_renders_all_videos_without_overlays(qtbot, experiment, da
     assert len(tab.video_cards) == 4
     assert tab.grid.itemAtPosition(1, 0).widget() is tab.video_cards[3]
     assert all(not card.viewer.show_overlays for card in tab.video_cards)
+    assert [card.input_label.text() for card in tab.video_cards] == [
+        "cam1",
+        "room0",
+        "room1",
+        "room2",
+    ]
     button_row = tab.layout().itemAt(1).layout()
     assert not hasattr(tab, "estimate_button")
     assert button_row.indexOf(tab.reset_timeline_button) < button_row.indexOf(

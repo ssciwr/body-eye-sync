@@ -160,6 +160,10 @@ class _VideoAlignmentCard(QWidget):
         )
 
         layout = QVBoxLayout(self)
+        self.input_label = QLabel(video.id)
+        self.input_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.input_label.setStyleSheet("font-weight: 600;")
+        layout.addWidget(self.input_label)
         layout.addWidget(self.viewer)
         layout.addWidget(self.shared_timeline_label)
         layout.addWidget(self.controls)
