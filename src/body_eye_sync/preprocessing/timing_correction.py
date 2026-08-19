@@ -11,7 +11,7 @@ import numpy as np
 from body_eye_sync.experiment.timeline import (
     Shift,
     Timeline,
-    missing_before,
+    sum_missing_before,
     to_experiment_time,
 )
 from body_eye_sync.preprocessing.audio import SAMPLE_RATE, audio_samples
@@ -195,7 +195,7 @@ def fit_offset(points: list[OffsetPoint], shifts: list[Shift]) -> FittedTimeline
     still misses them by.
     """
     base_offsets = [
-        point.offset - missing_before(shifts, point.time - point.offset)
+        point.offset - sum_missing_before(shifts, point.time - point.offset)
         for point in points
     ]
     offset = float(np.median(base_offsets))
@@ -208,7 +208,7 @@ def fit_offset(points: list[OffsetPoint], shifts: list[Shift]) -> FittedTimeline
 
 
 def missing_before_all(shifts: list[Shift], local_times: np.ndarray) -> np.ndarray:
-    """:func:`missing_before` for a whole array of local times at once."""
+    """:func:`sum_missing_before` for a whole array of local times at once."""
     local_times = np.asarray(local_times, dtype=float)
     missing = np.zeros(local_times.shape, dtype=float)
     for shift in shifts:

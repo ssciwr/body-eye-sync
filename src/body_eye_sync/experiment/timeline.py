@@ -67,7 +67,7 @@ class Timeline:
         return unobserved(self.offset, self.shifts)
 
 
-def missing_before(shifts: list[Shift], local_time: float) -> float:
+def sum_missing_before(shifts: list[Shift], local_time: float) -> float:
     """How much content is missing before local_time on this recording's clock."""
     return sum(shift.seconds for shift in shifts if shift.at <= local_time)
 
@@ -83,7 +83,7 @@ def to_experiment_time(
     ``local_time`` adds the content missing at that point. Always defined:
     every moment the recording holds did happen.
     """
-    return local_time + offset + missing_before(shifts, local_time)
+    return local_time + offset + sum_missing_before(shifts, local_time)
 
 
 def to_local_time(
