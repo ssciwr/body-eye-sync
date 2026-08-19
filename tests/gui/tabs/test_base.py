@@ -145,6 +145,13 @@ def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
     assert [card.controls.spin.value() for card in tab.video_cards] == pytest.approx(
         [0.125, 0.375]
     )
+    assert [
+        card.viewer.current_time_seconds for card in tab.video_cards
+    ] == pytest.approx([0.25, 0.0])
+    assert [card.shared_timeline_label.text() for card in tab.video_cards] == [
+        "Shared Timeline point 0.375 s",
+        "Shared Timeline point 0.375 s",
+    ]
     assert changed == [True]
     assert busy == [True, False]
     assert progress == [

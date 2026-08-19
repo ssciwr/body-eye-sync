@@ -292,6 +292,16 @@ class AlignmentTab(BaseTab):
         finally:
             self.busy_changed.emit(False)
             self.refresh()
+        if result.offsets:
+            self._show_shared_timeline_time(self._first_common_experiment_time())
+
+    def _first_common_experiment_time(self) -> float:
+        """First experiment time represented by every video timeline."""
+        videos = [card.video for card in self.video_cards]
+        return max(
+            (video.timeline.to_experiment_time(0.0) for video in videos),
+            default=0.0,
+        )
 
     def _progress(self, value: float) -> bool:
         self.progress_changed.emit(round(100 * value), 100, "Aligning recordings…")
