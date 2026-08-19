@@ -182,7 +182,7 @@ class _VideoAlignmentCard(QWidget):
     def _show_shared_timeline_time(self, seconds: float) -> None:
         if seconds < 0.0:
             self.shared_timeline_label.setText(
-                f"Before shared start time - will not be analyzed ({seconds:.3f} s)"
+                f"Before shared start time  ({seconds:.3f} s)"
             )
             self.shared_timeline_label.setStyleSheet(_PRE_SHARED_LABEL_STYLE)
             return

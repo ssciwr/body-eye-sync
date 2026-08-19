@@ -328,8 +328,7 @@ def test_alignment_tab_marks_negative_shared_timeline_preview(
     tab.video_cards[0].viewer.set_frame(1)
     card = tab.video_cards[0]
     assert (
-        card.shared_timeline_label.text()
-        == "Before shared start time - will not be analyzed (-0.080 s)"
+        card.shared_timeline_label.text() == "Before shared start time  (-0.080 s)"
     )  # shared time is -0.12 s offset + one 0.04 s frame.
     assert "#dc2626" in card.shared_timeline_label.styleSheet()
     tab.video_cards[0].viewer.set_frame(
