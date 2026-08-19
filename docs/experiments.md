@@ -97,9 +97,7 @@ removed and renamed through `Experiment` so their ids stay unique.
   This is the input that carries eye tracking, so it needs a `gaze_path` as well
   as a `path`: the gaze samples the same device recorded, as a TSV file. They
   share the video's clock, and so its `timeline`. Video formats with audio,
-  such as MP4, include that audio during video playback. The assumption here is that if audio becomes misaligned during
-  recordings, it should be fixed in preprocessing (e.g. to set the audio to a mid point throughout the audio, or to
-  split into separate clips where audio-video synchronise. It would be hard for us to manage a "second kind of offset"
+such as MP4, include that audio during video playback.
   for when glasses video and audio becomes out of sync; amongst other things because that does not happen at just one
   point in time and can be a very small offset differences.
 - `fixed_videos`: video from a camera at a fixed position in the room.
