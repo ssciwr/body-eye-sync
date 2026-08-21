@@ -384,6 +384,38 @@ def test_alignment_tab_play_all_uses_shared_timeline(
     assert secondary_audio_seeks == []
 
 
+def test_alignment_tab_uses_corrected_clock_rates(qtbot, experiment, data_dir):
+    path = data_dir / "three-people.mp4"
+    experiment.add_fixed_video(
+        FixedVideoInput(
+            id="slow",
+            path=path,
+            timeline=TimelineConfig(offset=0.0, rate=2.0),
+        )
+    )
+    experiment.add_fixed_video(FixedVideoInput(id="steady", path=path))
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    slow, steady = tab.video_cards
+
+    tab._show_shared_timeline_time(0.08)
+
+    assert slow.viewer.current_time_seconds == pytest.approx(0.04)
+    assert steady.viewer.current_time_seconds == pytest.approx(0.08)
+
+    slow.controls.up_button.click()
+    assert slow.video.timeline.offset == pytest.approx(0.05)
+    assert slow.viewer.current_time_seconds == pytest.approx(0.015)
+    slow.controls.down_button.click()
+
+    slow.viewer.set_time_seconds(0.04, show_requested_time=True)
+    tab.play_all_button.click()
+
+    assert steady.viewer.current_time_seconds == pytest.approx(0.08)
+    assert steady.shared_timeline_label.text() == "Shared Timeline point 0.080 s"
+    tab.play_all_button.click()
+
+
 def test_alignment_tab_play_all_preserves_exact_start_across_frame_rates(
     qtbot, experiment, data_dir
 ):

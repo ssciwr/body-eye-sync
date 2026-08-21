@@ -14,7 +14,7 @@
 
 ::: body_eye_sync.gui.tabs.alignment
 
-::: body_eye_sync.gui.tabs.timing_correction
+::: body_eye_sync.gui.tabs.clock_rate
 
 ::: body_eye_sync.gui.tabs.video_processing
 

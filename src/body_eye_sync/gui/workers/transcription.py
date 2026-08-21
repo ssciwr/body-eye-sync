@@ -21,7 +21,7 @@ class TranscriptionWorker(BaseWorker):
         self._step = step
 
     def _items(self) -> Iterator:
-        from body_eye_sync.preprocessing.timing_correction import media_duration
+        from body_eye_sync.media import media_duration
         from body_eye_sync.pipeline.transcription import transcribe
 
         duration = media_duration(self._media_path) or 0.0
