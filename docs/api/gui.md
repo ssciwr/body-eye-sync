@@ -14,6 +14,8 @@
 
 ::: body_eye_sync.gui.tabs.alignment
 
+::: body_eye_sync.gui.tabs.timing_correction
+
 ::: body_eye_sync.gui.tabs.video_processing
 
 ::: body_eye_sync.gui.tabs.audio_processing
@@ -31,6 +33,8 @@
 ::: body_eye_sync.gui.widgets.video_viewer
 
 ::: body_eye_sync.gui.widgets.pydantic_form
+
+::: body_eye_sync.gui.widgets.auto_height_table
 
 ## Workers
 

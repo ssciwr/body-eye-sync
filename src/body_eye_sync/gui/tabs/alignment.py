@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from qtpy.QtCore import QSize, Qt, Signal
+from qtpy.QtCore import QEventLoop, QSize, Qt, Signal
 from qtpy.QtWidgets import (
+    QApplication,
     QDoubleSpinBox,
     QGridLayout,
     QHBoxLayout,
@@ -19,6 +20,7 @@ from qtpy.QtWidgets import (
 )
 
 from body_eye_sync.experiment.experiment import Experiment
+from body_eye_sync.experiment.prepare import align_experiment
 from body_eye_sync.experiment.video import Video
 from body_eye_sync.gui.tabs.base import BaseTab
 from body_eye_sync.gui.widgets import VideoViewer
@@ -58,7 +60,7 @@ class _VideoAlignmentControls(QWidget):
         self.spin.setSuffix(" s")
         self.spin.setKeyboardTracking(False)
         self.spin.setMaximumWidth(105)
-        self.spin.setValue(video.time_offset)
+        self.spin.setValue(video.timeline.offset)
         self.set_button = QToolButton()
         self.set_button.setText("Zero to frame")
         self.set_button.setToolTip("previewed frame above")
@@ -89,14 +91,14 @@ class _VideoAlignmentControls(QWidget):
 
     def _offset_changed(self, value: float) -> None:
         offset = round(value, 3)
-        if self.video.time_offset == offset:
+        if self.video.timeline.offset == offset:
             return
         shared_timeline_time = (
-            self.viewer.current_time_seconds + self.video.time_offset
+            self.viewer.current_time_seconds + self.video.timeline.offset
             if self._preserve_timeline_on_offset_change
             else 0.0
         )
-        self.video.time_offset = offset
+        self.video.timeline.offset = offset
         video_time = shared_timeline_time - offset
         self.viewer.set_time_seconds(
             video_time, allow_negative=True, show_requested_time=True
@@ -149,7 +151,9 @@ class _VideoAlignmentCard(QWidget):
         # Reset to avoid out of sync errors (when user changes tab before confirming offset or adds new input)
         if self.load_error is None:
             self.viewer.set_time_seconds(
-                -video.time_offset, allow_negative=True, show_requested_time=True
+                -video.timeline.offset,
+                allow_negative=True,
+                show_requested_time=True,
             )
             self.controls._show_timeline_state(0.0)
         if self.load_error is not None:
@@ -178,7 +182,7 @@ class _VideoAlignmentCard(QWidget):
     def _show_shared_timeline_time(self, seconds: float) -> None:
         if seconds < 0.0:
             self.shared_timeline_label.setText(
-                f"Before shared start time - will not be analyzed ({seconds:.3f} s)"
+                f"Before shared start time  ({seconds:.3f} s)"
             )
             self.shared_timeline_label.setStyleSheet(_PRE_SHARED_LABEL_STYLE)
             return
@@ -190,7 +194,7 @@ class _VideoAlignmentCard(QWidget):
 
 
 class AlignmentTab(BaseTab):
-    """Let the user manually align all kind of inputs in time with each other via setting their time_offset properties."""
+    """Let the user align all kind of inputs in time with each other via setting their time_offset properties."""
 
     title = "Alignment"
 
@@ -198,6 +202,11 @@ class AlignmentTab(BaseTab):
         super().__init__(experiment)
         self.video_cards: list[_VideoAlignmentCard] = []
         self._play_all_primary: _VideoAlignmentCard | None = None
+        self.align_button = QPushButton("Automatic alignment")
+        self.align_button.setToolTip(
+            "Estimate initial offsets for all recordings before fine-tuning them"
+        )
+        self.align_button.clicked.connect(self._align)
         self.reset_timeline_button = QToolButton()
         self.reset_timeline_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSkipBackward)
@@ -221,6 +230,7 @@ class AlignmentTab(BaseTab):
         self.done_button.clicked.connect(self._finish_alignment)
 
         layout = QVBoxLayout(self)
+        layout.addWidget(self.align_button)
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.video_grid_widget = QWidget()
@@ -265,6 +275,38 @@ class AlignmentTab(BaseTab):
         self.reset_timeline_button.setEnabled(
             any(card.loaded for card in self.video_cards)
         )
+        self.align_button.setEnabled(len(self._inputs()) >= 2)
+
+    def _align(self) -> None:
+        """Estimate initial offsets and show them in the manual controls."""
+        if len(self._inputs()) < 2:
+            return
+        self.align_button.setEnabled(False)
+        self.busy_changed.emit(True)
+        self.progress_changed.emit(0, 100, "Aligning recordings…")
+        try:
+            result = align_experiment(self.experiment, progress=self._progress)
+            if result.offsets:
+                self.experiment_changed.emit()
+                self.status_message.emit("Automatic alignment finished")
+        finally:
+            self.busy_changed.emit(False)
+            self.refresh()
+        if result.offsets:
+            self._show_shared_timeline_time(self._first_common_experiment_time())
+
+    def _first_common_experiment_time(self) -> float:
+        """First experiment time represented by every video timeline."""
+        videos = [card.video for card in self.video_cards]
+        return max(
+            (video.timeline.to_experiment_time(0.0) for video in videos),
+            default=0.0,
+        )
+
+    def _progress(self, value: float) -> bool:
+        self.progress_changed.emit(round(100 * value), 100, "Aligning recordings…")
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        return True
 
     def _set_offset_from_current_frame(self, source: _VideoAlignmentCard) -> None:
         offset = round(-source.viewer.current_time_seconds, 3)
@@ -304,7 +346,7 @@ class AlignmentTab(BaseTab):
         for card in self.video_cards:
             if card.loaded:
                 card.viewer.set_time_seconds(
-                    seconds - card.video.time_offset,
+                    seconds - card.video.timeline.offset,
                     allow_negative=True,
                     show_requested_time=True,
                 )
@@ -347,12 +389,12 @@ class AlignmentTab(BaseTab):
         if primary is None:
             return
         shared_timeline_time = (
-            primary.viewer.playback_time_seconds + primary.video.time_offset
+            primary.viewer.playback_time_seconds + primary.video.timeline.offset
         )
         for card in self.video_cards:
             if card is not primary:
                 card.viewer.set_time_seconds(
-                    shared_timeline_time - card.video.time_offset,
+                    shared_timeline_time - card.video.timeline.offset,
                     allow_negative=True,
                     show_requested_time=True,
                     sync_audio=False,
