@@ -42,7 +42,6 @@ from body_eye_sync.preprocessing.timing_correction import (
     TimingCorrectionCancelled,
     analyse_timing_corrections,
     media_duration,
-    to_experiment_times,
 )
 
 _ID, _OFFSET, _GAPS = range(3)
@@ -363,7 +362,9 @@ class TimingCorrectionTab(BaseTab):
                         + 60.0
                     )
                 local = _line_times(duration, timeline.shifts)
-            fitted = to_experiment_times(local, timeline.offset, timeline.shifts)
+            fitted = np.asarray(
+                [timeline.to_experiment_time(float(time)) for time in local]
+            )
             experiment = measured_experiment if points else fitted
             fitted_offset = fitted - local
             colour = f"C{index}"

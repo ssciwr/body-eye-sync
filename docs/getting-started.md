@@ -29,7 +29,7 @@ one is in use, and changes it.
 ## Place the Inputs on One Timeline
 
 Every recording starts whenever its device was switched on, so nothing relates
-them until each input's offset is known. In the **Alignment** tab thre is a button
+them until each input's offset is known. In the **Alignment** tab there is a button
 to automatically align the inputs, and you can also manually set the offset for each video.
 
 The **Timing correction** tab then checks whether a single offset actually held

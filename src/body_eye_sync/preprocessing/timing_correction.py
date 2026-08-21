@@ -207,29 +207,6 @@ def fit_offset(points: list[OffsetPoint], shifts: list[Shift]) -> FittedTimeline
     return FittedTimeline(Timeline(offset=offset, shifts=shifts), residual)
 
 
-def missing_before_all(shifts: list[Shift], local_times: np.ndarray) -> np.ndarray:
-    """:func:`sum_missing_before` for a whole array of local times at once."""
-    local_times = np.asarray(local_times, dtype=float)
-    missing = np.zeros(local_times.shape, dtype=float)
-    for shift in shifts:
-        missing[local_times >= shift.at] += shift.seconds
-    return missing
-
-
-def to_experiment_times(
-    local_times: np.ndarray,
-    offset: float,
-    shifts: list[Shift],
-) -> np.ndarray:
-    """:func:`to_experiment_time` for a whole array of local times at once.
-
-    For plotting a timeline, or converting a column of per-frame times, where
-    calling the scalar form once per value would be the slow way to do it.
-    """
-    local_times = np.asarray(local_times, dtype=float)
-    return local_times + offset + missing_before_all(shifts, local_times)
-
-
 MIN_TOTAL_GAP = 0.1
 
 #: How long each measurement window is
