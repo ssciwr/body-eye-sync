@@ -211,14 +211,24 @@ def test_playback_highlights_all_turns_at_the_current_time(qtbot, experiment):
     tab = SpeechPostProcessingTab(experiment)
     qtbot.addWidget(tab)
 
+    def highlighted() -> set[int]:
+        rows = set()
+        for row in range(tab.turns_table.rowCount()):
+            background = tab.turns_table.item(row, 3).background().color()
+            speaker = tab.turns_table.item(row, 2).text()
+            assert background.name() == tab.audio_player.color_for(speaker).name()
+            if background.alpha() > 48:
+                rows.add(row)
+        return rows
+
     tab.audio_player.position_changed.emit(2.5)
-    assert {item.row() for item in tab.turns_table.selectedItems()} == {0, 1}
+    assert highlighted() == {0, 1}
 
     tab.audio_player.position_changed.emit(3.5)
-    assert {item.row() for item in tab.turns_table.selectedItems()} == {0}
+    assert highlighted() == {0}
 
     tab.audio_player.position_changed.emit(5.0)
-    assert tab.turns_table.selectedItems() == []
+    assert highlighted() == set()
 
 
 def test_one_glasses_recording_cannot_be_attributed(qtbot, tmp_path):

@@ -6,7 +6,7 @@ import textwrap
 import threading
 import traceback
 
-from qtpy.QtCore import QItemSelectionModel, QObject, Qt, Signal, Slot
+from qtpy.QtCore import QObject, Qt, Signal, Slot
 from qtpy.QtGui import QBrush, QColor
 from qtpy.QtWidgets import (
     QAbstractItemView,
@@ -31,6 +31,9 @@ from body_eye_sync.postprocessing.attribution import AttributionCancelled
 
 _START, _END, _SPEAKER, _TEXT = range(4)
 _COLUMNS = ["Start", "End", "Speaker", "Text"]
+
+_TINT_ALPHA = 48
+_HIGHLIGHT_ALPHA = 128
 
 _LABEL = "Attributing speech…"
 
@@ -121,9 +124,6 @@ class SpeechPostProcessingTab(BaseTab):
         self.turns_table.setHorizontalHeaderLabels(_COLUMNS)
         self.turns_table.verticalHeader().setVisible(False)
         self.turns_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.turns_table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
         self.turns_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.turns_table.cellDoubleClicked.connect(self._play_turn)
         self.turns_table.horizontalHeader().setSectionResizeMode(
@@ -237,11 +237,6 @@ class SpeechPostProcessingTab(BaseTab):
         if data is None:
             return
         for row, turn in enumerate(data.itertuples(index=False)):
-            color = self.audio_player.color_for(str(turn.speaker))
-            background = None
-            if color is not None:
-                background = QColor(color)
-                background.setAlpha(48)
             values = [
                 _time_text(turn.start),
                 _time_text(turn.end),
@@ -256,12 +251,24 @@ class SpeechPostProcessingTab(BaseTab):
                     )
                 if column == _TEXT:
                     item.setToolTip(textwrap.fill(value, 80))
-                if background is not None:
-                    item.setBackground(QBrush(background))
                 self.turns_table.setItem(row, column, item)
             self.turns_table.item(row, _START).setData(
                 Qt.ItemDataRole.UserRole, (float(turn.start), float(turn.end))
             )
+            self._tint_row(row, _TINT_ALPHA)
+
+    def _tint_row(self, row: int, alpha: int) -> None:
+        """Wash one row in its speaker's colour, at ``alpha`` out of 255."""
+        speaker = self.turns_table.item(row, _SPEAKER)
+        color = None if speaker is None else self.audio_player.color_for(speaker.text())
+        if color is None:
+            color = self.palette().highlight().color()
+        color = QColor(color)
+        color.setAlpha(alpha)
+        for column in range(self.turns_table.columnCount()):
+            item = self.turns_table.item(row, column)
+            if item is not None:
+                item.setBackground(QBrush(color))
 
     def _refresh_audio(self) -> None:
         """Show every synchronized input that carries an audio stream."""
@@ -281,7 +288,11 @@ class SpeechPostProcessingTab(BaseTab):
 
     @Slot(float)
     def _highlight_turns_at(self, seconds: float) -> None:
-        """Select every accepted turn containing the shared playback position."""
+        """Deepen every accepted turn holding the shared playback position.
+
+        Each turn keeps its speaker's colour, so which of them is talking is as
+        plain in the table as it is on the player's tracks.
+        """
         rows = set()
         for row in range(self.turns_table.rowCount()):
             item = self.turns_table.item(row, _START)
@@ -291,15 +302,11 @@ class SpeechPostProcessingTab(BaseTab):
         if rows == self._highlighted_rows:
             return
 
+        for row in self._highlighted_rows - rows:
+            self._tint_row(row, _TINT_ALPHA)
+        for row in rows - self._highlighted_rows:
+            self._tint_row(row, _HIGHLIGHT_ALPHA)
         self._highlighted_rows = rows
-        self.turns_table.clearSelection()
-        selection = self.turns_table.selectionModel()
-        flags = (
-            QItemSelectionModel.SelectionFlag.Select
-            | QItemSelectionModel.SelectionFlag.Rows
-        )
-        for row in sorted(rows):
-            selection.select(self.turns_table.model().index(row, 0), flags)
         if rows:
             first_row = min(rows)
             self.turns_table.scrollToItem(
