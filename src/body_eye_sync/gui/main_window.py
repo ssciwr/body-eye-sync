@@ -6,13 +6,16 @@ import time
 from importlib.resources import as_file, files
 from pathlib import Path
 
+from qtpy.QtCore import Qt
 from qtpy.QtGui import QAction, QIcon, QKeySequence
 from qtpy.QtWidgets import (
     QFileDialog,
     QInputDialog,
     QMainWindow,
     QMessageBox,
+    QLabel,
     QProgressBar,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -55,11 +58,21 @@ class MainWindow(QMainWindow):
 
         self._build_menu_bar()
 
+        # make status label a QLabel so text can be selectable
+        self.status_label = QLabel()
+        self.status_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.status_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.statusBar().addWidget(self.status_label, 1)
+
         self.tabs = QTabWidget()
         self.tab_widgets: list[BaseTab] = []
         for tab_type in TAB_TYPES:
             tab = tab_type(self.experiment)
-            tab.status_message.connect(self.statusBar().showMessage)
+            tab.status_message.connect(self._show_status)
             tab.experiment_changed.connect(
                 lambda source=tab: self._on_experiment_changed(source)
             )
@@ -138,7 +151,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Could not open experiment", str(exc))
             return
         self._set_experiment(experiment)
-        self.statusBar().showMessage(f"Opened experiment {folder}")
+        self._show_status(f"Opened experiment {folder}")
 
     def _set_experiment(self, experiment: Experiment) -> None:
         """Hand ``experiment`` to every tab, in place of the current one."""
@@ -168,7 +181,7 @@ class MainWindow(QMainWindow):
         Returns True if the save was successful.
         """
         if self._busy:
-            self.statusBar().showMessage("Cannot save while a step is running")
+            self._show_status("Cannot save while a step is running")
             return False
         folder = None
         if self.experiment.folder is None:
@@ -185,7 +198,7 @@ class MainWindow(QMainWindow):
             # brought up to date either way.
             self._update_title()
         self._dirty = False
-        self.statusBar().showMessage(f"Saved experiment to {self.experiment.folder}")
+        self._show_status(f"Saved experiment to {self.experiment.folder}")
         return True
 
     def _confirm_discarding_changes(self) -> bool:
@@ -228,6 +241,11 @@ class MainWindow(QMainWindow):
         folder = self.experiment.folder
         name = folder.name if folder is not None else _UNSAVED_TITLE
         self.setWindowTitle(f"{_BASE_TITLE} :: [{name}]")
+
+    def _show_status(self, message: str) -> None:
+        """Report ``message`` in the status bar until something replaces it."""
+        self.status_label.setText(message)
+        self.status_label.setToolTip(message)
 
     def _set_busy(self, busy: bool, source: BaseTab | None = None) -> None:
         """Lock other tabs and actions while the source tab is busy."""

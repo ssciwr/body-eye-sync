@@ -514,4 +514,4 @@ def test_a_run_and_a_pipeline_edit_count_as_unsaved_changes(window, data_dir):
 def test_a_status_message_from_a_tab_reaches_the_status_bar(window):
     window.tab(InputFilesTab).status_message.emit("hello")
 
-    assert window.statusBar().currentMessage() == "hello"
+    assert window.status_label.text() == "hello"
