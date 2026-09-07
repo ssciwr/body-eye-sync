@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from importlib.resources import as_file, files
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from qtpy.QtWidgets import (
 )
 
 from pydantic import ValidationError
+from tqdm import tqdm
 
 from body_eye_sync.experiment.config import ExperimentConfig
 from body_eye_sync.experiment.experiment import Experiment
@@ -47,6 +49,8 @@ class MainWindow(QMainWindow):
         self._update_title()
         self._busy = False
         self._busy_source: BaseTab | None = None
+        self._progress_label: str | None = None
+        self._progress_start = 0.0
         self._dirty = False
 
         self._build_menu_bar()
@@ -229,6 +233,7 @@ class MainWindow(QMainWindow):
         """Lock other tabs and actions while the source tab is busy."""
         if busy:
             self._busy_source = source
+            self._progress_label = None
             self.progress_bar.setRange(0, 0)
             self.progress_bar.setFormat("Working…")
             self.progress_bar.setVisible(True)
@@ -255,10 +260,31 @@ class MainWindow(QMainWindow):
         maximum = max(0, maximum)
         self.progress_bar.setRange(0, maximum)
         if maximum:
-            self.progress_bar.setValue(max(0, min(value, maximum)))
-            self.progress_bar.setFormat(f"{label} — %p%" if label else "%p%")
+            value = max(0, min(value, maximum))
+            self.progress_bar.setValue(value)
+            self.progress_bar.setFormat(
+                f"{label} — %p%{self._eta(value, maximum, label)}"
+            )
         else:
-            self.progress_bar.setFormat(label or "Working…")
+            self.progress_bar.setFormat(label)
+
+    def _eta(self, value: int, maximum: int, label: str) -> str:
+        """How much longer this operation has left, from the progress so far.
+
+        Timing restarts if the label changes.
+        """
+        now = time.monotonic()
+        if label != self._progress_label:
+            self._progress_label = label
+            self._progress_start = now
+        elapsed = now - self._progress_start
+        remaining = tqdm.format_meter(
+            n=value,
+            total=maximum,
+            elapsed=elapsed,
+            bar_format="{remaining}",
+        )
+        return f" — {remaining} left"
 
     def closeEvent(self, event) -> None:
         if not self._confirm_discarding_changes():

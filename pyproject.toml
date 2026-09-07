@@ -28,6 +28,7 @@ dependencies = [
     "insightface",
     "onnxruntime",
     "faster-whisper",
+    "tqdm",
     "matplotlib",
 ]
 authors = [
