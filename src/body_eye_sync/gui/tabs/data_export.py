@@ -131,7 +131,7 @@ class DataExportTab(BaseTab):
             "all selected inputs, while retaining the individual tracks."
         )
 
-        self.export_button = QPushButton("Export combined video…")
+        self.export_button = QPushButton("Export combined video with ELAN annotations…")
         self.export_button.clicked.connect(self._choose_output)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setVisible(False)
