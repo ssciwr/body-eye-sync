@@ -22,7 +22,7 @@ jobs:
     - uses: astral-sh/setup-uv@v9.0.0
       with:
         python-version: ${{ matrix.python-version }}
-    - uses: pyvista/setup-headless-display-action@v4
+    - uses: pyvista/setup-headless-display-action@v5
       with:
         qt: true
     - run: uv run --locked pytest --cov --cov-report=xml
