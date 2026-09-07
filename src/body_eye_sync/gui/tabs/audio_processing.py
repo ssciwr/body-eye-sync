@@ -255,6 +255,8 @@ class AudioProcessingTab(BaseTab):
     @Slot(int, int)
     def _play_transcript_row(self, row: int, _column: int) -> None:
         """Seek to a double-clicked segment and start or continue playback."""
+        if self._thread is not None:
+            return
         item = self.transcript_table.item(row, _START)
         bounds = None if item is None else item.data(Qt.ItemDataRole.UserRole)
         if bounds is None:
@@ -445,6 +447,7 @@ class AudioProcessingTab(BaseTab):
             self.refresh()
             self.experiment_changed.emit()
         self.input_selector.setEnabled(not running and bool(self._recordings))
+        self.audio_player.setEnabled(not running)
         self.transcription_checkbox.setEnabled(not running)
         self.pipeline_editor.setEnabled(
             not running
