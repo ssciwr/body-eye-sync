@@ -17,6 +17,7 @@ dependencies = [
     "opencv-python",
     "packaging",
     "pandas",
+    "pillow",
     "platformdirs",
     "pyarrow",
     "pydantic",
@@ -27,6 +28,7 @@ dependencies = [
     "insightface",
     "onnxruntime",
     "faster-whisper",
+    "tqdm",
     "matplotlib",
 ]
 authors = [

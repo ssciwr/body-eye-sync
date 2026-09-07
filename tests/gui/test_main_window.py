@@ -417,10 +417,42 @@ def test_the_active_tab_reports_progress_in_the_global_bar(window):
     assert window.progress_bar.isVisibleTo(window)
     assert window.progress_bar.maximum() == 100
     assert window.progress_bar.value() == 25
-    assert window.progress_bar.format() == "Processing video… — %p%"
+    assert window.progress_bar.format() == "Processing video… — %p% — ? left"
 
     running.busy_changed.emit(False)
     assert not window.progress_bar.isVisibleTo(window)
+
+
+def test_progress_gets_an_eta_that_is_timed_per_phase(window, monkeypatch):
+    running = window.tab(VideoProcessingTab)
+    clock = [1000.0]
+    monkeypatch.setattr(
+        "body_eye_sync.gui.main_window.time.monotonic", lambda: clock[0]
+    )
+
+    running.busy_changed.emit(True)
+    running.progress_changed.emit(0, 100, "Processing video…")
+
+    # Nothing has been measured yet, so the time left is still unknown.
+    assert window.progress_bar.format() == "Processing video… — %p% — ? left"
+
+    clock[0] += 30.0
+    running.progress_changed.emit(25, 100, "Processing video…")
+
+    # A quarter done in 30 seconds leaves 90 seconds to go.
+    assert window.progress_bar.format() == "Processing video… — %p% — 01:30 left"
+
+    # A new phase is timed on its own, rather than at the previous phase's rate.
+    clock[0] += 1.0
+    running.progress_changed.emit(10, 100, "Detecting faces…")
+    assert window.progress_bar.format() == "Detecting faces… — %p% — ? left"
+
+    # As is a new task, even one whose phase is named the same as the last.
+    clock[0] += 30.0
+    running.busy_changed.emit(False)
+    running.busy_changed.emit(True)
+    running.progress_changed.emit(10, 100, "Detecting faces…")
+    assert window.progress_bar.format() == "Detecting faces… — %p% — ? left"
 
 
 def test_closing_with_unsaved_changes_can_save_them_first(
@@ -482,4 +514,4 @@ def test_a_run_and_a_pipeline_edit_count_as_unsaved_changes(window, data_dir):
 def test_a_status_message_from_a_tab_reaches_the_status_bar(window):
     window.tab(InputFilesTab).status_message.emit("hello")
 
-    assert window.statusBar().currentMessage() == "hello"
+    assert window.status_label.text() == "hello"

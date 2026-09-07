@@ -21,6 +21,7 @@ nav = [
       { "Overview" = "api/index.md" },
       { "Experiment" = "api/experiment.md" },
       { "Pipeline" = "api/pipeline.md" },
+      { "Export" = "api/export.md" },
       { "GUI" = "api/gui.md" },
       { "CLI" = "api/cli.md" },
     ] },
