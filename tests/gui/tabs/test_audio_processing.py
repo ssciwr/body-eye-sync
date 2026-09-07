@@ -302,6 +302,30 @@ def test_playback_highlights_the_segment_at_the_current_time(qtbot, experiment):
     assert {item.row() for item in tab.transcript_table.selectedItems()} == {1}
 
 
+def test_the_gutter_marks_the_segment_playback_has_reached(qtbot, experiment):
+    experiment.audio[0].speech.set_data(_segments())
+    tab = AudioProcessingTab(experiment)
+    qtbot.addWidget(tab)
+    tab.input_selector.setCurrentIndex(1)
+
+    def marked() -> list[int]:
+        return [
+            row
+            for row in range(tab.transcript_table.rowCount())
+            if tab.transcript_table.verticalHeaderItem(row).text()
+        ]
+
+    tab.audio_player.position_changed.emit(0.5)
+    assert marked() == [0]
+
+    # The gap after a segment keeps its marker, as somewhere to look back to.
+    tab.audio_player.position_changed.emit(2.0)
+    assert marked() == [0]
+
+    tab.audio_player.position_changed.emit(3.0)
+    assert marked() == [1]
+
+
 def test_double_clicking_a_segment_seeks_and_starts_playback(
     qtbot, experiment, monkeypatch
 ):

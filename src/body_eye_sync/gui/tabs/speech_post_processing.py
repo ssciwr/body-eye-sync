@@ -35,6 +35,9 @@ _COLUMNS = ["Start", "End", "Speaker", "Text"]
 _TINT_ALPHA = 48
 _HIGHLIGHT_ALPHA = 128
 
+#: Points at the turn playback has most recently reached.
+_MARKER = "▶"
+
 _LABEL = "Attributing speech…"
 
 _SPLITTING_FIELDS = (
@@ -119,10 +122,15 @@ class SpeechPostProcessingTab(BaseTab):
         self.audio_player = SynchronizedAudioPlaybackWidget()
         self.audio_player.position_changed.connect(self._highlight_turns_at)
         self._highlighted_rows: set[int] = set()
+        self._marker_row = -1
 
         self.turns_table = QTableWidget(0, len(_COLUMNS))
         self.turns_table.setHorizontalHeaderLabels(_COLUMNS)
-        self.turns_table.verticalHeader().setVisible(False)
+        # The row header is kept as a gutter for the playback marker, so it is
+        # narrow and unlabelled rather than counting the rows off.
+        header = self.turns_table.verticalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        header.setFixedWidth(24)
         self.turns_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.turns_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.turns_table.cellDoubleClicked.connect(self._play_turn)
@@ -234,8 +242,10 @@ class SpeechPostProcessingTab(BaseTab):
         self.turns_table.clearContents()
         self.turns_table.setRowCount(0 if data is None else len(data))
         self._highlighted_rows.clear()
+        self._marker_row = -1
         if data is None:
             return
+        self.turns_table.setVerticalHeaderLabels([""] * len(data))
         for row, turn in enumerate(data.itertuples(index=False)):
             values = [
                 _time_text(turn.start),
@@ -270,6 +280,20 @@ class SpeechPostProcessingTab(BaseTab):
             if item is not None:
                 item.setBackground(QBrush(color))
 
+    def _mark_row(self, row: int) -> None:
+        """Point the gutter at the last turn playback has reached.
+
+        The highlight only lasts as long as somebody is talking, so this is what
+        holds the place in the table through the silence in between.
+        """
+        if row == self._marker_row:
+            return
+        for at, text in ((self._marker_row, ""), (row, _MARKER)):
+            item = self.turns_table.verticalHeaderItem(at) if at >= 0 else None
+            if item is not None:
+                item.setText(text)
+        self._marker_row = row
+
     def _refresh_audio(self) -> None:
         """Show every synchronized input that carries an audio stream."""
         recordings = [data for data in self.experiment.inputs if data.has_audio_track()]
@@ -294,11 +318,17 @@ class SpeechPostProcessingTab(BaseTab):
         plain in the table as it is on the player's tracks.
         """
         rows = set()
+        marker_row = -1
         for row in range(self.turns_table.rowCount()):
             item = self.turns_table.item(row, _START)
             bounds = None if item is None else item.data(Qt.ItemDataRole.UserRole)
-            if bounds is not None and bounds[0] <= seconds < bounds[1]:
+            if bounds is None:
+                continue
+            if bounds[0] <= seconds:
+                marker_row = row
+            if bounds[0] <= seconds < bounds[1]:
                 rows.add(row)
+        self._mark_row(marker_row)
         if rows == self._highlighted_rows:
             return
 

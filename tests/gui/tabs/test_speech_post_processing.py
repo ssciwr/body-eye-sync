@@ -231,6 +231,40 @@ def test_playback_highlights_all_turns_at_the_current_time(qtbot, experiment):
     assert highlighted() == set()
 
 
+def test_the_gutter_marks_the_turn_playback_has_reached(qtbot, experiment):
+    experiment.speech_turns.set_data(
+        pd.DataFrame(
+            {
+                "turn_id": [0, 1],
+                "start": [1.0, 4.0],
+                "end": [2.0, 5.0],
+                "speaker": ["p1", "p2"],
+                "source_segment_id": [0, 0],
+                "text": ["first", "second"],
+            }
+        )
+    )
+    tab = SpeechPostProcessingTab(experiment)
+    qtbot.addWidget(tab)
+
+    def marked() -> list[int]:
+        return [
+            row
+            for row in range(tab.turns_table.rowCount())
+            if tab.turns_table.verticalHeaderItem(row).text()
+        ]
+
+    tab.audio_player.position_changed.emit(1.5)
+    assert marked() == [0]
+
+    # The gap after a turn keeps its marker, as somewhere to look back to.
+    tab.audio_player.position_changed.emit(3.0)
+    assert marked() == [0]
+
+    tab.audio_player.position_changed.emit(4.5)
+    assert marked() == [1]
+
+
 def test_one_glasses_recording_cannot_be_attributed(qtbot, tmp_path):
     _write(tmp_path / "p1.wav", [(1.0, 4.0)])
     gaze = tmp_path / "gaze.tsv"

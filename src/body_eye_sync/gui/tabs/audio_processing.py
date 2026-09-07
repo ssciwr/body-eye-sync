@@ -38,6 +38,9 @@ from body_eye_sync.gui.widgets import AudioPlaybackWidget, SPEECH_STEPS, Pipelin
 from body_eye_sync.gui.workers import TranscriptionWorker
 
 _START, _END, _TEXT = range(3)
+
+#: Points at the segment playback has most recently reached.
+_MARKER = "▶"
 _COLUMNS = ["Start", "End", "Text"]
 
 
@@ -76,10 +79,15 @@ class AudioProcessingTab(BaseTab):
         self.audio_player = AudioPlaybackWidget()
         self.audio_player.position_changed.connect(self._highlight_transcript_at)
         self._highlighted_row = -1
+        self._marker_row = -1
 
         self.transcript_table = QTableWidget(0, len(_COLUMNS))
         self.transcript_table.setHorizontalHeaderLabels(_COLUMNS)
-        self.transcript_table.verticalHeader().setVisible(False)
+        # The row header is kept as a gutter for the playback marker, so it is
+        # narrow and unlabelled rather than counting the rows off.
+        row_header = self.transcript_table.verticalHeader()
+        row_header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        row_header.setFixedWidth(24)
         self.transcript_table.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
@@ -209,6 +217,7 @@ class AudioProcessingTab(BaseTab):
         self.transcript_table.clearContents()
         self.transcript_table.setRowCount(0 if data is None else len(data))
         self._highlighted_row = -1
+        self._marker_row = -1
         if data is None:
             self.summary_label.setText(self._nothing_to_show())
             return
@@ -220,6 +229,7 @@ class AudioProcessingTab(BaseTab):
         self, row: int, start: float, end: float, text: str
     ) -> None:
         """Populate one row shared by loaded and live transcript segments."""
+        self.transcript_table.setVerticalHeaderItem(row, QTableWidgetItem(""))
         alignment = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         start_item = QTableWidgetItem(_time_text(start))
         start_item.setTextAlignment(alignment)
@@ -239,12 +249,17 @@ class AudioProcessingTab(BaseTab):
     def _highlight_transcript_at(self, seconds: float) -> None:
         """Select the transcript segment containing the playback position."""
         row_at_position = -1
+        marker_row = -1
         for row in range(self.transcript_table.rowCount()):
             item = self.transcript_table.item(row, _START)
             bounds = None if item is None else item.data(Qt.ItemDataRole.UserRole)
-            if bounds is not None and bounds[0] <= seconds <= bounds[1]:
+            if bounds is None:
+                continue
+            if bounds[0] <= seconds:
+                marker_row = row
+            if bounds[0] <= seconds <= bounds[1] and row_at_position < 0:
                 row_at_position = row
-                break
+        self._mark_row(marker_row)
         if row_at_position == self._highlighted_row:
             return
         self._highlighted_row = row_at_position
@@ -255,6 +270,20 @@ class AudioProcessingTab(BaseTab):
                 self.transcript_table.item(row_at_position, _TEXT),
                 QAbstractItemView.ScrollHint.PositionAtCenter,
             )
+
+    def _mark_row(self, row: int) -> None:
+        """Point the gutter at the last segment playback has reached.
+
+        The selection only lasts as long as the segment is being spoken, so this
+        is what holds the place in the table through the silence in between.
+        """
+        if row == self._marker_row:
+            return
+        for at, text in ((self._marker_row, ""), (row, _MARKER)):
+            item = self.transcript_table.verticalHeaderItem(at) if at >= 0 else None
+            if item is not None:
+                item.setText(text)
+        self._marker_row = row
 
     @Slot(int, int)
     def _play_transcript_row(self, row: int, _column: int) -> None:
