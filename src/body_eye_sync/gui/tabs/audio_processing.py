@@ -383,6 +383,8 @@ class AudioProcessingTab(BaseTab):
     @Slot(object)
     def _on_new_segment(self, segment) -> None:
         """Append one provisional Whisper segment while transcription runs."""
+        scrollbar = self.transcript_table.verticalScrollBar()
+        following = scrollbar.value() == scrollbar.maximum()
         row = self.transcript_table.rowCount()
         self.transcript_table.insertRow(row)
         self._set_transcript_row(row, segment.start, segment.end, segment.text)
@@ -390,7 +392,8 @@ class AudioProcessingTab(BaseTab):
         self.summary_label.setText(
             f"{row + 1} segment(s), {self._live_word_count} word(s) — transcribing…"
         )
-        self.transcript_table.scrollToBottom()
+        if following:
+            self.transcript_table.scrollToBottom()
 
     @Slot(float)
     def _on_progress(self, fraction: float) -> None:
