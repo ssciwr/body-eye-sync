@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from typing import Iterable, Iterator
 
 import pandas as pd
@@ -25,6 +26,9 @@ SEGMENT_COLUMNS = ["segment_id", "start", "end", "text"]
 
 #: Columns of the companion per-word table.
 WORD_COLUMNS = ["segment_id", "word_index", "start", "end", "word", "score"]
+
+#: Punctuation that ends a sentence.
+_SENTENCE_END = re.compile(r"[.!?…][\"')\]]*$")
 
 
 @dataclass
@@ -53,6 +57,32 @@ class TranscriptSegment:
 
 def _is_crisper_whisper(model_name: str) -> bool:
     return model_name.startswith("nyralabs/CrisperWhisper2.0_")
+
+
+def _segment(words: list[Word]) -> TranscriptSegment:
+    """One segment spanning ``words``, punctuation kept against its own word."""
+    text = ""
+    for word in words:
+        token = word.word.strip()
+        if not token:
+            continue
+        if not text or token[0] in ".,!?;:%)]}–—-'’":
+            text += token
+        else:
+            text += " " + token
+    return TranscriptSegment(words[0].start, words[-1].end, text, words)
+
+
+def _segment_words(words: list[Word]) -> Iterator[TranscriptSegment]:
+    """Group timed words into one segment per sentence."""
+    group: list[Word] = []
+    for word in words:
+        group.append(word)
+        if _SENTENCE_END.search(word.word.strip()):
+            yield _segment(group)
+            group = []
+    if group:
+        yield _segment(group)
 
 
 def _transcribe_crisper(
@@ -99,9 +129,11 @@ def _transcribe_crisper(
         Word(float(word.start), float(word.end), word.word, float("nan"))
         for word in (result.words or [])
     ]
-    start = words[0].start if words else 0.0
-    end = words[-1].end if words else float(result.duration)
-    yield TranscriptSegment(start, end, text, words)
+    if not words:
+        # Nothing timed to cut on, so the transcript is all there is to report.
+        yield TranscriptSegment(0.0, float(result.duration), text, [])
+        return
+    yield from _segment_words(words)
 
 
 def transcribe(
