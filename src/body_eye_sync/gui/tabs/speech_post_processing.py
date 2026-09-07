@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 import threading
 import traceback
 
@@ -253,6 +254,8 @@ class SpeechPostProcessingTab(BaseTab):
                     item.setTextAlignment(
                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
                     )
+                if column == _TEXT:
+                    item.setToolTip(textwrap.fill(value, 80))
                 if background is not None:
                     item.setBackground(QBrush(background))
                 self.turns_table.setItem(row, column, item)

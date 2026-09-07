@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 import threading
 
 from qtpy.QtCore import Qt, Slot
@@ -229,7 +230,10 @@ class AudioProcessingTab(BaseTab):
 
         self.transcript_table.setItem(row, _START, start_item)
         self.transcript_table.setItem(row, _END, end_item)
-        self.transcript_table.setItem(row, _TEXT, QTableWidgetItem(str(text)))
+
+        text_item = QTableWidgetItem(str(text))
+        text_item.setToolTip(textwrap.fill(str(text), 80))
+        self.transcript_table.setItem(row, _TEXT, text_item)
 
     @Slot(float)
     def _highlight_transcript_at(self, seconds: float) -> None:
