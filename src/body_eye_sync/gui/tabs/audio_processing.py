@@ -6,6 +6,7 @@ import textwrap
 import threading
 
 from qtpy.QtCore import Qt, Slot
+from qtpy.QtGui import QBrush, QColor
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -39,8 +40,10 @@ from body_eye_sync.gui.workers import TranscriptionWorker
 
 _START, _END, _TEXT = range(3)
 
-#: Points at the segment playback has most recently reached.
 _MARKER = "▶"
+
+_HIGHLIGHT_ALPHA = 128
+_REST_ALPHA = 0
 _COLUMNS = ["Start", "End", "Text"]
 
 
@@ -83,16 +86,11 @@ class AudioProcessingTab(BaseTab):
 
         self.transcript_table = QTableWidget(0, len(_COLUMNS))
         self.transcript_table.setHorizontalHeaderLabels(_COLUMNS)
-        # The row header is kept as a gutter for the playback marker, so it is
-        # narrow and unlabelled rather than counting the rows off.
         row_header = self.transcript_table.verticalHeader()
         row_header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         row_header.setFixedWidth(24)
         self.transcript_table.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection
-        )
-        self.transcript_table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
+            QAbstractItemView.SelectionMode.NoSelection
         )
         self.transcript_table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
@@ -244,6 +242,7 @@ class AudioProcessingTab(BaseTab):
         text_item = QTableWidgetItem(str(text))
         text_item.setToolTip(textwrap.fill(str(text), 80))
         self.transcript_table.setItem(row, _TEXT, text_item)
+        self._tint_row(row, _REST_ALPHA)
 
     @Slot(float)
     def _highlight_transcript_at(self, seconds: float) -> None:
@@ -262,14 +261,24 @@ class AudioProcessingTab(BaseTab):
         self._mark_row(marker_row)
         if row_at_position == self._highlighted_row:
             return
+        if self._highlighted_row >= 0:
+            self._tint_row(self._highlighted_row, _REST_ALPHA)
         self._highlighted_row = row_at_position
-        self.transcript_table.clearSelection()
         if row_at_position >= 0:
-            self.transcript_table.selectRow(row_at_position)
+            self._tint_row(row_at_position, _HIGHLIGHT_ALPHA)
             self.transcript_table.scrollToItem(
                 self.transcript_table.item(row_at_position, _TEXT),
                 QAbstractItemView.ScrollHint.PositionAtCenter,
             )
+
+    def _tint_row(self, row: int, alpha: int) -> None:
+        """Wash one row in the highlight colour, at ``alpha`` out of 255."""
+        color = QColor(self.palette().highlight().color())
+        color.setAlpha(alpha)
+        for column in range(self.transcript_table.columnCount()):
+            item = self.transcript_table.item(row, column)
+            if item is not None:
+                item.setBackground(QBrush(color))
 
     def _mark_row(self, row: int) -> None:
         """Point the gutter at the last segment playback has reached.

@@ -291,15 +291,22 @@ def test_playback_highlights_the_segment_at_the_current_time(qtbot, experiment):
     qtbot.addWidget(tab)
     tab.input_selector.setCurrentIndex(1)
 
+    def highlighted() -> set[int]:
+        return {
+            row
+            for row in range(tab.transcript_table.rowCount())
+            if tab.transcript_table.item(row, 2).background().color().alpha() > 0
+        }
+
     tab.audio_player.position_changed.emit(0.5)
-    assert {item.row() for item in tab.transcript_table.selectedItems()} == {0}
+    assert highlighted() == {0}
 
     # There is no active text during a gap between transcript segments.
     tab.audio_player.position_changed.emit(2.0)
-    assert tab.transcript_table.selectedItems() == []
+    assert highlighted() == set()
 
     tab.audio_player.position_changed.emit(3.0)
-    assert {item.row() for item in tab.transcript_table.selectedItems()} == {1}
+    assert highlighted() == {1}
 
 
 def test_the_gutter_marks_the_segment_playback_has_reached(qtbot, experiment):
