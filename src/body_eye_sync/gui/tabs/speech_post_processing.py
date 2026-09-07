@@ -186,6 +186,13 @@ class SpeechPostProcessingTab(BaseTab):
 
     def blocked_reason(self) -> str | None:
         """Why attribution cannot run yet, or ``None`` when it can."""
+        if self.experiment.pipeline.speech is None:
+            return (
+                "Transcription is switched off for this experiment; switch it "
+                "on in the Audio processing tab. Speech turns are worked out "
+                "from the transcripts, so there is nothing to attribute without "
+                "them."
+            )
         glasses = [v for v in self.experiment.glasses_videos if v.path is not None]
         if len(glasses) < 2:
             return (

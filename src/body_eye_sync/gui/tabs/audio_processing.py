@@ -9,6 +9,7 @@ from qtpy.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -118,12 +119,17 @@ class AudioProcessingTab(BaseTab):
             lambda _step_type: self._start_transcription()
         )
         self.pipeline_editor.run_all_requested.connect(self._start_run_all)
-        self.transcription_checkbox = QCheckBox("Enable transcription")
+        self.transcription_checkbox = QCheckBox("Transcribe this experiment's speech")
         self.transcription_checkbox.toggled.connect(self._on_pipeline_toggled)
+        self.pipeline_group = QGroupBox("Speech pipeline")
+        pipeline_group_layout = QVBoxLayout(self.pipeline_group)
+        pipeline_group_layout.addWidget(self.transcription_checkbox)
+        pipeline_group_layout.addWidget(self.pipeline_editor)
+
         pipeline_layout = QVBoxLayout()
         pipeline_layout.setContentsMargins(0, 0, 0, 0)
-        pipeline_layout.addWidget(self.transcription_checkbox)
-        pipeline_layout.addWidget(self.pipeline_editor)
+        pipeline_layout.addWidget(self.pipeline_group)
+        pipeline_layout.addStretch(1)
         pipeline_side = QWidget()
         pipeline_side.setLayout(pipeline_layout)
 
