@@ -52,6 +52,15 @@ class _StreamInfo:
 
 
 @dataclass(frozen=True)
+class VideoGridResult:
+    """A synchronized grid video and its interval on the experiment clock."""
+
+    path: Path
+    experiment_start: float
+    experiment_end: float
+
+
+@dataclass(frozen=True)
 class _Source:
     """One selected input, with the streams a probe found in its file."""
 
@@ -538,7 +547,7 @@ def construct_video_grid(
     include_merged_audio: bool = False,
     overwrite: bool = False,
     progress: Callable[[float], bool] | None = None,
-) -> None:
+) -> VideoGridResult:
     """Write selected experiment videos as a synchronized 25 fps grid.
 
     The output interval is the union of all selected media on the experiment
@@ -630,3 +639,8 @@ def construct_video_grid(
         temporary_output.unlink(missing_ok=True)
 
     logger.info("wrote synchronized video grid to %s", output_path)
+    return VideoGridResult(
+        path=output_path,
+        experiment_start=output_start,
+        experiment_end=output_end,
+    )

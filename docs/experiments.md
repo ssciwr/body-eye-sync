@@ -9,10 +9,16 @@ an `outputs/` directory.
 my-experiment/
 ├─ experiment.yaml
 └─ outputs/
-   └─ camera-1/
-      ├─ results.parquet
-      ├─ body_embeddings.parquet
-      └─ face_embeddings.parquet
+   ├─ camera-1/
+   │  ├─ results.parquet
+   │  ├─ body_embeddings.parquet
+   │  ├─ face_embeddings.parquet
+   │  ├─ transcript_segments.parquet
+   │  └─ transcript_words.parquet
+   ├─ p1-mic/
+   │  ├─ transcript_segments.parquet
+   │  └─ transcript_words.parquet
+   └─ speech_turns.parquet
 ```
 
 ## Configuration Format
@@ -67,7 +73,12 @@ pipeline:
       detector: yolo26m
     face_detection: null
     body_pose: null
-  audio: {}
+  speech:
+    transcription:
+      model_name: primeline/whisper-large-v3-turbo-german
+      language: de
+      beam_size: 5
+      vad_filter: false
 ```
 
 ## Inputs
@@ -112,14 +123,16 @@ what a new one starts as before any files have been added to it.
 
 ## Pipeline
 
-Each type of input has its own block under `pipeline`, so e.g. a room camera can
-be tracked with a different detector than the glasses cameras, or skip a stage
-they run. Omit a block to use its defaults.
+Each type of *video* input has its own block under `pipeline`, so e.g. a room
+camera can be tracked with a different detector than the glasses cameras, or skip
+a stage they run. Omit a block to use its defaults.
 
 For the video blocks — `glasses_video` and `fixed_video` — `object_tracking` is
 required, while `face_detection` and `body_pose` are optional; omit either key or
-set it to `null` to skip that stage. The `audio` block has no stages yet, so
-audio inputs are currently only loaded and placed on the timeline.
+set it to `null` to skip that stage.
+
+The `speech` block runs transcription over every input that carries audio — the audio inputs,
+and any video whose camera recorded a sound track.
 
 ## Object Tracking
 
@@ -149,3 +162,19 @@ person box:
 
 - `model_name`: YOLO pose weights.
 - `conf`: minimum pose confidence.
+
+## Transcription
+
+Transcription runs faster-whisper over the whole recording, keeping the
+segments it produces and the timing of every word within them.
+
+- `model_name`: Whisper model. The default
+  `primeline/whisper-large-v3-turbo-german` is accuracy-tuned for German;
+  `primeline/whisper-large-v3-german` is its full-size alternative, and
+  `large-v3` is the accuracy-first multilingual model. Standard Transformers
+  checkpoints are converted to FP16 CTranslate2 weights on first use and then
+  loaded from the shared model cache.
+- `language`: ISO 639-1 code, defaulting to `de` for the German model. Change it
+  for another language, or leave it unset to detect from the first 30 seconds.
+- `beam_size`: decoding beam width.
+- `vad_filter`: skip silent stretches.

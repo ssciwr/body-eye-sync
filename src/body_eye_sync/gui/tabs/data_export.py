@@ -23,11 +23,18 @@ from qtpy.QtWidgets import (
 from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import GlassesVideo, Video
-from body_eye_sync.export.video_grid import VideoGridCancelled, construct_video_grid
+from body_eye_sync.export.elan import export_elan
+from body_eye_sync.export.video_grid import (
+    VideoGridCancelled,
+    VideoGridResult,
+    construct_video_grid,
+)
 from body_eye_sync.gui.tabs.base import BaseTab
 
 _INPUT_ID_ROLE = Qt.ItemDataRole.UserRole
 _IS_VIDEO_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+
+_LABEL = "Exporting combined video…"
 
 
 def _input_kind(data: Video | Audio) -> str:
@@ -42,7 +49,7 @@ class _VideoExportWorker(QObject):
     """Construct one video without blocking Qt's event loop."""
 
     progress = Signal(int)
-    finished = Signal(str)
+    finished = Signal(object)
     failed = Signal(str, str)
     cancelled = Signal()
 
@@ -74,7 +81,7 @@ class _VideoExportWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            construct_video_grid(
+            result = construct_video_grid(
                 self._experiment,
                 self._output_path,
                 input_ids=self._input_ids,
@@ -93,7 +100,7 @@ class _VideoExportWorker(QObject):
             if self._cancel.is_set():
                 self.cancelled.emit()
             else:
-                self.finished.emit(str(self._output_path))
+                self.finished.emit(result)
 
 
 class DataExportTab(BaseTab):
@@ -124,7 +131,7 @@ class DataExportTab(BaseTab):
             "all selected inputs, while retaining the individual tracks."
         )
 
-        self.export_button = QPushButton("Export combined video…")
+        self.export_button = QPushButton("Export combined video with ELAN annotations…")
         self.export_button.clicked.connect(self._choose_output)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setVisible(False)
@@ -184,12 +191,6 @@ class DataExportTab(BaseTab):
     def is_busy(self) -> bool:
         return self._thread is not None
 
-    def shutdown(self) -> None:
-        if self._worker is not None:
-            self._worker.cancel()
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-
     @Slot()
     def _update_availability(self) -> None:
         has_selected_video = any(
@@ -233,19 +234,19 @@ class DataExportTab(BaseTab):
             input_ids,
             self.merged_audio_checkbox.isChecked(),
         )
-        self._worker.progress.connect(
-            lambda value: self.progress_changed.emit(
-                value, 100, "Exporting combined video…"
-            )
-        )
+        self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.cancelled.connect(self._on_cancelled)
         self._thread = threading.Thread(target=self._worker.run, daemon=True)
-        self.progress_changed.emit(0, 100, "Exporting combined video…")
+        self.progress_changed.emit(0, 100, _LABEL)
         self.busy_changed.emit(True)
         self._update_availability()
         self._thread.start()
+
+    @Slot(int)
+    def _on_progress(self, percent: int) -> None:
+        self.progress_changed.emit(percent, 100, _LABEL)
 
     @Slot()
     def _cancel_export(self) -> None:
@@ -254,10 +255,22 @@ class DataExportTab(BaseTab):
             self.cancel_button.setEnabled(False)
             self.cancel_button.setText("Cancelling…")
 
-    @Slot(str)
-    def _on_finished(self, output_path: str) -> None:
-        self.status_message.emit(f"Exported combined video to {output_path}")
+    @Slot(object)
+    def _on_finished(self, result: VideoGridResult) -> None:
+        message = f"Exported combined video to {result.path}"
+        message += self._write_annotations(result)
+        self.status_message.emit(message)
         self._set_running(False)
+
+    def _write_annotations(self, result: VideoGridResult) -> str:
+        """Write the speech turns beside the video, reporting what happened."""
+        if not self.experiment.speech_turns.has_data():
+            return ""
+        try:
+            annotation_path = export_elan(self.experiment, result, overwrite=True)
+        except (OSError, ValueError) as exc:
+            return f"; could not write speech annotations: {exc}"
+        return f"; wrote speech annotations to {annotation_path.name}"
 
     @Slot(str, str)
     def _on_failed(self, message: str, details: str) -> None:

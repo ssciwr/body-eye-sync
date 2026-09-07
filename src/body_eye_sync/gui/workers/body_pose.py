@@ -28,16 +28,16 @@ class BodyPoseWorker(BaseWorker):
         from body_eye_sync.pipeline.body_pose import detect_body_poses
 
         return detect_body_poses(
-            self._video.video_path,
-            self._video.all_boxes_by_frame(),
+            self._target.video_path,
+            self._target.all_boxes_by_frame(),
             **self._step.model_dump(),
         )
 
     def _accumulate(self, result) -> None:
-        self._video.add_body_pose_frame(result)
+        self._target.add_body_pose_frame(result)
 
     def _finalise(self) -> None:
-        self._video.finish_body_pose_detection()
+        self._target.finish_body_pose_detection()
 
     def _discard(self) -> None:
-        self._video.discard_body_pose_detection()
+        self._target.discard_body_pose_detection()
