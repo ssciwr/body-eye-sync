@@ -35,8 +35,9 @@ _COLUMNS = ["Start", "End", "Speaker", "Text"]
 _TINT_ALPHA = 48
 _HIGHLIGHT_ALPHA = 128
 
-#: Points at the turn playback has most recently reached.
 _MARKER = "▶"
+
+_BLOCKED_COLOR = "#d97706"
 
 _LABEL = "Attributing speech…"
 
@@ -119,6 +120,14 @@ class SpeechPostProcessingTab(BaseTab):
         self.summary_label = QLabel()
         self.summary_label.setWordWrap(True)
 
+        self.blocked_label = QLabel()
+        self.blocked_label.setWordWrap(True)
+        blocked_font = self.blocked_label.font()
+        blocked_font.setBold(True)
+        self.blocked_label.setFont(blocked_font)
+        self.blocked_label.setStyleSheet(f"color: {_BLOCKED_COLOR};")
+        self.blocked_label.setVisible(False)
+
         self.audio_player = SynchronizedAudioPlaybackWidget()
         self.audio_player.position_changed.connect(self._highlight_turns_at)
         self._highlighted_rows: set[int] = set()
@@ -163,6 +172,7 @@ class SpeechPostProcessingTab(BaseTab):
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_layout.addWidget(self.splitting_group)
         settings_layout.addWidget(self.attribution_group)
+        settings_layout.addWidget(self.blocked_label)
         settings_layout.addWidget(self.attribute_button)
         settings_layout.addWidget(self.cancel_button)
         settings_layout.addStretch(1)
@@ -190,8 +200,9 @@ class SpeechPostProcessingTab(BaseTab):
         self._refresh_table()
         blocked = self.blocked_reason()
         self.attribute_button.setEnabled(blocked is None)
-        lines = [line for line in (self._summary(), blocked) if line]
-        self.summary_label.setText("\n".join(lines))
+        self.blocked_label.setText(blocked or "")
+        self.blocked_label.setVisible(blocked is not None)
+        self.summary_label.setText(self._summary())
 
     def blocked_reason(self) -> str | None:
         """Why attribution cannot run yet, or ``None`` when it can."""
