@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
+import time
 from importlib.resources import as_file, files
 from pathlib import Path
 
+from qtpy.QtCore import Qt
 from qtpy.QtGui import QAction, QIcon, QKeySequence
 from qtpy.QtWidgets import (
     QFileDialog,
     QInputDialog,
     QMainWindow,
     QMessageBox,
+    QLabel,
+    QProgressBar,
+    QSizePolicy,
     QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from pydantic import ValidationError
+from tqdm import tqdm
 
 from body_eye_sync.experiment.config import ExperimentConfig
 from body_eye_sync.experiment.experiment import Experiment
@@ -43,24 +51,53 @@ class MainWindow(QMainWindow):
         self.experiment = _new_experiment()
         self._update_title()
         self._busy = False
+        self._busy_source: BaseTab | None = None
+        self._progress_label: str | None = None
+        self._progress_start = 0.0
         self._dirty = False
 
         self._build_menu_bar()
+
+        # make status label a QLabel so text can be selectable
+        self.status_label = QLabel()
+        self.status_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.status_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.statusBar().addWidget(self.status_label, 1)
 
         self.tabs = QTabWidget()
         self.tab_widgets: list[BaseTab] = []
         for tab_type in TAB_TYPES:
             tab = tab_type(self.experiment)
-            tab.status_message.connect(self.statusBar().showMessage)
+            tab.status_message.connect(self._show_status)
             tab.experiment_changed.connect(
                 lambda source=tab: self._on_experiment_changed(source)
             )
             tab.busy_changed.connect(
                 lambda busy, source=tab: self._set_busy(busy, source)
             )
+            tab.finished.connect(lambda source=tab: self._on_tab_finished(source))
+            tab.progress_changed.connect(
+                lambda value, maximum, label, source=tab: self._set_progress(
+                    source, value, maximum, label
+                )
+            )
             self.tabs.addTab(tab, tab_type.title)
             self.tab_widgets.append(tab)
-        self.setCentralWidget(self.tabs)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setVisible(False)
+
+        self.central = QWidget()
+        central_layout = QVBoxLayout(self.central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.addWidget(self.tabs, stretch=1)
+        central_layout.addWidget(self.progress_bar)
+        self.setCentralWidget(self.central)
 
     def tab(self, tab_type: type[BaseTab]) -> BaseTab:
         """The window's instance of ``tab_type``."""
@@ -114,7 +151,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Could not open experiment", str(exc))
             return
         self._set_experiment(experiment)
-        self.statusBar().showMessage(f"Opened experiment {folder}")
+        self._show_status(f"Opened experiment {folder}")
 
     def _set_experiment(self, experiment: Experiment) -> None:
         """Hand ``experiment`` to every tab, in place of the current one."""
@@ -131,13 +168,20 @@ class MainWindow(QMainWindow):
             if tab is not source:
                 tab.refresh()
 
+    def _on_tab_finished(self, source: BaseTab) -> None:
+        if self._dirty and not self._save_experiment():
+            return
+        index = self.tabs.indexOf(source)
+        if 0 <= index < self.tabs.count() - 1:
+            self.tabs.setCurrentIndex(index + 1)
+
     def _save_experiment(self) -> bool:
         """Write the experiment (config and any computed results) to its folder.
 
         Returns True if the save was successful.
         """
         if self._busy:
-            self.statusBar().showMessage("Cannot save while a step is running")
+            self._show_status("Cannot save while a step is running")
             return False
         folder = None
         if self.experiment.folder is None:
@@ -154,7 +198,7 @@ class MainWindow(QMainWindow):
             # brought up to date either way.
             self._update_title()
         self._dirty = False
-        self.statusBar().showMessage(f"Saved experiment to {self.experiment.folder}")
+        self._show_status(f"Saved experiment to {self.experiment.folder}")
         return True
 
     def _confirm_discarding_changes(self) -> bool:
@@ -198,14 +242,67 @@ class MainWindow(QMainWindow):
         name = folder.name if folder is not None else _UNSAVED_TITLE
         self.setWindowTitle(f"{_BASE_TITLE} :: [{name}]")
 
+    def _show_status(self, message: str) -> None:
+        """Report ``message`` in the status bar until something replaces it."""
+        self.status_label.setText(message)
+        self.status_label.setToolTip(message)
+
     def _set_busy(self, busy: bool, source: BaseTab | None = None) -> None:
         """Lock other tabs and actions while the source tab is busy."""
+        if busy:
+            self._busy_source = source
+            self._progress_label = None
+            self.progress_bar.setRange(0, 0)
+            self.progress_bar.setFormat("Working…")
+            self.progress_bar.setVisible(True)
+        elif self._busy_source is None or source is self._busy_source:
+            self._busy_source = None
+            self.progress_bar.setVisible(False)
         self._busy = busy
         self.new_action.setEnabled(not busy)
         self.open_action.setEnabled(not busy)
         self.save_action.setEnabled(not busy)
         for index, tab in enumerate(self.tab_widgets):
             self.tabs.setTabEnabled(index, not busy or tab is source)
+
+    def _set_progress(
+        self,
+        source: BaseTab,
+        value: int,
+        maximum: int,
+        label: str,
+    ) -> None:
+        """Display progress reported by the tab that owns the active task."""
+        if source is not self._busy_source:
+            return
+        maximum = max(0, maximum)
+        self.progress_bar.setRange(0, maximum)
+        if maximum:
+            value = max(0, min(value, maximum))
+            self.progress_bar.setValue(value)
+            self.progress_bar.setFormat(
+                f"{label} — %p%{self._eta(value, maximum, label)}"
+            )
+        else:
+            self.progress_bar.setFormat(label)
+
+    def _eta(self, value: int, maximum: int, label: str) -> str:
+        """How much longer this operation has left, from the progress so far.
+
+        Timing restarts if the label changes.
+        """
+        now = time.monotonic()
+        if label != self._progress_label:
+            self._progress_label = label
+            self._progress_start = now
+        elapsed = now - self._progress_start
+        remaining = tqdm.format_meter(
+            n=value,
+            total=maximum,
+            elapsed=elapsed,
+            bar_format="{remaining}",
+        )
+        return f" — {remaining} left"
 
     def closeEvent(self, event) -> None:
         if not self._confirm_discarding_changes():

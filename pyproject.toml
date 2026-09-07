@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "body-eye-sync"
 version = "0.0.4"
 dependencies = [
+    "av",
     "boxmot>=21.0.0,<22.0.0",  # see pipeline/object_tracking.py
     "ultralytics",
     # Direct dependencies so uv can select the CUDA builds on Windows below.
@@ -16,14 +17,19 @@ dependencies = [
     "opencv-python",
     "packaging",
     "pandas",
+    "pillow",
     "platformdirs",
     "pyarrow",
     "pydantic",
     "pyyaml",
+    "scipy",
     "qtpy",
     "pyside6",
     "insightface",
     "onnxruntime",
+    "faster-whisper",
+    "tqdm",
+    "matplotlib",
 ]
 authors = [
     { name = "SSC" },
@@ -68,3 +74,6 @@ dev = [
 [project.scripts]
 body-eye-sync = "body_eye_sync.__main__:main"
 body-eye-sync-cli = "body_eye_sync.cli:main"
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"

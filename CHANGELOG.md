@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- add synchronised video export functionality and GUI export tab [#43](https://github.com/ssciwr/body-eye-sync/pull/43)
+- add automatic recording alignment and Timing correction tab to detect and fix clock drift and gaps [#38](https://github.com/ssciwr/body-eye-sync/pull/38)
+- add Alignment tab to align recordings [#41](https://github.com/ssciwr/body-eye-sync/pull/41)
+- split the GUI into a tab per stage, with an Input files tab for managing an experiment's inputs [#34](https://github.com/ssciwr/body-eye-sync/pull/34)
 - add `GlassesVideo`, `FixedVideo` and `Audio` input types [#31](https://github.com/ssciwr/body-eye-sync/pull/31)
-- split the GUI into a tab per stage, with an Input files tab for managing an experiment's inputs [#32](https://github.com/ssciwr/body-eye-sync/pull/34)
 
 ## [0.0.4] - 2026-07-03
 

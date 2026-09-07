@@ -21,25 +21,26 @@ logger = logging.getLogger(__name__)
 
 
 def run_experiment(experiment: Experiment, *, force: bool = False) -> dict[str, Path]:
-    """Run the whole pipeline over all inputs"""
+    """Run the whole pipeline over all inputs, returning each one's output directory."""
     runs = [
         *((video, run_glasses_video) for video in experiment.glasses_videos),
         *((video, run_fixed_video) for video in experiment.fixed_videos),
     ]
     results: dict[str, Path] = {}
     for video, run in runs:
-        destination = experiment.output_path(video)
-        if destination.exists() and not force:
-            logger.info("skipping input %r: %s already exists", video.id, destination)
-            results[video.id] = destination
+        directory = experiment.output_dir_for(video)
+        if video.has_results(directory) and not force:
+            logger.info(
+                "skipping input %r: %s already has results", video.id, directory
+            )
+            results[video.id] = directory
             continue
 
         logger.info("running input %r", video.id)
         run(experiment, video)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        video.to_parquet(destination)
-        logger.info("wrote %s", destination)
-        results[video.id] = destination
+        video.save(directory)
+        logger.info("wrote %s", directory)
+        results[video.id] = directory
 
     for audio in experiment.audio:
         logger.info("skipping input %r: audio has no pipeline stages yet", audio.id)
