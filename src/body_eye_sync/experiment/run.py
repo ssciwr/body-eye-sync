@@ -177,7 +177,6 @@ def _run_transcription(
         model_name=step.model_name,
         language=step.language,
         beam_size=step.beam_size,
-        device=step.device,
         vad_filter=step.vad_filter,
     ):
         speech.add_transcription_segment(segment)

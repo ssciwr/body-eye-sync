@@ -258,14 +258,6 @@ class TranscriptionStep(_Model):
         ),
     )
     beam_size: int = Field(5, ge=1, description="Decoding beam width.")
-    device: str = Field(
-        "auto",
-        description=(
-            "Where to run Whisper. 'auto' uses a GPU when one can actually be "
-            "loaded, and the CPU otherwise."
-        ),
-        json_schema_extra={"choices": ["auto", "cpu", "cuda"]},
-    )
     vad_filter: bool = Field(
         True,
         description=(

@@ -80,8 +80,6 @@ The **Audio processing** tab transcribes the speech in every input that carries 
 - `language` takes an ISO 639-1 code and defaults to `de`, matching the German
   model. Change it when selecting a multilingual model for another language, or
   leave it empty to detect the language from the first 30 seconds.
-- `device` defaults to `auto`, which uses a GPU when the machine has one, and can
-  be set to `cpu` or `cuda` to choose.
 - `vad_filter` skips silent stretches.
 
 ## Work Out Who Said What
