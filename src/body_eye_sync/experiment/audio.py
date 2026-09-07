@@ -41,6 +41,10 @@ class Audio:
     def path(self) -> Path | None:
         return self.audio_path
 
+    def has_audio_track(self) -> bool:
+        """Whether this recording carries sound"""
+        return self.audio_path is not None
+
     def clear(self) -> None:
         self.speech.clear()
 

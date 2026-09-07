@@ -27,7 +27,6 @@ from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.gui.tabs.base import BaseTab
 from body_eye_sync.gui.widgets import PydanticForm, SynchronizedAudioPlaybackWidget
 from body_eye_sync.postprocessing.attribution import AttributionCancelled
-from body_eye_sync.preprocessing.audio import has_audio_stream
 
 _START, _END, _SPEAKER, _TEXT = range(4)
 _COLUMNS = ["Start", "End", "Speaker", "Text"]
@@ -102,7 +101,6 @@ class SpeechPostProcessingTab(BaseTab):
         super().__init__(experiment)
         self._thread: threading.Thread | None = None
         self._worker: _Worker | None = None
-        self._has_audio: dict[str, bool] = {}
 
         self.attribute_button = QPushButton("Attribute speech to speakers")
         self.attribute_button.clicked.connect(self._start)
@@ -257,15 +255,7 @@ class SpeechPostProcessingTab(BaseTab):
 
     def _refresh_audio(self) -> None:
         """Show every synchronized input that carries an audio stream."""
-        recordings = []
-        for data in self.experiment.inputs:
-            if data.path is None:
-                continue
-            key = str(data.path)
-            if not self._has_audio.get(key, False):
-                self._has_audio[key] = has_audio_stream(data.path)
-            if self._has_audio[key]:
-                recordings.append(data)
+        recordings = [data for data in self.experiment.inputs if data.has_audio_track()]
         self.audio_player.load(recordings)
         self.audio_player.set_turns(self.experiment.speech_turns.data)
 

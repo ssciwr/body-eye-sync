@@ -30,6 +30,7 @@ from body_eye_sync.pipeline.body_pose import (
     pose_from_row,
     poses_to_dataframe,
 )
+from body_eye_sync.preprocessing.audio import has_audio_stream
 
 
 #: Column layout of the embeddings table.
@@ -71,6 +72,8 @@ class Video:
         self.video_path = Path(path) if path is not None else None
         self.timeline = timeline if timeline is not None else Timeline()
         self.speech = Speech()
+        self._has_audio_track = False
+        self._audio_track_path: Path | None = None
         # Persistent results.
         self._data: pd.DataFrame | None = None
         self._rows_by_frame: dict[int, np.ndarray] = {}
@@ -87,6 +90,15 @@ class Video:
     @property
     def path(self) -> Path | None:
         return self.video_path
+
+    def has_audio_track(self) -> bool:
+        """Whether this video carries sound"""
+        if self.video_path is None:
+            return False
+        if self._audio_track_path != self.video_path:
+            self._has_audio_track = has_audio_stream(self.video_path)
+            self._audio_track_path = self.video_path
+        return self._has_audio_track
 
     def begin_object_tracking(self, embeddings_per_track: int = 0) -> None:
         """Drop any previous model outputs.

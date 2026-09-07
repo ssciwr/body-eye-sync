@@ -116,3 +116,9 @@ def test_loading_a_directory_without_results_leaves_it_empty(tmp_path):
     loaded = Audio()
     loaded.load(tmp_path)
     assert loaded.speech.data is None
+
+
+def test_an_audio_input_always_has_an_audio_track(data_dir):
+    assert Audio(path=data_dir / "three-people-conversation.opus").has_audio_track()
+    # An input whose file has not been chosen yet has nothing to transcribe.
+    assert not Audio().has_audio_track()

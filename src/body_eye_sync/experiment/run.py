@@ -19,7 +19,6 @@ from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.speech import Speech
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo, Video
 from body_eye_sync.pipeline.body_pose import detect_body_poses
-from body_eye_sync.preprocessing.audio import has_audio_stream
 from body_eye_sync.pipeline.face_detection import detect_faces
 from body_eye_sync.pipeline.object_tracking import BoundingBox, detect_tracklets
 from body_eye_sync.pipeline.transcription import transcribe
@@ -91,9 +90,9 @@ def run_audio(experiment: Experiment, audio: Audio) -> None:
 
 def _run_video_speech(video: Video, pipeline: SpeechPipeline | None) -> None:
     """Run the speech stages over a video's audio track, if it has one."""
-    if pipeline is None or video.video_path is None:
+    if pipeline is None:
         return
-    if not has_audio_stream(video.video_path):
+    if not video.has_audio_track():
         logger.info("input %r has no audio track; skipping speech", video.id)
         return
     _run_speech_pipeline(video.speech, video.video_path, pipeline)

@@ -138,6 +138,14 @@ class AudioProcessingTab(BaseTab):
 
         self.refresh()
 
+    def _inputs(self) -> dict[str, Video | Audio]:
+        """The inputs that carry sound, the only ones with speech to transcribe."""
+        return {
+            input_id: data
+            for input_id, data in super()._inputs().items()
+            if data.has_audio_track()
+        }
+
     def refresh(self) -> None:
         """Re-list the inputs, keeping the shown one if it is still there."""
         if self._thread is not None:
@@ -250,9 +258,11 @@ class AudioProcessingTab(BaseTab):
 
     def _nothing_to_show(self) -> str:
         """Why the transcript table is empty."""
-        if self.input() is None:
-            return "This experiment has no inputs."
-        return "No transcript yet; run transcription."
+        if self.input() is not None:
+            return "No transcript yet; run transcription."
+        if any(data.path is not None for data in self.experiment.inputs):
+            return "None of this experiment's recordings carry audio."
+        return "This experiment has no inputs."
 
     def _summary(self, speech: Speech) -> str:
         words = 0 if speech.words is None else len(speech.words)

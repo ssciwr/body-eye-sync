@@ -69,6 +69,28 @@ def tab(qtbot, experiment):
 
 
 @pytest.fixture
+def silent_experiment(data_dir):
+    """An experiment whose fixed camera recorded no sound, beside a microphone."""
+    return Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="silent", path=data_dir / "three-people.mp4")
+            ],
+            audio=[
+                AudioInput(id="mic1", path=data_dir / "three-people-conversation.opus")
+            ],
+        )
+    )
+
+
+@pytest.fixture
+def silent_tab(qtbot, silent_experiment):
+    tab = AudioProcessingTab(silent_experiment)
+    qtbot.addWidget(tab)
+    return tab
+
+
+@pytest.fixture
 def empty_tab(qtbot):
     """The tab as it is for an experiment with no inputs at all."""
     tab = AudioProcessingTab(Experiment(ExperimentConfig()))
@@ -567,3 +589,54 @@ def test_shutdown_cancels_running_transcription(tab):
     tab.shutdown()
 
     assert tab._thread is None or not tab._thread.is_alive()
+
+
+def test_a_recording_without_an_audio_track_is_not_listed(silent_tab):
+    # A camera without a microphone has nothing to transcribe, so it is not
+    # offered: the microphone beside it is all there is to choose from.
+    assert [
+        silent_tab.input_selector.itemText(i)
+        for i in range(silent_tab.input_selector.count())
+    ] == ["mic1 (audio)"]
+    assert silent_tab.input() is silent_tab.experiment.audio[0]
+
+
+def test_run_all_skips_recordings_without_an_audio_track(
+    qtbot, silent_tab, data_dir, monkeypatch
+):
+    transcribed = []
+
+    def transcribe(audio_path, **kwargs):
+        transcribed.append(audio_path)
+        yield from TRANSCRIPT
+
+    monkeypatch.setattr("body_eye_sync.pipeline.transcription.transcribe", transcribe)
+
+    silent_tab.pipeline_editor.run_all_button.click()
+    qtbot.waitUntil(lambda: not silent_tab.is_busy(), timeout=10000)
+
+    # The silent camera has no audio stream to decode, so queueing it would have
+    # failed the run and taken the recordings after it down with it.
+    assert transcribed == [data_dir / "three-people-conversation.opus"]
+    assert silent_tab.experiment.fixed_videos[0].speech.data is None
+    assert silent_tab.experiment.audio[0].speech.data is not None
+
+
+def test_an_experiment_of_silent_recordings_has_nothing_to_transcribe(qtbot, data_dir):
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="silent", path=data_dir / "three-people.mp4")
+            ]
+        )
+    )
+    tab = AudioProcessingTab(experiment)
+    qtbot.addWidget(tab)
+
+    # Having inputs but no audio among them is its own thing to say.
+    assert tab.input_selector.count() == 0
+    assert not _run_button(tab, TranscriptionStep).isEnabled()
+    assert not tab.pipeline_editor.run_all_button.isEnabled()
+    assert (
+        tab.summary_label.text() == "None of this experiment's recordings carry audio."
+    )
