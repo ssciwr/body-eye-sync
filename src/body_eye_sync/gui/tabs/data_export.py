@@ -135,21 +135,16 @@ class DataExportTab(BaseTab):
         buttons.addWidget(self.cancel_button)
         buttons.addStretch(1)
 
-        self.result_label = QLabel()
-        self.result_label.setWordWrap(True)
-
         layout = QVBoxLayout(self)
         layout.addWidget(description)
         layout.addWidget(self.input_list)
         layout.addWidget(self.merged_audio_checkbox)
         layout.addLayout(buttons)
-        layout.addWidget(self.result_label)
         layout.addStretch(1)
         self.refresh()
 
     def set_experiment(self, experiment: Experiment) -> None:
         self.input_list.clear()
-        self.result_label.clear()
         super().set_experiment(experiment)
 
     def refresh(self) -> None:
@@ -207,6 +202,8 @@ class DataExportTab(BaseTab):
         self.merged_audio_checkbox.setEnabled(not running)
         self.export_button.setEnabled(not running and has_selected_video)
         self.cancel_button.setVisible(running)
+        self.cancel_button.setEnabled(True)
+        self.cancel_button.setText("Cancel")
 
     @Slot()
     def _choose_output(self) -> None:
@@ -230,7 +227,6 @@ class DataExportTab(BaseTab):
         input_ids = self.selected_input_ids()
         if self._thread is not None or not input_ids:
             return
-        self.result_label.setText(f"Exporting to {output_path}…")
         self._worker = _VideoExportWorker(
             self.experiment,
             output_path,
@@ -256,13 +252,11 @@ class DataExportTab(BaseTab):
         if self._worker is not None:
             self._worker.cancel()
             self.cancel_button.setEnabled(False)
-            self.result_label.setText("Cancelling export…")
+            self.cancel_button.setText("Cancelling…")
 
     @Slot(str)
     def _on_finished(self, output_path: str) -> None:
-        message = f"Exported combined video to {output_path}"
-        self.result_label.setText(message)
-        self.status_message.emit(message)
+        self.status_message.emit(f"Exported combined video to {output_path}")
         self._set_running(False)
 
     @Slot(str, str)
@@ -273,18 +267,17 @@ class DataExportTab(BaseTab):
         dialog.setText(message)
         dialog.setDetailedText(details)
         dialog.exec()
-        self.result_label.setText("Could not export combined video.")
+        self.status_message.emit("Could not export combined video")
         self._set_running(False)
 
     @Slot()
     def _on_cancelled(self) -> None:
-        self.result_label.setText("Combined video export cancelled.")
+        self.status_message.emit("Combined video export cancelled")
         self._set_running(False)
 
     def _set_running(self, running: bool) -> None:
         if not running:
             self._thread = None
             self._worker = None
-            self.cancel_button.setEnabled(True)
         self.busy_changed.emit(running)
         self._update_availability()

@@ -121,7 +121,6 @@ def test_export_passes_selection_and_merged_audio_to_backend(
     assert (50, 100, "Exporting combined video…") in progress
     assert progress[-1] == (100, 100, "Exporting combined video…")
     assert messages == [f"Exported combined video to {output}"]
-    assert tab.result_label.text() == messages[0]
 
 
 def test_save_name_gets_an_mp4_extension(qtbot, tab, tmp_path, monkeypatch):
