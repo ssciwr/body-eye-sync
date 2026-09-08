@@ -100,3 +100,16 @@ def test_from_model_repopulates_widgets(qtbot):
     form.from_model(FaceDetectionStep(det_size=1280, det_thresh=0.3))
     assert form._widgets["det_size"].value() == 1280
     assert form._widgets["det_thresh"].value() == 0.3
+
+
+def test_selected_fields_update_a_base_model(qtbot):
+    original = FaceDetectionStep(det_size=1280, det_thresh=0.3)
+    form = PydanticForm(original, fields=["det_thresh"])
+    qtbot.addWidget(form)
+
+    assert list(form._widgets) == ["det_thresh"]
+    form._widgets["det_thresh"].setValue(0.7)
+
+    updated = form.to_model(original)
+    assert updated.det_thresh == pytest.approx(0.7)
+    assert updated.det_size == 1280

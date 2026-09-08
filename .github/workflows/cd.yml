@@ -43,8 +43,8 @@ jobs:
       - name: Build app wheel
         run: uv build --wheel --out-dir installer
       # Export the committed cross-platform lockfile for the installer. Its
-      # platform markers select the CUDA 12.6 torch wheels on Windows, while uv
-      # verifies every hash supplied by the package indexes during installation.
+      # platform markers select the CUDA 12.6 torch wheels on Windows. Omit
+      # hashes because the PyTorch index does not publish them for every wheel.
       - name: Export pinned requirements
         shell: bash
         run: |
@@ -52,6 +52,7 @@ jobs:
             --locked \
             --no-dev \
             --no-emit-project \
+            --no-hashes \
             --format requirements.txt \
             --output-file installer/requirements-win.lock
       - name: Render construct.yaml
@@ -80,7 +81,10 @@ jobs:
         shell: pwsh
         run: |
           $exe = (Get-ChildItem installer-dist\*.exe)[0].FullName
-          Start-Process -Wait -FilePath $exe -ArgumentList '/S','/D=C:\bes'
+          $installer = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList '/S','/D=C:\bes'
+          if ($installer.ExitCode -ne 0) {
+            throw "installer exited with $($installer.ExitCode)"
+          }
           C:\bes\python.exe -m pip install pytest pytest-qt
           $env:QT_QPA_PLATFORM = 'offscreen'
           C:\bes\python.exe -m pytest tests

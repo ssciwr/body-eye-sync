@@ -13,6 +13,7 @@ from body_eye_sync.experiment.embeddings import (
     read_embeddings,
     write_embeddings,
 )
+from body_eye_sync.experiment.speech import Speech
 from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.pipeline.object_tracking import BoundingBox, tracks_to_dataframe
 from body_eye_sync.pipeline.face_detection import (
@@ -29,6 +30,7 @@ from body_eye_sync.pipeline.body_pose import (
     pose_from_row,
     poses_to_dataframe,
 )
+from body_eye_sync.preprocessing.audio import has_audio_stream
 
 
 #: Column layout of the embeddings table.
@@ -52,6 +54,9 @@ class Video:
     Face detection runs as a later pass over those tracked boxes, accumulating
     per frame and folding its columns onto the matching rows in
     :meth:`finish_face_detection`. Body-pose detection follows the same pattern.
+
+    A camera also records audio, so the speech stages can run over this video's
+    own track, with their results stored in :attr:`speech`.
     """
 
     #: The tracked boxes, this input's main result.
@@ -66,6 +71,9 @@ class Video:
         self.id = id
         self.video_path = Path(path) if path is not None else None
         self.timeline = timeline if timeline is not None else Timeline()
+        self.speech = Speech()
+        self._has_audio_track = False
+        self._audio_track_path: Path | None = None
         # Persistent results.
         self._data: pd.DataFrame | None = None
         self._rows_by_frame: dict[int, np.ndarray] = {}
@@ -82,6 +90,15 @@ class Video:
     @property
     def path(self) -> Path | None:
         return self.video_path
+
+    def has_audio_track(self) -> bool:
+        """Whether this video carries sound"""
+        if self.video_path is None:
+            return False
+        if self._audio_track_path != self.video_path:
+            self._has_audio_track = has_audio_stream(self.video_path)
+            self._audio_track_path = self.video_path
+        return self._has_audio_track
 
     def begin_object_tracking(self, embeddings_per_track: int = 0) -> None:
         """Drop any previous model outputs.
@@ -256,6 +273,7 @@ class Video:
     def clear(self) -> None:
         self._data = None
         self._rows_by_frame = {}
+        self.speech.clear()
         self._tmp_frames = []
         self._tmp_face_frames = []
         self._tmp_pose_frames = []
@@ -265,8 +283,8 @@ class Video:
         self._face_embeddings = None
 
     def has_data(self) -> bool:
-        """Whether this video has completed tracking results in memory."""
-        return self._data is not None
+        """Whether this video has any completed pipeline results in memory."""
+        return self._data is not None or self.speech.data is not None
 
     def has_results(self, directory: str | Path) -> bool:
         """Whether ``directory`` already holds results for a video."""
@@ -274,29 +292,32 @@ class Video:
 
     def save(self, directory: str | Path) -> None:
         """Write these results into ``directory``, one file per kind of result."""
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-
-        if self._data is None:
+        if self._data is None and self.speech.data is None:
             raise ValueError("no data to write; run the pipeline first")
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
-        table = pa.Table.from_pandas(self._data, preserve_index=False)
-        pq.write_table(table, str(directory / self._RESULTS_FILENAME))
-        for kind, embeddings in (
-            ("body", self._body_embeddings),
-            ("face", self._face_embeddings),
-        ):
-            embeddings_path = directory / _embeddings_filename(kind)
-            if embeddings is None:
-                embeddings_path.unlink(missing_ok=True)
-            else:
-                write_embeddings(embeddings_path, embeddings)
+        if self._data is not None:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+
+            table = pa.Table.from_pandas(self._data, preserve_index=False)
+            pq.write_table(table, str(directory / self._RESULTS_FILENAME))
+            for kind, embeddings in (
+                ("body", self._body_embeddings),
+                ("face", self._face_embeddings),
+            ):
+                embeddings_path = directory / _embeddings_filename(kind)
+                if embeddings is None:
+                    embeddings_path.unlink(missing_ok=True)
+                else:
+                    write_embeddings(embeddings_path, embeddings)
+        self.speech.save(directory)
 
     def load(self, directory: str | Path) -> None:
         """Load results written by :meth:`save`, if ``directory`` holds any."""
         directory = Path(directory)
         self.clear()
+        self.speech.load(directory)
         results_path = directory / self._RESULTS_FILENAME
         if not results_path.exists():
             return
@@ -307,13 +328,6 @@ class Video:
         face_path = directory / _embeddings_filename("face")
         if face_path.exists():
             self._face_embeddings = read_embeddings(face_path)
-
-    @classmethod
-    def from_directory(cls, directory: str | Path) -> "Video":
-        """A new :class:`Video` loaded from an output directory (see :meth:`load`)."""
-        video = cls()
-        video.load(directory)
-        return video
 
 
 class GlassesVideo(Video):

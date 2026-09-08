@@ -7,20 +7,26 @@ Tabs report changes to the experiment via signals.
 
 from __future__ import annotations
 
+import threading
 from typing import ClassVar
 
-from qtpy.QtCore import Qt, Signal
+from qtpy.QtCore import QObject, Qt, Signal
 from qtpy.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import Video
 
+SHUTDOWN_TIMEOUT = 5.0
+
 
 class BaseTab(QWidget):
     """One tab of the main window, acting on an :class:`Experiment`."""
 
     title: ClassVar[str] = ""
+
+    _worker: QObject | None = None
+    _thread: threading.Thread | None = None
 
     # signals
     status_message = Signal(str)
@@ -49,6 +55,15 @@ class BaseTab(QWidget):
 
     def shutdown(self) -> None:
         """Stop any work in progress; called when the window is closing."""
+        worker, thread = self._worker, self._thread
+        self._worker = None
+        self._thread = None
+        if worker is None:
+            return
+        worker.cancel()
+        QObject.disconnect(worker, None, None, None)
+        if thread is not None:
+            thread.join(timeout=SHUTDOWN_TIMEOUT)
 
 
 class PlaceholderTab(BaseTab):

@@ -10,3 +10,7 @@ over them.
 ## Timing Correction
 
 ::: body_eye_sync.preprocessing.timing_correction
+
+## Audio
+
+::: body_eye_sync.preprocessing.audio

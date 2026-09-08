@@ -248,3 +248,19 @@ def test_begin_body_pose_detection_drops_previous_pose_columns():
     assert "pose_score" not in video.data.columns
     assert len(video.data) == 3
     assert video.poses_for_frame(0) == []
+
+
+def test_has_audio_track_tells_a_camera_with_sound_from_one_without(data_dir):
+    assert Video(path=data_dir / "three-people-talking.mp4").has_audio_track()
+    assert not Video(path=data_dir / "three-people.mp4").has_audio_track()
+    # An input whose file has not been chosen yet has nothing to probe.
+    assert not Video().has_audio_track()
+
+
+def test_has_audio_track_is_asked_again_when_the_file_changes(data_dir):
+    video = Video(path=data_dir / "three-people.mp4")
+    assert not video.has_audio_track()
+
+    video.video_path = data_dir / "three-people-talking.mp4"
+
+    assert video.has_audio_track()

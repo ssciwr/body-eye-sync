@@ -4,7 +4,9 @@ from pydantic import ValidationError
 from body_eye_sync.experiment.config import (
     CURRENT_VERSION,
     AudioInput,
-    AudioPipeline,
+    SpeechPipeline,
+    SpeechPostProcessingSettings,
+    TranscriptionStep,
     BodyPoseStep,
     ExperimentConfig,
     FaceDetectionStep,
@@ -74,18 +76,33 @@ def test_object_tracking_defaults_when_omitted():
     assert pipeline.body_pose is None
 
 
-def test_steps_lists_present_stages_tracking_first():
-    pipeline = _video_pipeline(face_detection=None)
-    assert [type(s) for s in pipeline.steps] == [ObjectTrackingStep, BodyPoseStep]
-
-
 def test_tracking_only_pipeline_is_valid():
     pipeline = _video_pipeline(face_detection=None, body_pose=None)
-    assert [type(s) for s in pipeline.steps] == [ObjectTrackingStep]
+    assert isinstance(pipeline.object_tracking, ObjectTrackingStep)
+    assert pipeline.face_detection is None
+    assert pipeline.body_pose is None
 
 
-def test_audio_pipeline_has_no_steps_yet():
-    assert AudioPipeline().steps == []
+def test_audio_pipeline_transcribes_by_default():
+    pipeline = SpeechPipeline()
+    assert isinstance(pipeline.transcription, TranscriptionStep)
+    assert (
+        pipeline.transcription.model_name == "primeline/whisper-large-v3-turbo-german"
+    )
+    assert pipeline.transcription.language == "de"
+
+
+def test_speech_post_processing_settings_are_validated():
+    settings = SpeechPostProcessingSettings(split_gap_seconds=1.25)
+
+    assert settings.split_gap_seconds == 1.25
+    assert settings.split_on_comma
+    assert settings.minimum_clause_words == 4
+    assert settings.minimum_clause_seconds == 0.5
+    assert settings.fuzzy_agreement == 0.6
+    assert Pipeline(speech_post_processing=settings).speech_post_processing is settings
+    with pytest.raises(ValidationError):
+        SpeechPostProcessingSettings(ownership_share=1.1)
 
 
 def test_version_defaults_to_current():

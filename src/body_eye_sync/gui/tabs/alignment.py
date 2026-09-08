@@ -20,7 +20,7 @@ from qtpy.QtWidgets import (
 )
 
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.prepare import align_experiment
+from body_eye_sync.experiment.preprocess import align_experiment
 from body_eye_sync.experiment.video import Video
 from body_eye_sync.gui.tabs.base import BaseTab
 from body_eye_sync.gui.widgets import VideoViewer

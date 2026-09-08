@@ -21,6 +21,7 @@ from body_eye_sync.experiment.config import (
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.timeline import Shift, Timeline
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo
+from body_eye_sync.pipeline.transcription import TranscriptSegment, Word
 
 
 def _config(**overrides):
@@ -223,7 +224,7 @@ def test_add_input_with_a_duplicate_id_rejected(tmp_path):
         exp.add_audio(AudioInput(id="cam1", path="p1.wav"))
 
 
-def test_adding_an_input_discards_outputs_left_under_its_id(tmp_path):
+def test_adding_an_input_rejects_outputs_left_under_its_id(tmp_path):
     exp = Experiment(_config(), tmp_path)
     exp.glasses_videos[0].set_data(_tracks())
     exp.save()
@@ -231,14 +232,14 @@ def test_adding_an_input_discards_outputs_left_under_its_id(tmp_path):
     note.write_text("user-owned")
     exp.remove_input(exp.glasses_videos[0])
 
-    # A different recording that happens to be given the id the old one had:
-    # it starts empty rather than adopting the results left behind.
-    video = exp.add_glasses_video(
-        GlassesVideoInput(id="cam1", path="other.mp4", gaze_path="other.tsv")
-    )
+    # A different recording cannot adopt or silently delete the old one's results.
+    with pytest.raises(ValueError, match="outputs already exist"):
+        exp.add_glasses_video(
+            GlassesVideoInput(id="cam1", path="other.mp4", gaze_path="other.tsv")
+        )
 
-    assert video.data is None
-    assert list(exp.output_dir.iterdir()) == [note]
+    assert (exp.output_dir / "cam1" / "results.parquet").exists()
+    assert note.exists()
 
 
 def test_add_audio_for_an_unknown_glasses_video_rejected(tmp_path):
@@ -294,7 +295,7 @@ def test_rename_input_leaves_other_inputs_outputs_alone(tmp_path):
     exp = Experiment(
         _config(
             glasses_videos=[
-                GlassesVideoInput(id="cam[1]", path="a.mp4", gaze_path="a.tsv")
+                GlassesVideoInput(id="cam-old", path="a.mp4", gaze_path="a.tsv")
             ]
         ),
         tmp_path,
@@ -303,7 +304,7 @@ def test_rename_input_leaves_other_inputs_outputs_alone(tmp_path):
     exp.glasses_videos[0].set_data(_tracks())
     other.set_data(_tracks())
     exp.save()
-    note = exp.output_dir / "cam[1].notes.txt"
+    note = exp.output_dir / "cam-old.notes.txt"
     note.write_text("user-owned")
 
     exp.rename_input(exp.glasses_videos[0], "renamed")
@@ -336,9 +337,11 @@ def test_rename_input_does_not_overwrite_existing_outputs(tmp_path):
     assert (existing / "notes.txt").read_text() == "keep me"
 
 
-@pytest.mark.parametrize("bad_id", ["", "..", "a/../b", "sub/cam1", "back\\cam1"])
-def test_an_id_that_is_not_a_filename_is_rejected(tmp_path, bad_id):
-    # Ids name output directories, so one of these would escape outputs/.
+@pytest.mark.parametrize(
+    "bad_id", ["", "..", "a/../b", "sub/cam1", "back\\cam1", "cam[1", "cam]1"]
+)
+def test_a_reserved_input_id_is_rejected(tmp_path, bad_id):
+    # Ids name output directories and ELAN tiers, where brackets are reserved.
     exp = Experiment(_config(), tmp_path)
     with pytest.raises(ValueError, match="input id cannot"):
         exp.rename_input(exp.glasses_videos[0], bad_id)
@@ -358,6 +361,18 @@ def test_save_writes_and_load_rehydrates_video_results(tmp_path):
     assert video.data["track_id"].nunique() == 2
 
 
+def test_constructing_with_a_folder_does_not_load_stored_results(tmp_path):
+    stored = Experiment(_config(), tmp_path)
+    stored.glasses_videos[0].set_data(_tracks())
+    stored.save()
+
+    fresh = Experiment(_config(), tmp_path)
+
+    assert fresh.glasses_videos[0].data is None
+    loaded = Experiment.load(tmp_path)
+    pd.testing.assert_frame_equal(loaded.glasses_videos[0].data, _tracks())
+
+
 def test_save_writes_results_for_every_input_type(tmp_path):
     exp = Experiment(
         _config(
@@ -368,19 +383,64 @@ def test_save_writes_results_for_every_input_type(tmp_path):
     )
     exp.glasses_videos[0].set_data(_tracks())
     exp.fixed_videos[0].set_data(_tracks())
-    exp.audio[0].set_data(pd.DataFrame({"start": [0.0], "end": [1.0]}))
+    exp.audio[0].speech.set_data(
+        pd.DataFrame(
+            {"segment_id": [0], "start": [0.0], "end": [1.0], "text": ["hallo"]}
+        )
+    )
     exp.save()
 
-    # Every input owns a directory, with its results inside.
+    # Each input's main output is named for what that output holds.
     assert sorted(
         p.relative_to(tmp_path / "outputs").as_posix()
         for p in (tmp_path / "outputs").glob("*/*.parquet")
     ) == [
         "cam1/results.parquet",
-        "mic1/results.parquet",
+        "mic1/transcript_segments.parquet",
         "room/results.parquet",
     ]
-    assert Experiment.load(tmp_path).audio[0].data["end"].tolist() == [1.0]
+    assert Experiment.load(tmp_path).audio[0].speech.data["end"].tolist() == [1.0]
+
+
+def test_video_speech_results_survive_a_save_and_load(tmp_path):
+    exp = Experiment(_config(), tmp_path)
+    video = exp.glasses_videos[0]
+    video.set_data(_tracks())
+    video.speech.set_data(
+        pd.DataFrame({"segment_id": [0], "start": [0.0], "end": [1.0], "speaker": [3]})
+    )
+
+    exp.save()
+
+    reloaded = Experiment.load(tmp_path).glasses_videos[0]
+    assert reloaded.data["track_id"].nunique() == 2
+    assert reloaded.speech.data["speaker"].tolist() == [3]
+
+
+def test_video_speech_saves_without_object_tracking_results(tmp_path):
+    exp = Experiment(_config(), tmp_path)
+    video = exp.glasses_videos[0]
+    video.speech.begin_transcription()
+    video.speech.add_transcription_segment(
+        TranscriptSegment(
+            8.08,
+            11.82,
+            "Weil es halt praktisch ist.",
+            [Word(8.08, 8.52, "Weil", 0.9)],
+        )
+    )
+    video.speech.finish_transcription()
+
+    exp.save()
+
+    output = exp.output_dir_for(video)
+    assert not (output / "results.parquet").exists()
+    assert (output / "transcript_segments.parquet").exists()
+    assert (output / "transcript_words.parquet").exists()
+    reloaded = Experiment.load(tmp_path).glasses_videos[0]
+    assert reloaded.data is None
+    assert reloaded.speech.data["text"].tolist() == ["Weil es halt praktisch ist."]
+    assert reloaded.speech.words["word"].tolist() == ["Weil"]
 
 
 def test_unreadable_results_are_skipped_rather_than_failing_the_load(tmp_path, caplog):

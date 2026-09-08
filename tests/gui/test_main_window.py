@@ -9,7 +9,6 @@ from body_eye_sync.experiment.config import (
     ObjectTrackingStep,
 )
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.video import Video
 from body_eye_sync.gui import MainWindow
 from body_eye_sync.gui.tabs import (
     TAB_TYPES,
@@ -25,6 +24,7 @@ TAB_TITLES = [
     "Timing correction",
     "Video processing",
     "Audio processing",
+    "Speech post processing",
     "Post processing",
     "Data export",
 ]
@@ -107,12 +107,25 @@ def test_a_new_window_starts_with_an_empty_unsaved_experiment(window):
     assert window.windowTitle() == "body-eye-sync :: [unsaved experiment]"
 
 
-def test_adding_an_input_reaches_the_other_tabs(window, data_dir):
+def test_adding_an_input_reaches_another_tab_when_it_is_opened(window, data_dir):
     window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
 
     video_tab = window.tab(VideoProcessingTab)
+    window.tabs.setCurrentWidget(video_tab)
     assert video_tab.video() is window.experiment.glasses_videos[0]
     assert video_tab.video_viewer.frame_count == 5
+
+
+def test_a_change_only_refreshes_another_tab_when_it_is_opened(window, monkeypatch):
+    alignment_tab = window.tab(AlignmentTab)
+    refreshed = []
+    monkeypatch.setattr(alignment_tab, "refresh", lambda: refreshed.append(True))
+
+    window.tab(InputFilesTab).experiment_changed.emit()
+
+    assert not refreshed
+    window.tabs.setCurrentWidget(alignment_tab)
+    assert refreshed == [True]
 
 
 def test_finishing_alignment_saves_offsets_and_moves_to_timing_correction_tab(
@@ -252,11 +265,11 @@ def test_save_writes_the_experiment_and_its_results(window, data_dir, tmp_path):
 
     reloaded = Experiment.load(tmp_path)
     assert [v.id for v in reloaded.glasses_videos] == ["three-people"]
-    assert [type(s) for s in reloaded.pipeline.glasses_video.steps] == [
-        ObjectTrackingStep
-    ]
-    output = reloaded.output_dir_for(reloaded.glasses_videos[0])
-    assert Video.from_directory(output).data["track_id"].tolist() == [1]
+    pipeline = reloaded.pipeline.glasses_video
+    assert isinstance(pipeline.object_tracking, ObjectTrackingStep)
+    assert pipeline.face_detection is None
+    assert pipeline.body_pose is None
+    assert reloaded.glasses_videos[0].data["track_id"].tolist() == [1]
 
 
 def _answer_save_dialogs(monkeypatch, location, name=("", True)):
@@ -333,7 +346,9 @@ def test_a_save_that_fails_is_reported_rather_than_raised(
 
 def test_save_then_open_round_trips_through_the_window(window, data_dir, tmp_path):
     window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
-    window.tab(VideoProcessingTab).pipeline_editor._sections[1].setChecked(True)
+    video_tab = window.tab(VideoProcessingTab)
+    window.tabs.setCurrentWidget(video_tab)
+    video_tab.pipeline_editor._sections[1].setChecked(True)
     window.experiment.folder = tmp_path
     window._save_experiment()
 
@@ -341,7 +356,10 @@ def test_save_then_open_round_trips_through_the_window(window, data_dir, tmp_pat
     window._load_experiment(tmp_path)
 
     assert [v.id for v in window.experiment.glasses_videos] == ["three-people"]
-    assert len(window.experiment.pipeline.glasses_video.steps) == 2
+    pipeline = window.experiment.pipeline.glasses_video
+    assert isinstance(pipeline.object_tracking, ObjectTrackingStep)
+    assert pipeline.face_detection is not None
+    assert pipeline.body_pose is None
     assert window.experiment.folder == tmp_path
     # The reloaded pipeline is what the video tab's editor shows.
     assert len(window.tab(VideoProcessingTab).pipeline_editor.enabled_steps()) == 2
@@ -506,7 +524,9 @@ def test_a_run_and_a_pipeline_edit_count_as_unsaved_changes(window, data_dir):
     window.tab(InputFilesTab).glasses_section.add_files([data_dir / "three-people.mp4"])
     window._dirty = False
 
-    window.tab(VideoProcessingTab).pipeline_editor.changed.emit()
+    video_tab = window.tab(VideoProcessingTab)
+    window.tabs.setCurrentWidget(video_tab)
+    video_tab.pipeline_editor.changed.emit()
 
     assert window._dirty
 

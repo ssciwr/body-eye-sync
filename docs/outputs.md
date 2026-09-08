@@ -1,20 +1,13 @@
 # Outputs
 
-Body Eye Sync writes results as Parquet files so they can be loaded directly by
-Python analysis tools such as pandas, Polars, or PyArrow.
+Body Eye Sync writes outputs for each input as Parquet files in the `outputs/<input-id>`
+subdirectory of the experiment folder, and experiment-level outputs in `outputs/`.
 
-## Main Output
-
-Each video input receives one main output:
+## Video outputs
 
 ```text
 outputs/<input-id>/results.parquet
 ```
-
-Each `<input-id>` directory is managed by Body Eye Sync. Files placed directly
-in `outputs/` are left alone.
-
-Audio inputs have no pipeline stages yet, so they produce no output.
 
 The core tracking columns are:
 
@@ -43,16 +36,12 @@ When body-pose detection is enabled, pose columns are merged onto matching rows:
 - Per-keypoint `pose_<name>_x`, `pose_<name>_y`, and `pose_<name>_score` columns
   for the COCO keypoints.
 
-## Embedding Outputs
-
-If embeddings are collected, companion files are written beside the main output:
+## Embedding outputs
 
 ```text
 outputs/<input-id>/body_embeddings.parquet
 outputs/<input-id>/face_embeddings.parquet
 ```
-
-Embedding files contain:
 
 | Column | Meaning |
 | --- | --- |
@@ -63,11 +52,45 @@ Embedding files contain:
 
 Only the best `embeddings_per_track` vectors are kept for each tracklet.
 
-## Reading Results
+## Speech outputs
 
-```python
-import pandas as pd
-
-tracks = pd.read_parquet("outputs/camera-1/results.parquet")
-body_embeddings = pd.read_parquet("outputs/camera-1/body_embeddings.parquet")
+```text
+outputs/<input-id>/transcript_segments.parquet
 ```
+
+| Column | Meaning |
+| --- | --- |
+| `segment_id` | Zero-based segment index, in start-time order |
+| `start`, `end` | Segment bounds in seconds, on the recording's own clock |
+| `text` | The words spoken in that segment |
+
+## Word outputs
+
+```text
+outputs/<input-id>/transcript_words.parquet
+```
+
+| Column | Meaning |
+| --- | --- |
+| `segment_id` | Segment the word belongs to |
+| `word_index` | Position of the word within that segment |
+| `start`, `end` | Word bounds in seconds, on the recording's own clock |
+| `word` | The word itself |
+| `score` | Whisper's confidence in the word |
+
+## Speech turns
+
+This is the main output of the speech post-processing step, which combines all
+the transcripts from the glasses videos into a single table of who spoke when.
+
+```text
+outputs/speech_turns.parquet
+```
+
+| Column | Meaning |
+| --- | --- |
+| `turn_id` | Zero-based turn index, in start-time order |
+| `start`, `end` | Turn bounds in seconds, on the **experiment** clock |
+| `speaker` | Input id of the wearer who was speaking |
+| `source_segment_id` | Segment of the speaker's own transcript the text came from, used to retain its word timings |
+| `text` | What they said |

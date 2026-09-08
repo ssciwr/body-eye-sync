@@ -16,11 +16,14 @@ Widget mapping:
 * ``list[...]``                        -> :class:`QLineEdit` (comma separated)
 * anything else / ``str``              -> :class:`QLineEdit`
 
-``Literal`` fields (the discriminator tags) are fixed and not shown.
+``Literal`` fields (the discriminator tags) are fixed and not shown. A field
+whose type allows ``None`` is shown as an empty line edit and reads back as
+``None``, so an optional setting can be left unset.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any, Literal, get_args, get_origin
 
 import annotated_types
@@ -56,6 +59,11 @@ def _bounds(field: FieldInfo) -> tuple[float | None, float | None]:
     return low, high
 
 
+def _optional(field: FieldInfo) -> bool:
+    """Whether the field's type allows ``None``, e.g. ``str | None``."""
+    return type(None) in get_args(field.annotation)
+
+
 def _choices(field: FieldInfo) -> list | None:
     extra = field.json_schema_extra
     if isinstance(extra, dict):
@@ -72,14 +80,29 @@ class PydanticForm(QWidget):
 
     changed = Signal()
 
-    def __init__(self, model: BaseModel, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        model: BaseModel,
+        parent: QWidget | None = None,
+        fields: Iterable[str] | None = None,
+    ) -> None:
         super().__init__(parent)
         self._model_type = type(model)
         self._widgets: dict[str, QWidget] = {}
         self._field_info: dict[str, FieldInfo] = {}
+        selected = set(fields) if fields is not None else None
+        unknown = (
+            set()
+            if selected is None
+            else selected - self._model_type.model_fields.keys()
+        )
+        if unknown:
+            raise ValueError(f"Unknown form field(s): {', '.join(sorted(unknown))}")
 
         layout = QFormLayout(self)
         for name, field in self._model_type.model_fields.items():
+            if selected is not None and name not in selected:
+                continue
             if get_origin(field.annotation) is Literal:
                 continue  # discriminator tag: fixed, not user-editable
             widget = self._make_widget(field)
@@ -142,16 +165,26 @@ class PydanticForm(QWidget):
             elif isinstance(widget, QLineEdit):
                 if isinstance(value, (list, tuple)):
                     widget.setText(", ".join(str(v) for v in value))
+                elif value is None:
+                    # An unset optional value shows as an empty box, not "None".
+                    widget.setText("")
                 else:
                     widget.setText(str(value))
 
-    def to_model(self) -> BaseModel:
+    def to_model(self, base: BaseModel | None = None) -> BaseModel:
         """Build a validated model from the current widget values.
+
+        When this form displays only selected fields, ``base`` preserves the
+        other values instead of resetting them to their defaults.
 
         Raises :class:`pydantic.ValidationError` (or :class:`ValueError` from
         list parsing) if the edited values are invalid.
         """
-        return self._model_type(**self._values())
+        if base is not None and not isinstance(base, self._model_type):
+            raise TypeError(f"Expected {self._model_type.__name__} as the base model")
+        values = {} if base is None else base.model_dump()
+        values.update(self._values())
+        return self._model_type(**values)
 
     def _values(self) -> dict[str, Any]:
         values: dict[str, Any] = {}
@@ -164,10 +197,13 @@ class PydanticForm(QWidget):
             elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
                 values[name] = widget.value()
             elif isinstance(widget, QLineEdit):
+                text = widget.text()
                 if get_origin(field.annotation) is list:
-                    values[name] = _parse_list(widget.text(), field)
+                    values[name] = _parse_list(text, field)
+                elif _optional(field) and not text:
+                    values[name] = None
                 else:
-                    values[name] = widget.text()
+                    values[name] = text
         return values
 
 
