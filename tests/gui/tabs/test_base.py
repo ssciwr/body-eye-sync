@@ -66,6 +66,71 @@ def test_placeholder_tabs_say_so(qtbot, experiment, tab_type):
     assert label.text() == f"{tab_type.title} is not implemented yet"
 
 
+def test_alignment_refresh_reuses_viewer_and_updates_controls(
+    qtbot, experiment, data_dir, monkeypatch
+):
+    video = experiment.add_fixed_video(
+        FixedVideoInput(id="room", path=data_dir / "three-people.mp4")
+    )
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    card = tab.video_cards[0]
+    capture = card.viewer._capture
+    card.viewer.set_frame(3)
+    video.id = "renamed"
+    video.timeline.offset = -0.04
+    changes = []
+    tab.experiment_changed.connect(lambda: changes.append(True))
+
+    def unexpected(*args):
+        pytest.fail("Unchanged video should not be stopped or reloaded")
+
+    monkeypatch.setattr(card.viewer, "load", unexpected)
+    monkeypatch.setattr(card.viewer, "stop", unexpected)
+    tab.refresh()
+    tab.refresh()
+
+    assert tab.video_cards == [card]
+    assert card.viewer._capture is capture
+    assert card.input_label.text() == "renamed"
+    assert card.controls.spin.value() == -0.04
+    assert card.viewer.current_time_seconds == pytest.approx(0.04)
+    assert card.shared_timeline_label.text() == "Shared Timeline point 0.000 s"
+    assert not changes
+
+
+def test_alignment_refresh_replaces_changed_inputs(qtbot, experiment, data_dir):
+    video = experiment.add_fixed_video(
+        FixedVideoInput(id="room", path=data_dir / "three-people.mp4")
+    )
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    original = tab.video_cards[0]
+    extra = experiment.add_fixed_video(
+        FixedVideoInput(id="extra", path=video.video_path)
+    )
+    tab.refresh()
+    assert tab.video_cards[0] is not original
+    assert original.viewer._capture is None
+    original = tab.video_cards[0]
+    added = tab.video_cards[1]
+
+    video.video_path = data_dir / "three-people-talking.mp4"
+    tab.refresh()
+    assert len(tab.video_cards) == 2
+    assert tab.video_cards[0] is not original
+    assert tab.video_cards[0].loaded_path == video.video_path
+    assert original.viewer._capture is None
+    assert added.viewer._capture is None
+    original = tab.video_cards[0]
+
+    experiment.remove_input(extra)
+    tab.refresh()
+    assert len(tab.video_cards) == 1
+    assert tab.video_cards[0] is not original
+    assert original.viewer._capture is None
+
+
 def test_alignment_tab_renders_all_videos_without_overlays(qtbot, experiment, data_dir):
     path = data_dir / "three-people.mp4"
     experiment = Experiment(

@@ -418,7 +418,8 @@ class VideoViewer(QWidget):
             return last_index, last_frame
 
         while index >= 0:
-            self._capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+            if self._capture.get(cv2.CAP_PROP_POS_FRAMES) != index:
+                self._capture.set(cv2.CAP_PROP_POS_FRAMES, index)
             ok, frame = self._capture.read()
             if ok:
                 return index, frame
