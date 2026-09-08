@@ -249,9 +249,10 @@ def _merge_identity_mappings(
         overlapping_pids = {tracklet_to_pid[t] for t in tids if t in tracklet_to_pid}
         if not overlapping_pids:
             # no overlap — add as a new cluster under a fresh person ID
-            target[pid] = set(tids)
+            next_pid = max(target.keys(), default=0) + 1
+            target[next_pid] = set(tids)
             for tid in tids:
-                tracklet_to_pid[tid] = pid
+                tracklet_to_pid[tid] = next_pid
         else:
             # merge into the canonical cluster in target
             canonical_pid = max(
@@ -324,9 +325,10 @@ def cluster_tracklets(
     """
     if not track_ids:
         return ClusteringResult(
-            identity_map={},
-            pid_to_tids={},
-            tracklet_to_pid={},
+            track_id_to_person_id={},
+            person_id_to_track_ids={},
+            tracklet_face_embedding={},
+            tracklet_body_embedding={},
         )
 
     # ------------------------------------------------------------------ faces
@@ -425,7 +427,7 @@ def cluster_tracklets_from_input(
     :func:`cluster_tracklets`.
     """
     return cluster_tracklets(
-        tracks=inputs.track_ids,
+        track_ids=inputs.track_ids,
         face_embeddings=inputs.face_embeddings,
         body_embeddings=inputs.body_embeddings,
         face_distance_threshold=face_distance_threshold,
