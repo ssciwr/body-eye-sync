@@ -136,6 +136,7 @@ class _VideoAlignmentCard(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.video = video
         self.load_error: OSError | None = None
+        self.loaded_path = video.video_path
         self.viewer = VideoViewer()
         self.viewer.show_overlays = False
         self.viewer.match_video_height()
@@ -252,13 +253,32 @@ class AlignmentTab(BaseTab):
     def refresh(self) -> None:
         """Render every video input, with at most three videos per row."""
         self._stop_play_all()
+        videos = [*self.experiment.glasses_videos, *self.experiment.fixed_videos]
+        self.align_button.setEnabled(len(self._inputs()) >= 2)
+        if (
+            self.video_cards
+            and len(videos) == len(self.video_cards)
+            and all(
+                card.video is video
+                and card.loaded_path == video.video_path
+                and card.loaded
+                for card, video in zip(self.video_cards, videos)
+            )
+        ):
+            for card in self.video_cards:
+                card.input_label.setText(card.video.id)
+                card.controls.spin.blockSignals(True)
+                card.controls.spin.setValue(card.video.timeline.offset)
+                card.controls.spin.blockSignals(False)
+            self._show_shared_timeline_time(0.0)
+            return
+
         for card in self.video_cards:
             self.grid.removeWidget(card)
             card.shutdown()
             card.deleteLater()
         self.video_cards = []
 
-        videos = [*self.experiment.glasses_videos, *self.experiment.fixed_videos]
         column_count = min(_VIDEOS_PER_ROW, max(1, len(videos)))
         for column in range(_VIDEOS_PER_ROW):
             self.grid.setColumnStretch(column, int(column < column_count))
@@ -278,7 +298,6 @@ class AlignmentTab(BaseTab):
         self.reset_timeline_button.setEnabled(
             any(card.loaded for card in self.video_cards)
         )
-        self.align_button.setEnabled(len(self._inputs()) >= 2)
 
     def _align(self) -> None:
         """Estimate initial offsets and show them in the manual controls."""
@@ -415,7 +434,8 @@ class AlignmentTab(BaseTab):
             )
             self._play_all_primary = None
         for card in self.video_cards:
-            card.viewer.stop()
+            if card.viewer._play_button.isChecked():
+                card.viewer.stop()
         self.play_all_button.blockSignals(True)
         self.play_all_button.setChecked(False)
         self.play_all_button.blockSignals(False)
