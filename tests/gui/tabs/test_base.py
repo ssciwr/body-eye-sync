@@ -191,6 +191,11 @@ def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
     tab.progress_changed.connect(lambda *values: progress.append(values))
 
     def align(current_experiment, *, progress):
+        assert not tab.isEnabled()
+        assert not tab.video_cards[0].viewer._play_button.isEnabled()
+        assert not tab.video_cards[0].controls.spin.isEnabled()
+        assert not tab.done_button.isEnabled()
+        assert not tab.video_cards[0].viewer._timer.isActive()
         current_experiment.fixed_videos[0].timeline.offset = 0.125
         current_experiment.fixed_videos[1].timeline.offset = 0.375
         progress(0.5)
@@ -201,6 +206,7 @@ def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
         align,
     )
 
+    tab.video_cards[0].viewer._play_button.setChecked(True)
     tab.align_button.click()
 
     assert [card.controls.spin.value() for card in tab.video_cards] == pytest.approx(
@@ -220,10 +226,35 @@ def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
         (50, 100, "Aligning recordings…"),
     ]
     assert tab.align_button.isEnabled()
+    assert tab.video_cards[0].viewer._play_button.isEnabled()
+    assert tab.done_button.isEnabled()
 
     tab.video_cards[1].controls.up_button.click()
 
     assert experiment.fixed_videos[1].timeline.offset == pytest.approx(0.425)
+
+
+def test_automatic_alignment_restores_controls_after_failure(
+    qtbot, experiment, data_dir, monkeypatch
+):
+    for index in range(2):
+        experiment.add_fixed_video(
+            FixedVideoInput(id=f"room{index}", path=data_dir / "three-people.mp4")
+        )
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+
+    def fail(*args, **kwargs):
+        assert not tab.isEnabled()
+        raise RuntimeError("Alignment failed")
+
+    monkeypatch.setattr("body_eye_sync.gui.tabs.alignment.align_experiment", fail)
+    with pytest.raises(RuntimeError, match="Alignment failed"):
+        tab._align()
+
+    assert tab.isEnabled()
+    assert tab.align_button.isEnabled()
+    assert tab.video_cards[0].viewer._play_button.isEnabled()
 
 
 # Covers the video offset controls used during manual alignment.

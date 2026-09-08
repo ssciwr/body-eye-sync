@@ -303,8 +303,9 @@ class AlignmentTab(BaseTab):
         """Estimate initial offsets and show them in the manual controls."""
         if len(self._inputs()) < 2:
             return
-        self.align_button.setEnabled(False)
+        self._stop_play_all()
         self.busy_changed.emit(True)
+        self.setEnabled(False)
         self.progress_changed.emit(0, 100, "Aligning recordings…")
         try:
             result = align_experiment(self.experiment, progress=self._progress)
@@ -312,6 +313,7 @@ class AlignmentTab(BaseTab):
                 self.experiment_changed.emit()
                 self.status_message.emit("Automatic alignment finished")
         finally:
+            self.setEnabled(True)
             self.busy_changed.emit(False)
             self.refresh()
         if result.offsets:
