@@ -229,11 +229,13 @@ def test_video_viewer_can_show_negative_preroll_time(viewer, seconds):
 def test_video_viewer_set_transport_enabled_toggles_controls(viewer):
     viewer.enable_controls(False)
     assert not viewer._play_button.isEnabled()
+    assert not viewer._mute_button.isEnabled()
     assert not viewer._slider.isEnabled()
     assert not viewer._spinbox.isEnabled()
 
     viewer.enable_controls(True)
     assert viewer._play_button.isEnabled()
+    assert viewer._mute_button.isEnabled()
     assert viewer._slider.isEnabled()
     assert viewer._spinbox.isEnabled()
 
