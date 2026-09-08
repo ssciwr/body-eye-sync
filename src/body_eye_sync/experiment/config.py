@@ -248,7 +248,7 @@ class TranscriptionStep(_Model):
     )
     beam_size: int = Field(5, ge=1, description="Decoding beam width.")
     vad_filter: bool = Field(
-        True,
+        False,
         description=(
             "Skip silent stretches, which speeds up the pass and suppresses text "
             "invented over silence."
