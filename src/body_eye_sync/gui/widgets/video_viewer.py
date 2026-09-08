@@ -284,11 +284,12 @@ class VideoViewer(QWidget):
             self._add_pose(pose)
 
     def enable_controls(self, enable: bool) -> None:
-        """Enable or disable the play button and seek controls."""
+        """Enable or disable the playback, mute and seek controls."""
         if not enable:
             self.stop()
         has_frames = self._frame_count > 0
         self._play_button.setEnabled(enable and has_frames)
+        self._mute_button.setEnabled(enable and has_frames)
         self._slider.setEnabled(enable and has_frames)
         self._spinbox.setEnabled(enable and has_frames)
 
