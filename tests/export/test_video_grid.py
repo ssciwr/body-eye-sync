@@ -167,7 +167,6 @@ def test_construct_video_grid_synchronizes_25_and_50_fps_video_and_audio(tmp_pat
     construct_video_grid(
         experiment,
         output,
-        columns=2,
         cell_size=(64, 48),
         progress=lambda fraction: progress.append(fraction) or True,
     )
@@ -361,7 +360,7 @@ def test_construct_video_grid_holds_its_place_across_a_lost_buffer(
     )
     output = tmp_path / "grid.mp4"
 
-    construct_video_grid(experiment, output, columns=1, cell_size=(64, 48))
+    construct_video_grid(experiment, output, cell_size=(64, 48))
 
     track = _audio_samples(output, 1)
     assert _rms_at(track, 0.25) < 0.005  # before this input starts
@@ -407,7 +406,7 @@ def test_construct_video_grid_stretches_a_recording_whose_clock_ran_slow(tmp_pat
     )
     output = tmp_path / "grid.mp4"
 
-    construct_video_grid(experiment, output, columns=1, cell_size=(64, 48))
+    construct_video_grid(experiment, output, cell_size=(64, 48))
 
     with av.open(str(output)) as container:
         stream = container.streams.video[0]
@@ -416,3 +415,102 @@ def test_construct_video_grid_stretches_a_recording_whose_clock_ran_slow(tmp_pat
     assert duration == pytest.approx(3.0, abs=0.05)
     assert _rgb_frame_at(output, 2.5)[42, 32, 0] > 180
     assert _rms_at(_audio_samples(output, 0), 2.5) > 0.03
+
+
+def test_construct_video_grid_draws_the_four_plus_one_layout(tmp_path):
+    red = tmp_path / "red.mp4"
+    blue = tmp_path / "blue.mp4"
+    _make_video(red, color="red", fps=25, frequency=440)
+    _make_video(blue, color="blue", fps=25, frequency=880)
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="red", path=red),
+                FixedVideoInput(id="blue", path=blue),
+            ]
+        )
+    )
+    output = tmp_path / "four-plus-one.mp4"
+
+    construct_video_grid(
+        experiment,
+        output,
+        layout="4+1",
+        video_ids=["red", "blue"],
+        cell_size=(64, 48),
+        show_labels=False,
+    )
+
+    with av.open(str(output)) as container:
+        stream = container.streams.video[0]
+        # Three cells across and three down, whatever the number of videos.
+        assert (stream.width, stream.height) == (192, 144)
+    frame = _rgb_frame_at(output, 1.0)
+    assert frame[72, 96, 0] > 180  # the central video
+    assert frame[10, 10, 2] > 180  # its top left corner
+    assert frame[50, 67, 2] > 180  # where that corner laps over the central video
+    assert np.max(frame[135, 10]) < 20  # a corner no video was placed in
+    assert np.max(frame[5, 96]) < 20  # above the central video, between the corners
+
+
+def test_construct_video_grid_rejects_an_impossible_slot_assignment(tmp_path):
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="red", path=tmp_path / "red.mp4"),
+                FixedVideoInput(id="blue", path=tmp_path / "blue.mp4"),
+            ]
+        )
+    )
+    output = tmp_path / "grid.mp4"
+
+    with pytest.raises(ValueError, match="unknown video ids.*green"):
+        construct_video_grid(experiment, output, video_ids=["red", "green"])
+    with pytest.raises(ValueError, match="placed more than once.*red"):
+        construct_video_grid(experiment, output, video_ids=["red", "red"])
+    with pytest.raises(ValueError, match="no video inputs selected"):
+        construct_video_grid(experiment, output, video_ids=[None, None])
+    with pytest.raises(ValueError, match="'4\\+1' layout has 5 slots"):
+        construct_video_grid(
+            experiment,
+            output,
+            layout="4+1",
+            video_ids=["red", "blue", None, None, None, None],
+        )
+    with pytest.raises(ValueError, match="video ids.*blue"):
+        # A video the export does not include cannot fill a slot either.
+        construct_video_grid(experiment, output, input_ids=["red"], video_ids=["blue"])
+
+
+def test_construct_video_grid_draws_the_two_plus_one_layout(tmp_path):
+    red = tmp_path / "red.mp4"
+    blue = tmp_path / "blue.mp4"
+    _make_video(red, color="red", fps=25, frequency=440)
+    _make_video(blue, color="blue", fps=25, frequency=880)
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="red", path=red),
+                FixedVideoInput(id="blue", path=blue),
+            ]
+        )
+    )
+    output = tmp_path / "two-plus-one.mp4"
+
+    construct_video_grid(
+        experiment,
+        output,
+        layout="2+1",
+        video_ids=["red", None, "blue"],
+        cell_size=(64, 48),
+        show_labels=False,
+    )
+
+    with av.open(str(output)) as container:
+        stream = container.streams.video[0]
+        assert (stream.width, stream.height) == (128, 96)
+    frame = _rgb_frame_at(output, 1.0)
+    assert frame[24, 32, 0] > 180  # the first video, top left
+    assert np.max(frame[24, 96]) < 20  # the slot left empty, top right
+    assert frame[72, 64, 2] > 180  # the third video, centred below the other two
+    assert np.max(frame[72, 10]) < 20  # beside it, where the row has no video

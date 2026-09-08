@@ -96,9 +96,9 @@ speaker for each segment.
 
 ## Export a Combined Video
 
-You can export a single video that shows every aligned video input in a grid,
+You can export a single video that shows the aligned video inputs together,
 with an audio track for each input, and optionally an additional merge audio track
-that combines the audio from all inputs. And missing recording intervals become black
+that combines the audio from all inputs. Any missing recording intervals become black
 video and silence.
 
 If the experiment has speech turns, they are written beside the video as it is
