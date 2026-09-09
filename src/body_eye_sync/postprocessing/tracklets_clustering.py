@@ -216,6 +216,7 @@ def _jaccard_similarity(set_a: set[int], set_b: set[int]) -> float:
 def _merge_identity_mappings(
     target: dict[int, set[int]],
     source: dict[int, set[int]],
+    merge_jaccard_threshold: float = 0.0,
 ) -> None:
     """Merge *source* into *target*, deduplicating overlapping identity groups.
 
@@ -225,6 +226,9 @@ def _merge_identity_mappings(
     If tracklets from *source* overlap with multiple clusters in *target*,
     the overlapping clusters are merged into the canonicalcluster in *target*,
     and the rest are removed.
+
+    If the jaccard similarity between two clusters is below the threshold, they are not merged.
+    By default, any overlap (jaccard similarity > 0) is sufficient to trigger a merge.
 
     The canonical cluster is chosen as:
     1. The cluster in *target* with the highest jaccard similarity to the *source* cluster.
@@ -247,36 +251,66 @@ def _merge_identity_mappings(
         for tid in tids:
             tracklet_to_pid[tid] = pid
 
-    for pid, tids in source.items():
-        overlapping_pids = {tracklet_to_pid[t] for t in tids if t in tracklet_to_pid}
-        if not overlapping_pids:
-            # no overlap — add as a new cluster under a fresh person ID
-            next_pid = max(target.keys(), default=0) + 1
-            target[next_pid] = set(tids)
-            for tid in tids:
-                tracklet_to_pid[tid] = next_pid
-        else:
-            # merge into the canonical cluster in target
-            canonical_pid = max(
-                overlapping_pids,
-                key=lambda p: (_jaccard_similarity(target[p], tids), -p),
-            )
-            target[canonical_pid].update(tids)
+    # find the next available person ID
+    next_pid = max(target, default=0) + 1
 
-            # update the tracklet -> person_id index for the merged tracklets
-            # so the next iteration sees the updated mapping
-            for tid in tids:
+    for source_tids in source.values():
+        overlapping_pids = {
+            tracklet_to_pid[t] for t in source_tids if t in tracklet_to_pid
+        }
+
+        if not overlapping_pids:
+            # no overlap - add as a new cluster under a fresh person ID
+            target[next_pid] = set(source_tids)
+            for tid in source_tids:
+                tracklet_to_pid[tid] = next_pid
+
+            next_pid += 1
+            continue
+
+        # calculate jaccard similarity for each overlapping cluster in target
+        # with the source cluster
+        similarities = {
+            pid: _jaccard_similarity(target[pid], source_tids)
+            for pid in overlapping_pids
+        }
+
+        # pick the target cluster that best matches the source cluster
+        canonical_pid = max(
+            similarities.keys(),
+            key=lambda pid: (similarities[pid], -pid),
+        )
+
+        # update the canonical cluster with the new tracklets from source
+        target[canonical_pid].update(source_tids)
+
+        # point all source tracklets to the canonical cluster
+        for tid in source_tids:
+            tracklet_to_pid[tid] = canonical_pid
+
+        # all person IDs in overlapping_pids are considered the same person,
+        # if their jaccard similarity is above the threshold,
+        # so we need to merge them into the canonical cluster
+        # and remove the duplicates in target
+        dup_pids = {
+            p
+            for p, sim in similarities.items()
+            if p != canonical_pid and sim >= merge_jaccard_threshold
+        }
+
+        for dup_pid in dup_pids:
+            merged_tids = target.pop(dup_pid, set())
+            target[canonical_pid].update(merged_tids)
+
+            # point all merged tracklets to the canonical cluster
+            for tid in merged_tids:
                 tracklet_to_pid[tid] = canonical_pid
 
-            # all person IDs in overlapping_pids are considered the same person,
-            # merge them into the canonical cluster and remove the duplicates in target
-            # TODO: maybe put a threshold on the jaccard_similarity
-            # to avoid merging clusters that only share a single tracklet?
-            for dup_pid in overlapping_pids - {canonical_pid}:
-                merged_tids = target.pop(dup_pid, set())
-                target[canonical_pid].update(merged_tids)
-                for tid in merged_tids:
-                    tracklet_to_pid[tid] = canonical_pid
+        # remove source-overlapping tracklets from clusters that weren't merged
+        remaining_pids = overlapping_pids - {canonical_pid} - dup_pids
+
+        for remaining_pid in remaining_pids:
+            target[remaining_pid].difference_update(source_tids)
 
 
 def cluster_tracklets(
@@ -287,6 +321,7 @@ def cluster_tracklets(
     body_distance_threshold: float = 0.15,
     min_face_detections: int = 1,
     min_body_detections: int = 3,
+    merge_jaccard_threshold: float = 0.0,
     debug: bool = False,
 ) -> ClusteringResult:
     """Group BoxMOT tracklets into person identities.
@@ -316,6 +351,11 @@ def cluster_tracklets(
     min_body_detections:
         Minimum number of frames that must carry a valid body pose for a
         tracklet to be clustered via body features (default ``3``).
+    merge_jaccard_threshold:
+        Jaccard similarity threshold for merging overlapping clusters.  When two
+        clusters share tracklets, they are considered the same person and merged
+        if their jaccard similarity is above this threshold.  Default is ``0.0``,
+        i.e. any overlap is sufficient to merge.
     debug:
         When ``True``, print per-tracklet embedding statistics and the final
         identity assignment table.
@@ -370,8 +410,12 @@ def cluster_tracklets(
 
     # --------------------------------------------------------------- assemble
     identity_map: dict[int, set[int]] = {}
-    _merge_identity_mappings(identity_map, face_clusters)
-    _merge_identity_mappings(identity_map, body_clusters)
+    _merge_identity_mappings(
+        identity_map, face_clusters, merge_jaccard_threshold=merge_jaccard_threshold
+    )
+    _merge_identity_mappings(
+        identity_map, body_clusters, merge_jaccard_threshold=merge_jaccard_threshold
+    )
 
     # assign deterministic 1-indexed person IDs
     sorted_pids = sorted(identity_map.keys())
@@ -387,18 +431,18 @@ def cluster_tracklets(
 
     # tracklets with no embedding at all -> unique person ID each
     unassigned = [tid for tid in track_ids if tid not in track_id_to_person_id]
-    next_pid = max(pid_to_tids.keys(), default=0)
+    next_pid = max(pid_to_tids.keys(), default=0) + 1
     for _, tid in enumerate(sorted(unassigned)):
-        next_pid += 1
         track_id_to_person_id[tid] = next_pid
         pid_to_tids[next_pid] = [tid]
+        next_pid += 1
 
     if debug:
         print(
-            f"Face clusters   : {len(face_clusters)} (tracklets: {sum(len(v) for v in face_clusters.values())})"
+            f"Face clusters: {len(face_clusters)} (tracklets: {sum(len(v) for v in face_clusters.values())})"
         )
         print(
-            f"Body  clusters  : {len(body_clusters)} (tracklets: {sum(len(v) for v in body_clusters.values())})"
+            f"Body clusters: {len(body_clusters)} (tracklets: {sum(len(v) for v in body_clusters.values())})"
         )
         print(f"Final identities: {len(pid_to_tids)}")
         print(f"{'Person ID':<10} {'Track IDs'}")
@@ -420,6 +464,7 @@ def cluster_tracklets_from_input(
     body_distance_threshold: float = 0.15,
     min_face_detections: int = 1,
     min_body_detections: int = 3,
+    merge_jaccard_threshold: float = 0.0,
     debug: bool = False,
 ) -> ClusteringResult:
     """Convenience wrapper around :func:`cluster_tracklets`.
@@ -436,5 +481,6 @@ def cluster_tracklets_from_input(
         body_distance_threshold=body_distance_threshold,
         min_face_detections=min_face_detections,
         min_body_detections=min_body_detections,
+        merge_jaccard_threshold=merge_jaccard_threshold,
         debug=debug,
     )
