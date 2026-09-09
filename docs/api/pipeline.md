@@ -16,6 +16,10 @@
 
 ::: body_eye_sync.pipeline.transcription
 
+## Loudness
+
+::: body_eye_sync.pipeline.loudness
+
 ## Model Cache
 
 ::: body_eye_sync.pipeline.model_cache

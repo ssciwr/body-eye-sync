@@ -375,7 +375,7 @@ class SpeechPostProcessingTab(BaseTab):
     def _start(self) -> None:
         if self._thread is not None or self.blocked_reason() is not None:
             return
-        self.summary_label.setText("Measuring how loud each recording is…")
+        self.summary_label.setText("Working out who spoke when…")
         self._set_running(True)
         self.progress_changed.emit(0, 100, _LABEL)
         self._worker = _Worker(self.experiment)

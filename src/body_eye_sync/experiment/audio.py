@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from body_eye_sync.experiment.loudness import Loudness
 from body_eye_sync.experiment.speech import SEGMENTS_FILENAME, Speech
 from body_eye_sync.experiment.timeline import Timeline
 
@@ -36,6 +37,7 @@ class Audio:
         self.glasses_video = glasses_video
         self.timeline = timeline if timeline is not None else Timeline()
         self.speech = Speech()
+        self.loudness = Loudness()
 
     @property
     def path(self) -> Path | None:
@@ -47,10 +49,11 @@ class Audio:
 
     def clear(self) -> None:
         self.speech.clear()
+        self.loudness.clear()
 
     def has_data(self) -> bool:
-        """Whether this recording has a transcript in memory."""
-        return self.speech.data is not None
+        """Whether this recording has any audio processing results in memory."""
+        return self.speech.data is not None or self.loudness.data is not None
 
     def has_results(self, directory: str | Path) -> bool:
         """Whether ``directory`` already holds results for a recording."""
@@ -58,9 +61,10 @@ class Audio:
 
     def save(self, directory: str | Path) -> None:
         """Write these results into ``directory``, a file per kind of result."""
-        if self.speech.data is None:
+        if not self.has_data():
             raise ValueError("no data to write; run the pipeline first")
         self.speech.save(directory)
+        self.loudness.save(directory)
 
     def load(self, directory: str | Path) -> None:
         """Load results written by :meth:`save`, if ``directory`` holds any.
@@ -69,3 +73,4 @@ class Audio:
         this recording empty rather than failing.
         """
         self.speech.load(directory)
+        self.loudness.load(directory)

@@ -12,6 +12,7 @@ from body_eye_sync.experiment.config import (
 )
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.gui.tabs.speech_post_processing import SpeechPostProcessingTab
+from body_eye_sync.postprocessing.attribution import AttributionCancelled
 from body_eye_sync.preprocessing.audio import SAMPLE_RATE
 
 DURATION = 12.0
@@ -63,6 +64,8 @@ def experiment(tmp_path):
         ),
         tmp_path / "experiment",
     )
+    for video in exp.glasses_videos:
+        video.loudness.measure(video.path)
     exp.glasses_videos[0].speech.set_data(
         _transcript((1.0, 4.0, "p1 speaking"), (6.0, 9.0, "p2 as p1 heard them"))
     )
@@ -372,6 +375,24 @@ def test_a_failed_run_is_reported(qtbot, tab, monkeypatch):
     qtbot.waitUntil(lambda: not tab.is_busy(), timeout=30000)
 
     assert tab.summary_label.text() == "Could not attribute the speech."
+    assert tab.experiment.speech_turns.data is None
+
+
+def test_a_cancelled_run_is_reported(qtbot, tab, monkeypatch):
+    def cancelled(*args, **kwargs):
+        raise AttributionCancelled
+
+    monkeypatch.setattr(
+        "body_eye_sync.gui.tabs.speech_post_processing.attribute_experiment_speech",
+        cancelled,
+    )
+    messages = []
+    tab.status_message.connect(messages.append)
+
+    tab.attribute_button.click()
+    qtbot.waitUntil(lambda: not tab.is_busy(), timeout=30000)
+
+    assert messages == ["Speaker attribution cancelled"]
     assert tab.experiment.speech_turns.data is None
 
 

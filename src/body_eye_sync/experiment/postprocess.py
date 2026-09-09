@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
 
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.postprocessing.attribution import (
+    Progress,
     attribute_segments,
     measure_levels,
 )
 
 logger = logging.getLogger(__name__)
-
-Progress = Callable[[float], bool]
 
 
 def attribute_experiment_speech(
@@ -24,7 +22,6 @@ def attribute_experiment_speech(
     """Work out the experiment's speech turns and store them on it."""
     settings = experiment.pipeline.speech_post_processing
 
-    # Attribution needs both the recording's loudness and its transcript.
     inputs = {
         video.id: video
         for video in experiment.glasses_videos
@@ -40,10 +37,9 @@ def attribute_experiment_speech(
 
     timelines = {name: data.timeline for name, data in inputs.items()}
     levels = measure_levels(
-        {name: data.path for name, data in inputs.items()},
+        {name: data.loudness.data for name, data in inputs.items()},
         timelines,
         settings,
-        progress=progress,
     )
     turns = attribute_segments(
         {name: data.speech.data for name, data in inputs.items()},
@@ -51,6 +47,7 @@ def attribute_experiment_speech(
         timelines,
         settings,
         words={name: data.speech.words for name, data in inputs.items()},
+        progress=progress,
     )
     experiment.speech_turns.set_data(turns)
     if progress is not None:
