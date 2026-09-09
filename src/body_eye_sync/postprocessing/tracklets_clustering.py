@@ -11,12 +11,11 @@ Clustering strategy
 
 
 2. **Body embeddings as fallback** – tracklets that yield no valid face
-   embedding (e.g. the person's face was never visible) or can't be matched to a face
-   embedding are clustered using body embeddings. The top K body embeddings are also
-   carried per tracklet, via video.body_embeddings. The K embeddings are aggregated into
-   a single representative embedding per tracklet. Similarly, two tracklets are considered
-   the same person if their representative embeddings are within the *body_distance_threshold*
-   in cosine distance.
+   embedding (e.g. the person's face was never visible) are clustered using body embeddings.
+   The top K body embeddings are also carried per tracklet, via video.body_embeddings.
+   The K embeddings are aggregated into a single representative embedding per tracklet.
+   Similarly, two tracklets are considered the same person if their representative embeddings
+   are within the *body_distance_threshold* in cosine distance.
 
 Outputs
 -------
@@ -46,7 +45,7 @@ class ClusteringResult:
         Maps each BoxMOT ``track_id`` to a 1-indexed ``person_id``.  Every
         tracklet that appeared in *tracks* is present.
     person_id_to_track_ids:
-        Inverse mapping: ``person_id`` → ordered list of ``track_id`` s that
+        Inverse mapping: ``person_id`` -> ordered list of ``track_id`` s that
         were merged into that identity.
     tracklet_face_embedding:
         Representative (mean, L2-normalised) face embedding for each tracklet,
@@ -104,7 +103,7 @@ def _aggregate_embeddings(
     Returns
     -------
     dict[(int, int), np.ndarray]
-        ``track_id`` → L2-normalised representative embedding, or absent when
+        ``track_id`` -> L2-normalised representative embedding, or absent when
         no target was ever detected for that tracklet.
     """
     # group embeddings by track_id
@@ -191,7 +190,7 @@ def _build_identity_mappings(
     Returns
     -------
     dict[int, set[int]]
-        ``person_id`` (1-indexed, derived from sorted unique labels) →
+        ``person_id`` (1-indexed, derived from sorted unique labels) ->
         set of track IDs in that identity cluster.
     """
     clusters: dict[int, set[int]] = defaultdict(set)
@@ -232,7 +231,7 @@ def _merge_identity_mappings(
     ----------
     target:
         Existing identity mapping; mutated in place.
-        person_id → set of tracklet IDs.
+        person_id -> set of tracklet IDs.
     source:
         New identity mapping whose clusters are merged into *target*.
     """
@@ -383,7 +382,7 @@ def cluster_tracklets(
         for tid in tids:
             track_id_to_person_id[tid] = pid
 
-    # tracklets with no embedding at all → unique person ID each
+    # tracklets with no embedding at all -> unique person ID each
     unassigned = [tid for tid in track_ids if tid not in track_id_to_person_id]
     next_pid = max(pid_to_tids.keys(), default=0)
     for _, tid in enumerate(sorted(unassigned)):
