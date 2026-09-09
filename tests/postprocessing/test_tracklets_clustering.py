@@ -8,6 +8,7 @@ from body_eye_sync.postprocessing import tracklets_clustering as clustering
 def _embeddings_df(*rows: tuple[int, np.ndarray | None]) -> pd.DataFrame:
     return pd.DataFrame(
         {
+            "frame_idx": [i for i in range(len(rows))],
             "track_id": [track_id for track_id, _ in rows],
             "embedding": [embedding for _, embedding in rows],
         }
@@ -26,7 +27,7 @@ def test_aggregate_embeddings_averages_per_tracklet_and_skips_missing_rows():
 
     assert set(aggregated) == {1, 2}
     assert np.allclose(aggregated[1], np.array([1.0, 0.0]))
-    assert np.allclose(aggregated[2], np.array([0.0, 1.0]))
+    assert np.allclose(aggregated[2], np.array([0.0, 1.0]))  # L2-normalized
 
 
 def test_cosine_distance_matrix_computes_pairwise_cosine_distance():
@@ -53,6 +54,59 @@ def test_cosine_distance_matrix_computes_pairwise_cosine_distance():
     )
 
 
+def test_cosine_distance_matrix_returns_empty_for_empty_input():
+    distance_matrix = clustering._cosine_distance_matrix(np.empty((0, 2)))
+
+    assert distance_matrix.shape == (0, 0)
+
+
+def test_cosine_distance_matrix_with_nan():
+    embeddings = np.array(
+        [
+            [1.0, 0.0],
+            [np.nan, np.nan],
+            [0.5, 0.5],
+        ]
+    )
+
+    distance_matrix = clustering._cosine_distance_matrix(embeddings)
+
+    assert distance_matrix.shape == (3, 3)
+
+    assert np.allclose(
+        distance_matrix,
+        np.array(
+            [
+                [0.0, 0.5, 0.5],
+                [0.5, 0.0, 0.5],
+                [0.5, 0.5, 0.0],  # nan was replaced by 0.5
+            ]
+        ),
+    )
+
+
+def test_cosine_distance_matrix_with_all_nan():
+    embeddings = np.array(
+        [
+            [np.nan, np.nan],
+            [np.nan, np.nan],
+        ]
+    )
+
+    distance_matrix = clustering._cosine_distance_matrix(embeddings)
+
+    assert distance_matrix.shape == (2, 2)
+    assert np.allclose(
+        distance_matrix,
+        np.array(
+            [
+                [0.0, 1.0],
+                [1.0, 0.0],
+            ]
+        ),
+    )
+
+
 def test_cluster_embeddings_groups_vectors_within_threshold():
     embeddings = np.array(
         [
@@ -66,6 +120,10 @@ def test_cluster_embeddings_groups_vectors_within_threshold():
 
     assert labels[0] == labels[1]
     assert labels[2] != labels[0]
+
+    labels_loose = clustering._cluster_embeddings(embeddings, distance_threshold=1.5)
+
+    assert labels_loose[0] == labels_loose[1] == labels_loose[2]
 
 
 def test_build_identity_mappings_orders_person_ids_deterministically():
@@ -84,9 +142,9 @@ def test_jaccard_similarity_uses_intersection_over_union():
 
 def test_merge_identity_mappings_merges_overlapping_clusters_and_preserves_new_ones():
     target = {1: {1, 2}, 2: {3, 4}}
-    source = {1: {2, 5}, 2: {3, 6}, 3: {10}}
+    source = {11: {2, 5}, 12: {3, 6}, 13: {10}}
 
-    clustering._merge_identity_mappings(target, source)
+    clustering._merge_identity_mappings(target, source, merge_jaccard_threshold=0.0)
 
     assert target == {1: {1, 2, 5}, 2: {3, 4, 6}, 3: {10}}
 
@@ -95,9 +153,18 @@ def test_merge_identity_mappings_chooses_the_lowest_person_id_on_a_tie():
     target = {1: {1, 2}, 2: {3, 4}}
     source = {9: {2, 4}}
 
-    clustering._merge_identity_mappings(target, source)
+    clustering._merge_identity_mappings(target, source, merge_jaccard_threshold=0.3)
 
     assert target == {1: {1, 2, 3, 4}}
+
+
+def test_merge_identity_mappings_merges_multiple_overlapping_clusters():
+    target = {12: {1, 2, 5}, 11: {3, 4}}
+    source = {9: {2, 3, 5}, 10: {4}}
+
+    clustering._merge_identity_mappings(target, source, merge_jaccard_threshold=0.5)
+
+    assert target == {12: {1, 2, 3, 5}, 11: {4}}
 
 
 def test_cluster_tracklets_uses_face_then_body_then_unique_ids():
@@ -116,6 +183,7 @@ def test_cluster_tracklets_uses_face_then_body_then_unique_ids():
         body_embeddings=body_embeddings,
         face_distance_threshold=0.1,
         body_distance_threshold=0.1,
+        merge_jaccard_threshold=0.0,
         min_face_detections=1,
         min_body_detections=2,
     )
@@ -151,6 +219,7 @@ def test_cluster_tracklets_from_input_delegates_to_cluster_tracklets():
         body_distance_threshold=0.1,
         min_face_detections=1,
         min_body_detections=2,
+        merge_jaccard_threshold=0.0,
     )
     direct_result = clustering.cluster_tracklets(
         track_ids=[1, 2],
@@ -159,6 +228,7 @@ def test_cluster_tracklets_from_input_delegates_to_cluster_tracklets():
         body_distance_threshold=0.1,
         min_face_detections=1,
         min_body_detections=2,
+        merge_jaccard_threshold=0.0,
     )
 
     assert (
