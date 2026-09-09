@@ -10,44 +10,13 @@ from body_eye_sync.experiment.config import (
     ExperimentConfig,
     FixedVideoInput,
     TimelineConfig,
-    TimeShiftConfig,
 )
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.timeline import Shift, Timeline
 from body_eye_sync.export.video_grid import (
     OUTPUT_FPS,
     VideoGridCancelled,
-    _segments,
     construct_video_grid,
 )
-
-
-def test_segments_apply_offset_and_unsorted_losses():
-    timeline = Timeline(
-        offset=10.0,
-        shifts=[
-            # Intentionally unsorted.
-            Shift(at=3.0, seconds=0.5),
-            Shift(at=1.0, seconds=1.0),
-            # A loss at or before local zero moves all observed content.
-            Shift(at=-1.0, seconds=0.2),
-            # Nothing follows this loss within the supplied stream duration.
-            Shift(at=10.0, seconds=5.0),
-        ],
-    )
-
-    segments = _segments(timeline, 4.0)
-
-    assert [
-        (segment.local_start, segment.local_end, segment.experiment_start)
-        for segment in segments
-    ] == pytest.approx(
-        [
-            (0.0, 1.0, 10.2),
-            (1.0, 3.0, 12.2),
-            (3.0, 4.0, 14.7),
-        ]
-    )
 
 
 def _encode(container, stream, frame) -> None:
@@ -65,7 +34,14 @@ def _tone(frequency: int, start: int, samples: int) -> av.AudioFrame:
     return frame
 
 
-def _make_video(path: Path, *, color: str, fps: int, frequency: int) -> None:
+def _make_video(
+    path: Path,
+    *,
+    color: str,
+    fps: int,
+    frequency: int,
+    audio_start: float = 0.0,
+) -> None:
     colors = {"red": (255, 0, 0), "blue": (0, 0, 255)}
     pixels = np.empty((48, 64, 3), dtype=np.uint8)
     pixels[:] = colors[color]
@@ -77,7 +53,7 @@ def _make_video(path: Path, *, color: str, fps: int, frequency: int) -> None:
         audio = container.add_stream("aac", rate=48_000)
         audio.layout = "mono"
         video_index = 0
-        audio_index = 0
+        audio_index = round(audio_start * 48_000)
         while video_index < 2 * fps or audio_index < 2 * 48_000:
             if video_index < 2 * fps and (
                 audio_index >= 2 * 48_000 or video_index / fps <= audio_index / 48_000
@@ -173,10 +149,7 @@ def test_construct_video_grid_synchronizes_25_and_50_fps_video_and_audio(tmp_pat
                 FixedVideoInput(
                     id="blue-50",
                     path=video_50,
-                    timeline=TimelineConfig(
-                        offset=0.5,
-                        shifts=[TimeShiftConfig(at=1.0, seconds=0.5)],
-                    ),
+                    timeline=TimelineConfig(offset=0.5),
                 ),
             ],
             audio=[
@@ -194,7 +167,6 @@ def test_construct_video_grid_synchronizes_25_and_50_fps_video_and_audio(tmp_pat
     construct_video_grid(
         experiment,
         output,
-        columns=2,
         cell_size=(64, 48),
         progress=lambda fraction: progress.append(fraction) or True,
     )
@@ -207,7 +179,7 @@ def test_construct_video_grid_synchronizes_25_and_50_fps_video_and_audio(tmp_pat
         # One row of two cells covering the union of all three inputs.
         assert (video_stream.width, video_stream.height) == (128, 48)
         assert float(video_stream.duration * video_stream.time_base) == pytest.approx(
-            3.0, abs=0.05
+            2.5, abs=0.05
         )
         assert len(container.streams.audio) == 3
         assert [
@@ -222,28 +194,27 @@ def test_construct_video_grid_synchronizes_25_and_50_fps_video_and_audio(tmp_pat
             for stream in container.streams.audio
         ] == [True, False, False]
 
-    # The 50 fps source starts half a second late and has a half-second loss
-    # after its first local second, so the loss occupies [1.5, 2.0).
+    # The 50 fps source starts half a second late and runs to 2.5 s.
     frame = _rgb_frame_at(output, 0.25)
     assert frame[42, 32, 0] > 180  # red source is present
     assert np.max(frame[42, 96]) < 20  # blue source has not started
     frame = _rgb_frame_at(output, 0.75)
     assert frame[42, 96, 2] > 180  # 50 fps source is present
     frame = _rgb_frame_at(output, 1.75)
-    assert np.max(frame[42, 96]) < 20  # its lost stretch is black
-    frame = _rgb_frame_at(output, 2.5)
+    assert frame[42, 96, 2] > 180
+    frame = _rgb_frame_at(output, 2.4)
     assert np.max(frame[42, 32]) < 20  # 25 fps source has ended
-    assert frame[42, 96, 2] > 180  # 50 fps source resumed after the loss
+    assert frame[42, 96, 2] > 180  # the later-starting one has not
 
     red_audio = _audio_samples(output, 0)
     blue_audio = _audio_samples(output, 1)
     microphone_audio = _audio_samples(output, 2)
     assert _rms_at(red_audio, 0.5) > 0.03
-    assert _rms_at(red_audio, 2.5) < 0.005
+    assert _rms_at(red_audio, 2.2) < 0.005  # ended at its own two seconds
     assert _rms_at(blue_audio, 0.25) < 0.005
     assert _rms_at(blue_audio, 0.75) > 0.03
-    assert _rms_at(blue_audio, 1.75) < 0.005
-    assert _rms_at(blue_audio, 2.5) > 0.03
+    assert _rms_at(blue_audio, 1.75) > 0.03
+    assert _rms_at(blue_audio, 2.4) > 0.03
     assert _frequency_magnitude(blue_audio, 880) > 100
     assert _rms_at(microphone_audio, 0.1) < 0.005
     assert _rms_at(microphone_audio, 0.5) > 0.03
@@ -365,3 +336,181 @@ def test_construct_video_grid_cancellation_leaves_no_partial_output(tmp_path):
 
     assert not output.exists()
     assert list(tmp_path.glob(".grid.*.mp4")) == []
+
+
+def test_construct_video_grid_holds_its_place_across_a_lost_buffer(
+    tmp_path, recording_with_a_lost_buffer
+):
+    """Content after a loss belongs where its timestamps put it, not later."""
+    red = tmp_path / "red.mp4"
+    _make_video(red, color="red", fps=25, frequency=440)
+    lossy = recording_with_a_lost_buffer(tmp_path / "lossy.mp4")
+
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[FixedVideoInput(id="red", path=red)],
+            audio=[
+                AudioInput(
+                    id="lossy",
+                    path=lossy,
+                    timeline=TimelineConfig(offset=0.5),
+                )
+            ],
+        )
+    )
+    output = tmp_path / "grid.mp4"
+
+    construct_video_grid(experiment, output, cell_size=(64, 48))
+
+    track = _audio_samples(output, 1)
+    assert _rms_at(track, 0.25) < 0.005  # before this input starts
+    assert _rms_at(track, 0.75) > 0.03  # its first quarter second
+    assert _rms_at(track, 1.6) < 0.005  # the stretch it lost, at 0.5 + 1.0
+    # Had the loss been treated as a cut, this would have been pushed to 2.25.
+    assert _rms_at(track, 2.0) > 0.03
+
+
+def test_construct_video_grid_keeps_all_audio_that_starts_after_video(tmp_path):
+    source = tmp_path / "delayed-audio.mp4"
+    _make_video(
+        source,
+        color="red",
+        fps=25,
+        frequency=440,
+        audio_start=0.5,
+    )
+    experiment = Experiment(
+        ExperimentConfig(fixed_videos=[FixedVideoInput(id="camera", path=source)])
+    )
+    output = tmp_path / "grid.mp4"
+
+    construct_video_grid(experiment, output, cell_size=(64, 48), show_labels=False)
+
+    track = _audio_samples(output, 0)
+    assert _rms_at(track, 0.25) < 0.005
+    assert _rms_at(track, 0.75) > 0.03
+    assert _rms_at(track, 1.75) > 0.03
+
+
+def test_construct_video_grid_stretches_a_recording_whose_clock_ran_slow(tmp_path):
+    """An exaggerated rate; real ones are tens of parts per million."""
+    red = tmp_path / "red.mp4"
+    _make_video(red, color="red", fps=25, frequency=440)
+
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="red", path=red, timeline=TimelineConfig(rate=1.5))
+            ]
+        )
+    )
+    output = tmp_path / "grid.mp4"
+
+    construct_video_grid(experiment, output, cell_size=(64, 48))
+
+    with av.open(str(output)) as container:
+        stream = container.streams.video[0]
+        duration = float(stream.duration * stream.time_base)
+    # Two seconds on its own clock is three of the experiment's.
+    assert duration == pytest.approx(3.0, abs=0.05)
+    assert _rgb_frame_at(output, 2.5)[42, 32, 0] > 180
+    assert _rms_at(_audio_samples(output, 0), 2.5) > 0.03
+
+
+def test_construct_video_grid_draws_the_four_plus_one_layout(tmp_path):
+    red = tmp_path / "red.mp4"
+    blue = tmp_path / "blue.mp4"
+    _make_video(red, color="red", fps=25, frequency=440)
+    _make_video(blue, color="blue", fps=25, frequency=880)
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="red", path=red),
+                FixedVideoInput(id="blue", path=blue),
+            ]
+        )
+    )
+    output = tmp_path / "four-plus-one.mp4"
+
+    construct_video_grid(
+        experiment,
+        output,
+        layout="4+1",
+        video_ids=["red", "blue"],
+        cell_size=(64, 48),
+        show_labels=False,
+    )
+
+    with av.open(str(output)) as container:
+        stream = container.streams.video[0]
+        # Three cells across and three down, whatever the number of videos.
+        assert (stream.width, stream.height) == (192, 144)
+    frame = _rgb_frame_at(output, 1.0)
+    assert frame[72, 96, 0] > 180  # the central video
+    assert frame[10, 10, 2] > 180  # its top left corner
+    assert frame[50, 67, 2] > 180  # where that corner laps over the central video
+    assert np.max(frame[135, 10]) < 20  # a corner no video was placed in
+    assert np.max(frame[5, 96]) < 20  # above the central video, between the corners
+
+
+def test_construct_video_grid_rejects_an_impossible_slot_assignment(tmp_path):
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="red", path=tmp_path / "red.mp4"),
+                FixedVideoInput(id="blue", path=tmp_path / "blue.mp4"),
+            ]
+        )
+    )
+    output = tmp_path / "grid.mp4"
+
+    with pytest.raises(ValueError, match="unknown video ids.*green"):
+        construct_video_grid(experiment, output, video_ids=["red", "green"])
+    with pytest.raises(ValueError, match="placed more than once.*red"):
+        construct_video_grid(experiment, output, video_ids=["red", "red"])
+    with pytest.raises(ValueError, match="no video inputs selected"):
+        construct_video_grid(experiment, output, video_ids=[None, None])
+    with pytest.raises(ValueError, match="'4\\+1' layout has 5 slots"):
+        construct_video_grid(
+            experiment,
+            output,
+            layout="4+1",
+            video_ids=["red", "blue", None, None, None, None],
+        )
+    with pytest.raises(ValueError, match="video ids.*blue"):
+        # A video the export does not include cannot fill a slot either.
+        construct_video_grid(experiment, output, input_ids=["red"], video_ids=["blue"])
+
+
+def test_construct_video_grid_draws_the_two_plus_one_layout(tmp_path):
+    red = tmp_path / "red.mp4"
+    blue = tmp_path / "blue.mp4"
+    _make_video(red, color="red", fps=25, frequency=440)
+    _make_video(blue, color="blue", fps=25, frequency=880)
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="red", path=red),
+                FixedVideoInput(id="blue", path=blue),
+            ]
+        )
+    )
+    output = tmp_path / "two-plus-one.mp4"
+
+    construct_video_grid(
+        experiment,
+        output,
+        layout="2+1",
+        video_ids=["red", None, "blue"],
+        cell_size=(64, 48),
+        show_labels=False,
+    )
+
+    with av.open(str(output)) as container:
+        stream = container.streams.video[0]
+        assert (stream.width, stream.height) == (128, 96)
+    frame = _rgb_frame_at(output, 1.0)
+    assert frame[24, 32, 0] > 180  # the first video, top left
+    assert np.max(frame[24, 96]) < 20  # the slot left empty, top right
+    assert frame[72, 64, 2] > 180  # the third video, centred below the other two
+    assert np.max(frame[72, 10]) < 20  # beside it, where the row has no video

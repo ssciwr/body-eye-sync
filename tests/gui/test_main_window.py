@@ -14,14 +14,14 @@ from body_eye_sync.gui.tabs import (
     TAB_TYPES,
     AlignmentTab,
     InputFilesTab,
-    TimingCorrectionTab,
+    ClockRateTab,
     VideoProcessingTab,
 )
 
 TAB_TITLES = [
     "Input files",
     "Alignment",
-    "Timing correction",
+    "Clock rate",
     "Video processing",
     "Audio processing",
     "Speech post processing",
@@ -128,7 +128,7 @@ def test_a_change_only_refreshes_another_tab_when_it_is_opened(window, monkeypat
     assert refreshed == [True]
 
 
-def test_finishing_alignment_saves_offsets_and_moves_to_timing_correction_tab(
+def test_finishing_alignment_saves_offsets_and_moves_to_clock_rate_tab(
     window, data_dir, tmp_path
 ):
     window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
@@ -139,7 +139,7 @@ def test_finishing_alignment_saves_offsets_and_moves_to_timing_correction_tab(
     tab.done_button.click()
     reloaded = Experiment.load(tmp_path)
     assert reloaded.glasses_videos[0].timeline.offset == pytest.approx(1.25)
-    assert window.tabs.currentWidget() is window.tab(TimingCorrectionTab)
+    assert window.tabs.currentWidget() is window.tab(ClockRateTab)
     assert not window._dirty
 
 

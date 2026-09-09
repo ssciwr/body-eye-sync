@@ -9,16 +9,15 @@ from body_eye_sync.experiment.config import (
     TimelineConfig,
 )
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.timeline import Shift, Timeline
-from body_eye_sync.gui.tabs.timing_correction import TimingCorrectionTab
-from body_eye_sync.preprocessing.timing_correction import (
-    DEFAULT_MIN_SHIFT,
+from body_eye_sync.experiment.timeline import Timeline
+from body_eye_sync.gui.tabs.clock_rate import ClockRateTab
+from body_eye_sync.preprocessing.clock_rate import (
+    MIN_DRIFT_PPM,
     DEFAULT_SEARCH,
     DEFAULT_WINDOW,
     SPECTRAL_MIN_QUALITY,
     OffsetPoint,
-    FittedTimeline,
-    TimingCorrectionAnalysis,
+    ClockRateAnalysis,
 )
 
 
@@ -43,14 +42,14 @@ def experiment(data_dir):
 
 @pytest.fixture
 def tab(qtbot, experiment):
-    widget = TimingCorrectionTab(experiment)
+    widget = ClockRateTab(experiment)
     qtbot.addWidget(widget)
     return widget
 
 
 @pytest.fixture
 def analysis():
-    return TimingCorrectionAnalysis(
+    return ClockRateAnalysis(
         reference="room",
         points={
             "room": [],
@@ -60,17 +59,7 @@ def analysis():
             ],
         },
         fits={
-            "room": FittedTimeline(Timeline()),
-            "glasses": FittedTimeline(
-                Timeline(
-                    offset=5.2,
-                    shifts=[
-                        Shift(at=25.3, seconds=0.018),
-                        Shift(at=99.1, seconds=0.062),
-                    ],
-                ),
-                residual=0.01,
-            ),
+            "glasses": Timeline(offset=5.2, rate=1.0000182),
         },
         unavailable=[],
     )
@@ -90,7 +79,7 @@ def test_scrollable_summary_table_shows_every_input(tab):
         for column in range(tab.table.columnCount())
     ]
 
-    assert headers == ["Id", "Offset", "Gaps"]
+    assert headers == ["Id", "Offset", "Clock drift"]
     assert tab.table.rowCount() == 2
     assert tab.scroll_area.widget() is tab.page
     assert tab.scroll_area.widgetResizable()
@@ -109,13 +98,13 @@ def test_scrollable_summary_table_shows_every_input(tab):
         "+5.000 s",
         "0",
     ]
-    assert tab.correct_button.text() == "Analyse and correct timing"
+    assert tab.correct_button.text() == "Analyse and correct clock rates"
     assert tab.clear_button.text() == "Clear corrections"
 
 
 def test_existing_corrections_are_plotted_as_lines_without_data_points(tab):
     glasses = tab.experiment.glasses_videos[0]
-    glasses.timeline.shifts = [Shift(at=0.05, seconds=0.12)]
+    glasses.timeline.rate = 1.0000182
 
     tab.refresh()
 
@@ -134,7 +123,7 @@ def test_correction_recalculates_applies_and_plots_lines(
         return analysis
 
     monkeypatch.setattr(
-        "body_eye_sync.gui.tabs.timing_correction.analyse_timing_corrections",
+        "body_eye_sync.gui.tabs.clock_rate.analyse_clock_rates",
         calculate,
     )
 
@@ -145,45 +134,26 @@ def test_correction_recalculates_applies_and_plots_lines(
     glasses = tab.experiment.glasses_videos[0]
     assert measured_offsets == [{"glasses": 5.0, "room": 0.0}]
     assert glasses.timeline.offset == pytest.approx(5.2)
-    assert [(shift.at, shift.seconds) for shift in glasses.timeline.shifts] == [
-        (25.3, 0.018),
-        (99.1, 0.062),
-    ]
+    assert glasses.timeline.rate == pytest.approx(1.0000182)
     row = _row(tab, "glasses")
     assert [tab.table.item(row, column).text() for column in range(1, 3)] == [
         "+5.200 s",
-        "25.3s: 18ms, 99.1s: 62ms",
+        "+18.2 ppm",
     ]
     assert tab.canvas.isVisibleTo(tab)
     assert tab.figure.axes[0].lines
     assert tab.figure.axes[0].collections
 
 
-def test_an_input_that_held_time_keeps_the_offset_alignment_gave_it(
-    qtbot, tab, monkeypatch
-):
-    """Correcting one input does not quietly re-place the others.
-
-    ``room`` here comes back measured but with nothing to correct, and its fitted
-    offset differs from the one it already has. Refining it would be a change the
-    user did not ask this tab for, so it is left alone.
-    """
-    analysis = TimingCorrectionAnalysis(
+def test_only_a_significant_drift_fit_is_applied(qtbot, tab, monkeypatch):
+    analysis = ClockRateAnalysis(
         reference="glasses",
         points={"glasses": [], "room": [OffsetPoint(60.0, 0.4)]},
-        fits={
-            "glasses": FittedTimeline(
-                Timeline(
-                    offset=5.2,
-                    shifts=[Shift(at=25.3, seconds=0.018)],
-                )
-            ),
-            "room": FittedTimeline(Timeline(offset=0.4)),
-        },
+        fits={"glasses": Timeline(offset=5.2, rate=1.0000182)},
         unavailable=[],
     )
     monkeypatch.setattr(
-        "body_eye_sync.gui.tabs.timing_correction.analyse_timing_corrections",
+        "body_eye_sync.gui.tabs.clock_rate.analyse_clock_rates",
         lambda paths, offsets, progress, **settings: analysis,
     )
     messages = []
@@ -195,26 +165,24 @@ def test_an_input_that_held_time_keeps_the_offset_alignment_gave_it(
 
     room = tab.experiment.fixed_videos[0]
     assert room.timeline.offset == 0.0
-    assert room.timeline.shifts == []
-    # The input that did need correcting still got one.
+    assert room.timeline.rate == 1.0
     assert tab.experiment.glasses_videos[0].timeline.offset == pytest.approx(5.2)
-    assert messages == ["Corrected gaps in 1 input(s)"]
+    assert messages == ["Updated the clock rate of 1 input(s)"]
 
 
-def test_no_detectable_correction_shows_only_the_message(qtbot, tab, monkeypatch):
-    analysis = TimingCorrectionAnalysis(
+def test_no_significant_drift_keeps_the_alignment_offset_and_still_plots(
+    qtbot, tab, monkeypatch
+):
+    analysis = ClockRateAnalysis(
         reference="room",
         points={"room": [], "glasses": [OffsetPoint(60.0, 4.75)]},
-        fits={
-            "room": FittedTimeline(Timeline()),
-            "glasses": FittedTimeline(Timeline(offset=4.75)),
-        },
+        fits={},
         unavailable=[],
     )
     changed = []
     tab.experiment_changed.connect(lambda: changed.append(True))
     monkeypatch.setattr(
-        "body_eye_sync.gui.tabs.timing_correction.analyse_timing_corrections",
+        "body_eye_sync.gui.tabs.clock_rate.analyse_clock_rates",
         lambda paths, offsets, progress, **settings: analysis,
     )
     messages = []
@@ -223,10 +191,16 @@ def test_no_detectable_correction_shows_only_the_message(qtbot, tab, monkeypatch
     tab.correct_button.click()
     qtbot.waitUntil(lambda: not tab.is_busy())
 
-    assert messages == ["No gaps detected"]
-    assert tab.canvas is None or not tab.canvas.isVisibleTo(tab)
-    assert tab.experiment.glasses_videos[0].timeline.offset == 5.0
-    assert tab.experiment.glasses_videos[0].timeline.shifts == []
+    assert messages == ["No clock-rate changes detected"]
+    # The measurements are worth seeing whether or not they moved anything.
+    assert tab.canvas.isVisibleTo(tab)
+    assert tab.figure.axes[0].collections
+    assert (
+        tab.figure.axes[0].get_title()
+        == "Measured offsets: no clock-rate correction needed"
+    )
+    assert tab.experiment.glasses_videos[0].timeline.offset == pytest.approx(5.0)
+    assert tab.experiment.glasses_videos[0].timeline.rate == 1.0
     assert changed == []
 
 
@@ -238,7 +212,7 @@ def test_correction_requires_two_inputs(qtbot, data_dir):
             ]
         )
     )
-    tab = TimingCorrectionTab(experiment)
+    tab = ClockRateTab(experiment)
     qtbot.addWidget(tab)
 
     assert not tab.correct_button.isEnabled()
@@ -247,15 +221,15 @@ def test_correction_requires_two_inputs(qtbot, data_dir):
 def test_clear_is_disabled_until_there_is_something_to_clear(tab):
     assert not tab.clear_button.isEnabled()
 
-    tab.experiment.glasses_videos[0].timeline.shifts = [Shift(at=25.3, seconds=0.018)]
+    tab.experiment.glasses_videos[0].timeline.rate = 1.0000182
     tab.refresh()
 
     assert tab.clear_button.isEnabled()
 
 
-def test_clear_resets_gaps_but_keeps_the_offsets(qtbot, tab):
+def test_clear_resets_clock_rates_but_keeps_the_offsets(qtbot, tab):
     glasses = tab.experiment.glasses_videos[0]
-    glasses.timeline.shifts = [Shift(at=25.3, seconds=0.018)]
+    glasses.timeline.rate = 1.0000182
     tab.refresh()
     messages = []
     tab.status_message.connect(messages.append)
@@ -263,7 +237,7 @@ def test_clear_resets_gaps_but_keeps_the_offsets(qtbot, tab):
     with qtbot.waitSignal(tab.experiment_changed):
         tab.clear_button.click()
 
-    assert glasses.timeline.shifts == []
+    assert glasses.timeline.rate == 1.0
     # Where the recording starts is alignment's answer, not this tab's to undo.
     assert glasses.timeline.offset == 5.0
     row = _row(tab, "glasses")
@@ -271,14 +245,14 @@ def test_clear_resets_gaps_but_keeps_the_offsets(qtbot, tab):
         "+5.000 s",
         "0",
     ]
-    assert messages == ["Timing corrections cleared"]
+    assert messages == ["Clock-rate corrections cleared"]
     assert not tab.canvas.isVisibleTo(tab)
     assert not tab.clear_button.isEnabled()
 
 
 def test_clear_drops_a_fresh_analysis_plot(qtbot, tab, analysis, monkeypatch):
     monkeypatch.setattr(
-        "body_eye_sync.gui.tabs.timing_correction.analyse_timing_corrections",
+        "body_eye_sync.gui.tabs.clock_rate.analyse_clock_rates",
         lambda paths, offsets, progress, **settings: analysis,
     )
     with qtbot.waitSignal(tab.experiment_changed):
@@ -289,7 +263,7 @@ def test_clear_drops_a_fresh_analysis_plot(qtbot, tab, analysis, monkeypatch):
     with qtbot.waitSignal(tab.experiment_changed):
         tab.clear_button.click()
 
-    assert tab.experiment.glasses_videos[0].timeline.shifts == []
+    assert tab.experiment.glasses_videos[0].timeline.rate == 1.0
     # The corrected offset stays: clearing does not re-run alignment.
     assert tab.experiment.glasses_videos[0].timeline.offset == pytest.approx(5.2)
     assert not tab.canvas.isVisibleTo(tab)
@@ -299,7 +273,7 @@ def test_settings_default_to_the_analysis_defaults(tab):
     assert tab.window_spin.value() == pytest.approx(DEFAULT_WINDOW)
     assert tab.search_spin.value() == pytest.approx(DEFAULT_SEARCH)
     assert tab.min_quality_spin.value() == pytest.approx(SPECTRAL_MIN_QUALITY)
-    assert tab.min_gap_spin.value() == pytest.approx(1000 * DEFAULT_MIN_SHIFT)
+    assert tab.min_drift_spin.value() == pytest.approx(MIN_DRIFT_PPM)
 
 
 def test_settings_are_forwarded_to_the_analysis(qtbot, tab, analysis, monkeypatch):
@@ -310,13 +284,13 @@ def test_settings_are_forwarded_to_the_analysis(qtbot, tab, analysis, monkeypatc
         return analysis
 
     monkeypatch.setattr(
-        "body_eye_sync.gui.tabs.timing_correction.analyse_timing_corrections",
+        "body_eye_sync.gui.tabs.clock_rate.analyse_clock_rates",
         calculate,
     )
     tab.window_spin.setValue(20.0)
     tab.search_spin.setValue(30.0)
     tab.min_quality_spin.setValue(4.5)
-    tab.min_gap_spin.setValue(40.0)
+    tab.min_drift_spin.setValue(4.0)
 
     tab.correct_button.click()
     qtbot.waitUntil(lambda: not tab.is_busy())
@@ -325,7 +299,7 @@ def test_settings_are_forwarded_to_the_analysis(qtbot, tab, analysis, monkeypatc
         "window": 20.0,
         "search": 30.0,
         "min_quality": 4.5,
-        "min_shift": 0.04,  # the form is in milliseconds
+        "min_drift_ppm": 4.0,
     }
 
 
@@ -339,7 +313,7 @@ def test_settings_are_locked_while_an_analysis_runs(qtbot, tab, analysis, monkey
         return analysis
 
     monkeypatch.setattr(
-        "body_eye_sync.gui.tabs.timing_correction.analyse_timing_corrections",
+        "body_eye_sync.gui.tabs.clock_rate.analyse_clock_rates",
         calculate,
     )
 
