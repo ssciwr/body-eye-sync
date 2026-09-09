@@ -93,7 +93,7 @@ def _aggregate_embeddings(
     For each tracklet, the top-K embeddings are aggregated into a single representative embedding
     by taking the mean of the L2-normalised embeddings.
 
-    Tracklets that never yielded a valid face embedding are absent from the returned dict.
+    Tracklets that never yielded a valid embedding are absent from the returned dict.
 
     Parameters
     ----------
@@ -135,11 +135,14 @@ def _cosine_distance_matrix(embeddings: np.ndarray) -> np.ndarray:
     """
     dot_sim = embeddings @ embeddings.T  # (n, n) cosine similarities
     dist = 1.0 - dot_sim
-    np.fill_diagonal(dist, 0.0)  # self-distance is zero
     nans = np.isnan(dist)
+    np.fill_diagonal(dist, 0.0)  # self-distance is zero
+    remaining_nans = np.isnan(dist)
     if nans.any():
-        max_finite = float(dist[~nans].max()) if (~nans).any() else 1.0
-        dist[nans] = max_finite
+        max_finite = (
+            float(dist[~nans].max()) if (~nans).any() else 1.0
+        )  # 1.0 here represents undefined/missing
+        dist[remaining_nans] = max_finite
     return np.clip(dist, 0.0, 2.0)
 
 
