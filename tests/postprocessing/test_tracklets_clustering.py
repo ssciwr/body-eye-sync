@@ -140,31 +140,73 @@ def test_jaccard_similarity_uses_intersection_over_union():
     assert clustering._jaccard_similarity(set(), set()) == 0.0
 
 
-def test_merge_identity_mappings_merges_overlapping_clusters_and_preserves_new_ones():
+def test_merge_identity_mappings_same_priority_merges_overlapping_clusters_and_preserves_new_ones():
     target = {1: {1, 2}, 2: {3, 4}}
     source = {11: {2, 5}, 12: {3, 6}, 13: {10}}
 
-    clustering._merge_identity_mappings(target, source, merge_jaccard_threshold=0.0)
+    clustering._merge_identity_mappings_same_priority(
+        target, source, merge_jaccard_threshold=0.0
+    )
 
     assert target == {1: {1, 2, 5}, 2: {3, 4, 6}, 3: {10}}
 
 
-def test_merge_identity_mappings_chooses_the_lowest_person_id_on_a_tie():
+def test_merge_identity_mappings_same_priority_chooses_the_lowest_person_id_on_a_tie():
     target = {1: {1, 2}, 2: {3, 4}}
     source = {9: {2, 4}}
 
-    clustering._merge_identity_mappings(target, source, merge_jaccard_threshold=0.3)
+    clustering._merge_identity_mappings_same_priority(
+        target, source, merge_jaccard_threshold=0.3
+    )
 
     assert target == {1: {1, 2, 3, 4}}
 
 
-def test_merge_identity_mappings_merges_multiple_overlapping_clusters():
+def test_merge_identity_mappings_same_priority_merges_multiple_overlapping_clusters():
     target = {12: {1, 2, 5}, 11: {3, 4}}
     source = {9: {2, 3, 5}, 10: {4}}
 
-    clustering._merge_identity_mappings(target, source, merge_jaccard_threshold=0.5)
+    clustering._merge_identity_mappings_same_priority(
+        target, source, merge_jaccard_threshold=0.5
+    )
 
     assert target == {12: {1, 2, 3, 5}, 11: {4}}
+
+
+def test_merge_identity_mappings_prioritize_target_no_source_only_ignore_source():
+    target = {1: {1, 2}, 2: {3, 4}}
+    source = {11: {1}, 12: {2}}
+
+    clustering._merge_identity_mappings_prioritize_target(target, source)
+
+    assert target == {1: {1, 2}, 2: {3, 4}}
+
+
+def test_merge_identity_mappings_prioritize_target_one_id_overlapping_update_target():
+    target = {1: {1, 2}, 2: {3, 4}}
+    source = {11: {2, 5}, 12: {3, 6}, 13: {10}}
+
+    clustering._merge_identity_mappings_prioritize_target(target, source)
+
+    assert target == {1: {1, 2, 5}, 2: {3, 4, 6}, 3: {10}}
+
+
+def test_merge_identity_mappings_prioritize_target_no_overlapping_add_new_to_target():
+    target = {1: {1, 2}, 2: {3, 4}}
+    source = {11: {5}, 12: {6}}
+
+    clustering._merge_identity_mappings_prioritize_target(target, source)
+
+    assert target == {1: {1, 2}, 2: {3, 4}, 3: {5}, 4: {6}}
+
+
+def test_merge_identity_mappings_prioritize_target_multiple_overlapping_ignore_source():
+    target = {1: {1, 2, 5}, 2: {3, 4}}
+    source = {9: {2, 3, 5}, 10: {4}}
+
+    clustering._merge_identity_mappings_prioritize_target(target, source)
+
+    assert target == {1: {1, 2, 5}, 2: {3, 4}}
 
 
 def test_cluster_tracklets_uses_face_then_body_then_unique_ids():
@@ -173,8 +215,10 @@ def test_cluster_tracklets_uses_face_then_body_then_unique_ids():
         (2, np.array([1.0, 0.0])),
     )
     body_embeddings = _embeddings_df(
+        (1, np.array([0.0, 1.0])),
+        (2, np.array([0.0, 1.0])),
         (3, np.array([0.0, 1.0])),
-        (4, np.array([0.0, 1.0])),
+        (4, np.array([1.0, 0.0])),
     )
 
     result = clustering.cluster_tracklets(
@@ -183,15 +227,14 @@ def test_cluster_tracklets_uses_face_then_body_then_unique_ids():
         body_embeddings=body_embeddings,
         face_distance_threshold=0.1,
         body_distance_threshold=0.1,
-        merge_jaccard_threshold=0.0,
         min_face_detections=1,
         min_body_detections=2,
     )
 
-    assert result.track_id_to_person_id == {1: 1, 2: 1, 3: 2, 4: 2, 5: 3}
-    assert result.person_id_to_track_ids == {1: [1, 2], 2: [3, 4], 3: [5]}
+    assert result.track_id_to_person_id == {1: 1, 2: 1, 3: 1, 4: 2, 5: 3}
+    assert result.person_id_to_track_ids == {1: [1, 2, 3], 2: [4], 3: [5]}
     assert set(result.tracklet_face_embedding) == {1, 2}
-    assert set(result.tracklet_body_embedding) == {3, 4}
+    assert set(result.tracklet_body_embedding) == {1, 2, 3, 4}
 
 
 def test_cluster_tracklets_returns_an_empty_result_for_empty_input():
@@ -219,7 +262,6 @@ def test_cluster_tracklets_from_input_delegates_to_cluster_tracklets():
         body_distance_threshold=0.1,
         min_face_detections=1,
         min_body_detections=2,
-        merge_jaccard_threshold=0.0,
     )
     direct_result = clustering.cluster_tracklets(
         track_ids=[1, 2],
@@ -228,7 +270,6 @@ def test_cluster_tracklets_from_input_delegates_to_cluster_tracklets():
         body_distance_threshold=0.1,
         min_face_detections=1,
         min_body_detections=2,
-        merge_jaccard_threshold=0.0,
     )
 
     assert (

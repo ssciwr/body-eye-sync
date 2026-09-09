@@ -2,20 +2,32 @@
 
 Clustering strategy
 --------------------------
-1. **Face embeddings first** – after running an experiment with face detection enabled,
-    each Video instance carries top K face embeddings per tracklet, via
-    video.face_embeddings. The K embeddings are first aggregated into a single
+1. **Face embeddings as the primary identity signal**
+    – after running an experiment with face detection enabled,
+    each ``Video`` instance carries top K face embeddings per tracklet, via
+    ``video.face_embeddings``.
+    - The K embeddings are first aggregated into a single
     representative embedding per tracklet (mean of L2-normalised embeddings).
-    Two tracklets are considered the same person if their representative embeddings
-    are within the *face_distance_threshold* in cosine distance.
+    - Two tracklets are considered the same person if their representative embeddings
+    are within the ``face_distance_threshold`` in cosine distance.
 
 
-2. **Body embeddings as fallback** – tracklets that yield no valid face
-   embedding (e.g. the person's face was never visible) are clustered using body embeddings.
-   The top K body embeddings are also carried per tracklet, via video.body_embeddings.
-   The K embeddings are aggregated into a single representative embedding per tracklet.
-   Similarly, two tracklets are considered the same person if their representative embeddings
-   are within the *body_distance_threshold* in cosine distance.
+2. **Body embeddings as fallback** to associate tracklets
+    without-a-face embedding with an existing face identity
+    – tracklets that yield no valid face embedding (e.g. the person's face was
+    never visible) are clustered using body embeddings.
+    - The top K body embeddings are also carried per tracklet, via ``video.body_embeddings``.
+    - The K embeddings are aggregated into a single representative embedding per tracklet.
+    - Similarly, two tracklets are considered the same person if their representative embeddings
+    are within the ``body_distance_threshold`` in cosine distance.
+    - However, body embeddings are never allowed to merge two distinct face identities,
+    assuming that face embeddings are more reliable than body embeddings.
+        - If a body cluster anchors with one face cluster,
+        the body tracklets are merged into that face identity.
+        - If no face identity anchors with a body cluster,
+        the body tracklets are assigned a new face identity.
+        - If a body cluster anchors with multiple face clusters,
+        the body evidence is ambiguous and ignored.
 
 Outputs
 -------
@@ -213,26 +225,35 @@ def _jaccard_similarity(set_a: set[int], set_b: set[int]) -> float:
     return intersection / union if union > 0 else 0.0
 
 
-def _merge_identity_mappings(
+def _merge_identity_mappings_same_priority(
     target: dict[int, set[int]],
     source: dict[int, set[int]],
+    prioritze_target: bool = True,
     merge_jaccard_threshold: float = 0.0,
 ) -> None:
     """Merge *source* into *target*, deduplicating overlapping identity groups.
 
-    When two identity clusters share at least one tracklet they are most likely
-    to belong to the same person.
+    With *target* and *source* having the same priority, when two identity clusters
+    share at least one tracklet they are most likely to belong to the same cluster.
 
-    If tracklets from *source* overlap with multiple clusters in *target*,
-    the overlapping clusters are merged into the canonicalcluster in *target*,
-    and the rest are removed.
+    (case1) If one identity anchors with *source* tracklets:
+    update the *target* cluster with the new tracklets from *source*.
 
-    If the jaccard similarity between two clusters is below the threshold, they are not merged.
-    By default, any overlap (jaccard similarity > 0) is sufficient to trigger a merge.
+    (case2) If no identity anchors with *source* tracklets:
+    the tracklets are added as a new cluster under in *target* with a fresh ID.
 
-    The canonical cluster is chosen as:
-    1. The cluster in *target* with the highest jaccard similarity to the *source* cluster.
-    2. If there is a tie, the cluster with the lowest person ID is chosen
+    (case3) multiple identities anchor with *source* tracklets:
+
+        - the overlapping clusters are merged into the canonical cluster in *target*,
+        and the rest are removed.
+
+        - the canonical cluster is chosen as:
+            1. The cluster in *target* with the highest jaccard similarity to the *source* cluster.
+            2. If there is a tie, the cluster with the lowest ID is chosen
+
+        - for other overlapping clusters, if the jaccard similarity between two clusters
+        is below the threshold, they are not merged. By default, any overlap
+        (jaccard similarity > 0) is sufficient to trigger a merge.
 
     Parameters
     ----------
@@ -240,7 +261,12 @@ def _merge_identity_mappings(
         Existing identity mapping; mutated in place.
         person_id -> set of tracklet IDs.
     source:
-        New identity mapping whose clusters are merged into *target*.
+        New identity mapping whose clusters might be merged into *target*.
+    merge_jaccard_threshold:
+        Jaccard similarity threshold for merging overlapping clusters.  When two
+        clusters share tracklets, they are considered the same cluster and merged
+        if their jaccard similarity is above this threshold.
+        Default is ``0.0``, i.e. any overlap is sufficient to merge.
     """
     if not source:
         return
@@ -313,6 +339,84 @@ def _merge_identity_mappings(
             target[remaining_pid].difference_update(source_tids)
 
 
+def _merge_identity_mappings_prioritize_target(
+    target: dict[int, set[int]],
+    source: dict[int, set[int]],
+) -> None:
+    """Merge *source* into *target*, deduplicating overlapping identity groups.
+
+    Tracklets that already have an identity in *target* are NOT allowed to be merged
+    with other clusters in *target*, based on overlapping tracklets in *source*.
+
+    (case1) If one identity anchors with *source* tracklets:
+    update the *target* cluster with the new tracklets from *source*.
+
+    (case2) If no identity anchors with *source* tracklets:
+    the tracklets are added as a new cluster under in *target* with a fresh ID.
+
+    (case3) If multiple identities anchor with *source* tracklets:
+    the *source* evidence is ambiguous and ignored.
+
+    Parameters
+    ----------
+    target:
+        Existing identity mapping; mutated in place.
+        person_id -> set of tracklet IDs.
+    source:
+        New identity mapping whose clusters might be merged into *target*.
+    """
+    if not source:
+        return
+
+    # build tracklet -> person_id index for the current target state
+    tracklet_to_pid: dict[int, int] = {}
+    for pid, tids in target.items():
+        for tid in tids:
+            tracklet_to_pid[tid] = pid
+
+    # find the next available person ID
+    next_pid = max(target, default=0) + 1
+
+    for source_tids in source.values():
+        source_only_tids = source_tids - set(tracklet_to_pid)
+
+        if not source_only_tids:
+            # all source tracklets already have an identity in target
+            # ignore this source cluster
+            continue
+
+        # find all target clusters that overlap with the current source cluster
+        overlapping_pids = {
+            tracklet_to_pid[t] for t in source_tids if t in tracklet_to_pid
+        }
+
+        # case 1
+        if len(overlapping_pids) == 1:
+            canonical_pid = next(iter(overlapping_pids))
+            target[canonical_pid].update(source_only_tids)
+
+            for tid in source_only_tids:
+                tracklet_to_pid[tid] = canonical_pid
+
+            continue
+
+        # case 2
+        if not overlapping_pids:
+            # no overlap - add as a new cluster under a fresh identity ID
+            target[next_pid] = set(source_tids)
+
+            for tid in source_tids:
+                tracklet_to_pid[tid] = next_pid
+
+            next_pid += 1
+            continue
+
+        # case 3
+        if len(overlapping_pids) > 1:
+            # ambiguous source cluster - ignore it
+            continue
+
+
 def cluster_tracklets(
     track_ids: Sequence[int],
     face_embeddings: pd.DataFrame | None = None,
@@ -321,23 +425,26 @@ def cluster_tracklets(
     body_distance_threshold: float = 0.15,
     min_face_detections: int = 1,
     min_body_detections: int = 3,
-    merge_jaccard_threshold: float = 0.0,
     debug: bool = False,
 ) -> ClusteringResult:
     """Group BoxMOT tracklets into person identities.
 
-    Face embeddings are used as the primary re-identification signal.  Tracklets
-    that carry no valid face embedding fall back to body-pose-derived features.
+    Face embeddings are the primary identity signal.
+    Body embeddings are used as a fallback to associate tracklets
+    without a face embedding with an existing face identity.
+
+    Body evidence is never allowed to merge two distinct face identities,
+    given that face embeddings are more reliable than body embeddings.
 
     Parameters
     ----------
     track_ids:
         A sequence of track IDs to be clustered.
     face_embeddings:
-        Per-frame face embeddings.  Pass ``None`` to skip face-based
+        Per-tracklet face embeddings.  Pass ``None`` to skip face-based
         clustering and use only body embeddings.
     body_embeddings:
-        Per-frame body-pose embeddings.  Used for tracklets that lack a
+        Per-tracklet body-pose embeddings.  Used for tracklets that lack a
         face embedding and as a fallback when *face_embeddings* is ``None``.
     face_distance_threshold:
         Cosine-distance cutoff for face embeddings (default ``0.6``, consistent
@@ -346,16 +453,11 @@ def cluster_tracklets(
         Cosine-distance cutoff for body embeddings (default ``0.15``; body
         features are noisier so a tighter threshold is appropriate).
     min_face_detections:
-        Minimum number of frames that must carry a valid face embedding for a
+        Minimum number of tracklets that must carry a valid face embedding for a
         tracklet to be clustered via face features (default ``1``).
     min_body_detections:
-        Minimum number of frames that must carry a valid body pose for a
+        Minimum number of tracklets that must carry a valid body pose for a
         tracklet to be clustered via body features (default ``3``).
-    merge_jaccard_threshold:
-        Jaccard similarity threshold for merging overlapping clusters.  When two
-        clusters share tracklets, they are considered the same person and merged
-        if their jaccard similarity is above this threshold.  Default is ``0.0``,
-        i.e. any overlap is sufficient to merge.
     debug:
         When ``True``, print per-tracklet embedding statistics and the final
         identity assignment table.
@@ -394,28 +496,32 @@ def cluster_tracklets(
     if body_embeddings is not None:
         body_emb_map = _aggregate_embeddings(body_embeddings)
 
-    # tracklets not already assigned by face embeddings.
-    body_candidate_tids = [
+    # cluster ALL body-capable tracklets, including those that already have
+    # face identities. Those face tracklets act as anchors that allow us to
+    # associate face-less tracklets with the correct face identity.
+    body_track_tids = [
         tid
         for tid in track_ids
-        if tid not in {t for tids in face_clusters.values() for t in tids}
-        and tid in body_emb_map
-        and len(body_emb_map[tid].flatten()) > 0
+        if tid in body_emb_map and len(body_emb_map[tid].flatten()) > 0
     ]
     body_clusters: dict[int, set[int]] = {}
-    if len(body_candidate_tids) > 1 and len(body_candidate_tids) >= min_body_detections:
-        body_mat = np.stack([body_emb_map[tid] for tid in body_candidate_tids])
+    if len(body_track_tids) > 1 and len(body_track_tids) >= min_body_detections:
+        body_mat = np.stack([body_emb_map[tid] for tid in body_track_tids])
         body_labels = _cluster_embeddings(body_mat, body_distance_threshold)
-        body_clusters = _build_identity_mappings(body_candidate_tids, body_labels)
+        body_clusters = _build_identity_mappings(body_track_tids, body_labels)
 
     # --------------------------------------------------------------- assemble
-    identity_map: dict[int, set[int]] = {}
-    _merge_identity_mappings(
-        identity_map, face_clusters, merge_jaccard_threshold=merge_jaccard_threshold
-    )
-    _merge_identity_mappings(
-        identity_map, body_clusters, merge_jaccard_threshold=merge_jaccard_threshold
-    )
+
+    # face identities are authoritative. Start with them unchanged
+    identity_map: dict[int, set[int]] = {
+        pid: set(tids) for pid, tids in face_clusters.items()
+    }
+
+    # body clusters are used only to associate otherwise-unidentified
+    # tracklets with existing face identities
+    # merge body clusters into the face identity map with
+    # face identities prioritized over body clusters
+    _merge_identity_mappings_prioritize_target(identity_map, body_clusters)
 
     # assign deterministic 1-indexed person IDs
     sorted_pids = sorted(identity_map.keys())
@@ -464,7 +570,6 @@ def cluster_tracklets_from_input(
     body_distance_threshold: float = 0.15,
     min_face_detections: int = 1,
     min_body_detections: int = 3,
-    merge_jaccard_threshold: float = 0.0,
     debug: bool = False,
 ) -> ClusteringResult:
     """Convenience wrapper around :func:`cluster_tracklets`.
@@ -481,6 +586,5 @@ def cluster_tracklets_from_input(
         body_distance_threshold=body_distance_threshold,
         min_face_detections=min_face_detections,
         min_body_detections=min_body_detections,
-        merge_jaccard_threshold=merge_jaccard_threshold,
         debug=debug,
     )
