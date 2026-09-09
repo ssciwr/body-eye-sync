@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
@@ -15,22 +15,33 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QListView,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QTableWidgetItem,
+    QTreeView,
     QVBoxLayout,
     QWidget,
 )
 
 from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.config import (
+    RESERVED_ID_CHARACTERS,
+    RESERVED_IDS,
     AudioInput,
     FixedVideoInput,
     GlassesVideoInput,
 )
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import GlassesVideo, Video
+from body_eye_sync.glasses import (
+    Recording,
+    find_recordings,
+    recording_for_video,
+    recording_info,
+)
 from body_eye_sync.gui.tabs.base import BaseTab
 from body_eye_sync.gui.widgets.auto_height_table import AutoHeightTable
 
@@ -40,6 +51,10 @@ VIDEO_FILTER = (
 )
 AUDIO_FILTER = "Audio files (*.wav *.mp3 *.flac *.m4a *.ogg *.opus);;All files (*)"
 GAZE_FILTER = "Gaze files (*.tsv *.csv *.txt);;All files (*)"
+
+#: Gaze source menu labels.
+GAZE_FOLDER_ACTION = "Recording folder…"
+GAZE_FILE_ACTION = "Gaze file…"
 
 #: The columns every section has; a kind's extra columns follow them.
 _ID, _FILE = range(2)
@@ -55,13 +70,16 @@ class _ExtraColumn:
 
     title: str
     #: Builds the cell's widget for one of this section's inputs.
-    widget: Callable[["_InputSection", Video | Audio], QWidget]
+    widget: Callable[[_InputSection, Video | Audio], QWidget]
+    #: Share spare width with the file column.
+    stretch: bool = False
 
 
 #: The gaze file a glasses video was recorded with, which it cannot go without.
 GAZE_FILE = _ExtraColumn(
     title="Gaze file",
     widget=lambda section, video: section.gaze_button(video),
+    stretch=True,
 )
 
 #: The glasses video an audio input was recorded alongside, if any.
@@ -87,19 +105,63 @@ class _InputKind:
     add: Callable[..., Video | Audio]
     #: Any further files this type needs, asked for as one is added. ``None``
     #: back means the user did not supply them and the input is not added.
-    gather: Callable[["_InputSection", Path], dict[str, Path] | None] = (
+    gather: Callable[[_InputSection, Path], dict[str, Path] | None] = (
         lambda section, path: {}
     )
+    #: Input name derived from the file and gathered metadata.
+    name: Callable[[Path, dict[str, Path]], str] = lambda path, extra: path.stem
+    #: File chooser button and column labels.
+    add_button: str = "Add…"
+    file_column: str = "File"
     #: The columns this type has beyond :data:`_COLUMNS`.
     extra_columns: tuple[_ExtraColumn, ...] = ()
+    #: Optional recording-folder import: the button label, and what a found
+    #: folder holds, as the file to add and whatever else goes with it. Raises
+    #: ``ValueError`` for a folder without a usable file.
+    folder_button: str | None = None
+    from_folder: Callable[[Path], tuple[Path, dict[str, Path]]] | None = None
+
+
+def choose_folders(parent: QWidget, title: str) -> list[Path]:
+    """Select multiple folders using a non-native Qt dialog."""
+    dialog = QFileDialog(parent, title)
+    dialog.setFileMode(QFileDialog.FileMode.Directory)
+    dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+    dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+    for view in [
+        *dialog.findChildren(QListView),
+        *dialog.findChildren(QTreeView),
+    ]:
+        view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+    if not dialog.exec():
+        return []
+    return [Path(chosen) for chosen in dialog.selectedFiles()]
+
+
+def recording_name(recording: Recording, folder: Path) -> str:
+    """Use the participant name, falling back to the folder name."""
+    return recording.participant or folder.name
+
+
+def glasses_input_name(video: Path, gaze_path: Path) -> str:
+    """Use recording metadata for the input name, or the video stem for exports."""
+    recording = recording_info(gaze_path)
+    return video.stem if recording is None else recording_name(recording, gaze_path)
+
+
+def glasses_recording(folder: Path) -> tuple[Path, dict[str, Path]]:
+    """The video a recording folder holds, with the folder as its gaze source."""
+    recording = recording_info(folder)
+    video = recording.video_path if recording is not None else None
+    if video is None or not video.is_file():
+        raise ValueError("it has no video to go with it")
+    return video, {"gaze_path": folder}
 
 
 def gaze_file_for(section: _InputSection, video: Path) -> dict[str, Path] | None:
-    """The gaze file to record a glasses video with: found beside it, or chosen.
-
-    Devices export the gaze samples next to the video, so that is looked for
-    first and the user is only asked when it is not obvious.
-    """
+    """Use the recording folder or adjacent TSV; otherwise ask for a gaze file."""
+    if (folder := recording_for_video(video)) is not None:
+        return {"gaze_path": folder}
     beside = video.with_suffix(".tsv")
     if beside.exists():
         return {"gaze_path": beside}
@@ -115,13 +177,18 @@ def gaze_file_for(section: _InputSection, video: Path) -> dict[str, Path] | None
 GLASSES_VIDEOS = _InputKind(
     title="Glasses videos",
     dialog_title="Add glasses video",
+    add_button="Add video…",
+    file_column="Video file",
     file_filter=VIDEO_FILTER,
     inputs=lambda experiment: experiment.glasses_videos,
     add=lambda experiment, input_id, path, gaze_path: experiment.add_glasses_video(
         GlassesVideoInput(id=input_id, path=path, gaze_path=gaze_path)
     ),
     gather=gaze_file_for,
+    name=lambda path, extra: glasses_input_name(path, extra["gaze_path"]),
     extra_columns=(GAZE_FILE,),
+    folder_button="Add recording folder…",
+    from_folder=glasses_recording,
 )
 
 FIXED_VIDEOS = _InputKind(
@@ -150,10 +217,12 @@ INPUT_KINDS = (GLASSES_VIDEOS, FIXED_VIDEOS, AUDIO)
 
 
 def _file_label(path: Path | None) -> str:
-    """How a file reads in a cell: its name, flagged if it is not there."""
+    """Label a source by name, marking recording folders and missing paths."""
     if path is None:
         return _NO_GLASSES
-    return path.name if path.exists() else f"{path.name} (not found)"
+    if not path.exists():
+        return f"{path.name} (not found)"
+    return f"{path.name}/" if path.is_dir() else path.name
 
 
 def _remove_inputs(
@@ -199,19 +268,32 @@ class _InputSection(QGroupBox):
         #: Set while the table is being rebuilt, so its own edits are ignored.
         self._updating = False
 
-        headers = [*_COLUMNS, *(column.title for column in kind.extra_columns)]
+        headers = [
+            *_COLUMNS[:_FILE],
+            kind.file_column,
+            *(column.title for column in kind.extra_columns),
+        ]
         self.table = AutoHeightTable(headers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.horizontalHeader().setSectionResizeMode(
-            _FILE, QHeaderView.ResizeMode.Stretch
-        )
+        header = self.table.horizontalHeader()
+        # Share spare width between file columns.
+        header.setSectionResizeMode(_FILE, QHeaderView.ResizeMode.Stretch)
+        for offset, column in enumerate(kind.extra_columns):
+            if column.stretch:
+                header.setSectionResizeMode(
+                    len(_COLUMNS) + offset, QHeaderView.ResizeMode.Stretch
+                )
         self.table.itemChanged.connect(self._on_item_changed)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
 
         self.empty_label = QLabel(f"No {kind.title.lower()} yet")
         self.empty_label.setEnabled(False)
 
-        self.add_button = QPushButton("Add…")
+        self.add_folder_button: QPushButton | None = None
+        if kind.folder_button is not None:
+            self.add_folder_button = QPushButton(kind.folder_button)
+            self.add_folder_button.clicked.connect(self._choose_folder)
+        self.add_button = QPushButton(kind.add_button)
         self.add_button.clicked.connect(self._choose_files)
         self.remove_button = QPushButton("Remove")
         self.remove_button.clicked.connect(self._remove_selected)
@@ -219,6 +301,8 @@ class _InputSection(QGroupBox):
         # The buttons sit below the current rows, where a new input will appear. Preserve sold "line" appearance vs empty box.
         actions = QHBoxLayout()
         actions.addStretch(1)
+        if self.add_folder_button is not None:
+            actions.addWidget(self.add_folder_button)
         actions.addWidget(self.add_button)
         actions.addWidget(self.remove_button)
 
@@ -267,16 +351,41 @@ class _InputSection(QGroupBox):
         A type that needs more than the one file says so through its
         :attr:`_InputKind.gather`; a path it cannot complete is left out.
         """
-        added = False
+        if self._add_each(paths, self._from_file):
+            self.changed.emit()
+
+    def _from_file(self, path: Path) -> tuple[Path, dict[str, Path]] | None:
+        """The file itself, and whatever its kind gathers to go with it."""
+        # Refuse a duplicate before asking for any accompanying files.
+        self.experiment.check_path(path)
+        extra = self.kind.gather(self, path)
+        return None if extra is None else (path, extra)
+
+    def _add_each(
+        self,
+        paths: list[Path],
+        describe: Callable[[Path], tuple[Path, dict[str, Path]] | None],
+    ) -> int:
+        """Add an input per path, reporting each rejection; count those added.
+
+        ``describe`` turns a path into the file to add and what goes with it,
+        or ``None`` when the user declined to complete it.
+        """
+        added = 0
         for path in paths:
             path = Path(path)
-            extra = self.kind.gather(self, path)
-            if extra is None:
+            try:
+                described = describe(path)
+                if described is None:
+                    continue
+                video, extra = described
+                name = self.kind.name(video, extra)
+                self.kind.add(self.experiment, self._unused_id(name), video, **extra)
+            except (ValueError, OSError) as exc:
+                self.status_message.emit(f"{path} not added: {exc}")
                 continue
-            self.kind.add(self.experiment, self._unused_id(path), path, **extra)
-            added = True
-        if added:
-            self.changed.emit()
+            added += 1
+        return added
 
     def _fill_row(self, row: int, data: Video | Audio) -> None:
         self.table.setItem(row, _ID, QTableWidgetItem(data.id))
@@ -295,24 +404,70 @@ class _InputSection(QGroupBox):
             )
 
     def gaze_button(self, video: GlassesVideo) -> QPushButton:
-        """A chooser for the gaze file a glasses video was recorded with."""
+        """Build a menu for selecting a recording folder or gaze file."""
         button = QPushButton(_file_label(video.gaze_path))
         button.setToolTip(str(video.gaze_path))
         button.setFlat(True)
-        button.clicked.connect(
-            lambda _checked=False, video=video: self._choose_gaze(video)
+        menu = QMenu(button)
+        menu.addAction(
+            GAZE_FOLDER_ACTION, lambda video=video: self._choose_gaze_folder(video)
         )
+        menu.addAction(
+            GAZE_FILE_ACTION, lambda video=video: self._choose_gaze_file(video)
+        )
+        button.setMenu(menu)
         return button
 
-    def _choose_gaze(self, video: GlassesVideo) -> None:
-        start = video.gaze_path.parent if video.gaze_path is not None else ""
+    def _gaze_start_folder(self, video: GlassesVideo) -> str:
+        """Starting directory for gaze source dialogs."""
+        if video.gaze_path is None:
+            return ""
+        return str(
+            video.gaze_path if video.gaze_path.is_dir() else video.gaze_path.parent
+        )
+
+    def _choose_gaze_file(self, video: GlassesVideo) -> None:
         chosen, _ = QFileDialog.getOpenFileName(
-            self, f"Gaze file for {video.id}", str(start), GAZE_FILTER
+            self,
+            f"Gaze file for {video.id}",
+            self._gaze_start_folder(video),
+            GAZE_FILTER,
         )
         if not chosen or Path(chosen) == video.gaze_path:
             return
         video.set_gaze(chosen)
         self.changed.emit()
+
+    def _choose_gaze_folder(self, video: GlassesVideo) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, f"Recording folder for {video.id}", self._gaze_start_folder(video)
+        )
+        if not chosen:
+            return
+        recording = recording_info(chosen)
+        if recording is None:
+            self.status_message.emit(
+                f"{Path(chosen).name} is not a glasses recording folder"
+            )
+            return
+        folder = recording.source
+        if folder == video.gaze_path:
+            return
+        self._warn_if_video_differs(video, recording)
+        video.set_gaze(folder)
+        self.changed.emit()
+
+    def _warn_if_video_differs(self, video: GlassesVideo, recording: Recording) -> None:
+        """Warn when the gaze recording names a different video."""
+        if recording.video_path is None or video.video_path is None:
+            return
+        if recording.video_path == video.video_path:
+            return
+        self.status_message.emit(
+            f"{video.id}: {recording.source.name} was recorded with "
+            f"{recording.video_path.name}, not {video.video_path.name} — check "
+            "these are the same recording, uncut"
+        )
 
     def glasses_combo(self, audio: Audio) -> QComboBox:
         """A chooser for the glasses video an audio input was recorded alongside."""
@@ -352,12 +507,13 @@ class _InputSection(QGroupBox):
             return
         self.changed.emit()
 
-    def _unused_id(self, path: Path) -> str:
-        """An id based on ``path``'s filename that no input is using yet.
-
-        Ids are unique across every type, not just this section's.
-        """
-        stem = Path(path).stem or "input"
+    def _unused_id(self, name: str) -> str:
+        """Sanitise ``name`` and make it unique across all input types."""
+        stem = name.translate(
+            str.maketrans({char: "_" for char in RESERVED_ID_CHARACTERS})
+        ).strip()
+        if not stem or stem in RESERVED_IDS:
+            stem = "input"
         used = {data.id for data in self.experiment.inputs}
         if stem not in used:
             return stem
@@ -371,6 +527,30 @@ class _InputSection(QGroupBox):
             self, self.kind.dialog_title, "", self.kind.file_filter
         )
         self.add_files([Path(path) for path in paths])
+
+    def _choose_folder(self) -> None:
+        """Find and import the glasses recordings in the selected folders."""
+        assert self.kind.from_folder is not None
+        chosen = choose_folders(self, "Add glasses recording folder")
+        if not chosen:
+            return
+        # Deduplicate recordings found through overlapping selections.
+        found = dict.fromkeys(
+            recording for folder in chosen for recording in find_recordings(folder)
+        )
+        if not found:
+            names = ", ".join(folder.name for folder in chosen)
+            self.status_message.emit(
+                f"No glasses recording in {names}: open a recording folder, or "
+                "one with recordings somewhere inside it"
+            )
+            return
+        added = self._add_each(list(found), self.kind.from_folder)
+        if added:
+            self.status_message.emit(
+                f"Added {added} glasses recording{'s' if added != 1 else ''}"
+            )
+            self.changed.emit()
 
     def _remove_selected(self) -> None:
         if _remove_inputs(self, self.experiment, self.selected_inputs()):

@@ -534,3 +534,63 @@ def test_an_input_that_kept_time_is_just_its_offset(tmp_path):
 def test_a_serialised_clock_rate_must_be_positive():
     with pytest.raises(ValidationError):
         TimelineConfig(rate=0.0)
+
+
+def test_input_for_path_finds_whichever_input_is_reading_a_file(tmp_path, data_dir):
+    """Whatever lets someone pick a recording asks this before adding it."""
+    video = data_dir / "three-people.mp4"
+    experiment = Experiment(ExperimentConfig())
+    experiment.add_fixed_video(FixedVideoInput(id="room", path=video))
+
+    assert experiment.input_for_path(video).id == "room"
+    assert experiment.input_for_path(tmp_path / "elsewhere.mp4") is None
+    assert experiment.input_for_path(None) is None
+
+    experiment.add_audio(AudioInput(id="mic", path=tmp_path / "mic.wav"))
+    assert experiment.input_for_path(tmp_path / "mic.wav").id == "mic"
+
+
+def test_input_for_path_sees_through_how_a_path_was_spelled(tmp_path, data_dir):
+
+    video = data_dir / "three-people.mp4"
+    link = tmp_path / "same-video.mp4"
+    link.symlink_to(video)
+    experiment = Experiment(ExperimentConfig())
+    experiment.add_fixed_video(FixedVideoInput(id="room", path=video))
+
+    assert experiment.input_for_path(link).id == "room"
+
+
+def test_one_recording_can_only_be_one_input(data_dir, tmp_path):
+    """Two inputs of one recording would be tracked and counted twice over."""
+    video = data_dir / "three-people.mp4"
+    experiment = Experiment(ExperimentConfig())
+    experiment.add_fixed_video(FixedVideoInput(id="room", path=video))
+
+    with pytest.raises(ValueError, match="already an input, as 'room'"):
+        experiment.add_fixed_video(FixedVideoInput(id="room-again", path=video))
+    # Nor as another kind of input, nor as the audio of one.
+    with pytest.raises(ValueError, match="already an input"):
+        experiment.add_glasses_video(
+            GlassesVideoInput(id="cam", path=video, gaze_path=tmp_path / "g.tsv")
+        )
+    with pytest.raises(ValueError, match="already an input"):
+        experiment.add_audio(AudioInput(id="mic", path=video))
+    assert [data.id for data in experiment.inputs] == ["room"]
+
+
+def test_an_experiment_file_that_names_one_recording_twice_still_loads(
+    data_dir, tmp_path
+):
+    """Adding refuses it; what is already written is read as it stands."""
+    video = data_dir / "three-people.mp4"
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="room", path=video),
+                FixedVideoInput(id="room-again", path=video),
+            ]
+        )
+    )
+
+    assert [data.id for data in experiment.inputs] == ["room", "room-again"]

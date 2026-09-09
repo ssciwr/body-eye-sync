@@ -52,6 +52,12 @@ def fast_object_tracking(monkeypatch):
 
 
 @pytest.fixture
+def room_videos(distinct_videos):
+    """Video files for room cameras, each a recording of its own."""
+    return distinct_videos(2)
+
+
+@pytest.fixture
 def experiment(data_dir):
     """An experiment with one glasses video, and nothing computed yet."""
     return Experiment(
@@ -204,10 +210,10 @@ def test_a_fixed_video_edits_the_fixed_video_pipeline_block(qtbot, data_dir):
     assert tab._pipeline() is experiment.pipeline.fixed_video
 
 
-def test_choosing_another_video_shows_it_and_its_pipeline_block(qtbot, tab, data_dir):
-    tab.experiment.add_fixed_video(
-        FixedVideoInput(id="room", path=data_dir / "three-people.mp4")
-    )
+def test_choosing_another_video_shows_it_and_its_pipeline_block(
+    qtbot, tab, room_videos
+):
+    tab.experiment.add_fixed_video(FixedVideoInput(id="room", path=room_videos[0]))
     tab.refresh()
     assert [
         tab.video_selector.itemText(i) for i in range(tab.video_selector.count())
@@ -220,18 +226,14 @@ def test_choosing_another_video_shows_it_and_its_pipeline_block(qtbot, tab, data
     assert tab.video_viewer.frame_count == 5
 
 
-def test_refresh_keeps_showing_the_same_video(tab, data_dir):
-    tab.experiment.add_fixed_video(
-        FixedVideoInput(id="room", path=data_dir / "three-people.mp4")
-    )
+def test_refresh_keeps_showing_the_same_video(tab, room_videos):
+    tab.experiment.add_fixed_video(FixedVideoInput(id="room", path=room_videos[0]))
     tab.refresh()
     tab.video_selector.setCurrentIndex(1)
     tab.video_viewer.set_frame(2)
 
     # An unrelated input was added elsewhere, so the tab re-reads the experiment.
-    tab.experiment.add_fixed_video(
-        FixedVideoInput(id="room2", path=data_dir / "three-people.mp4")
-    )
+    tab.experiment.add_fixed_video(FixedVideoInput(id="room2", path=room_videos[1]))
     tab.refresh()
 
     assert tab.video() is tab.experiment.fixed_videos[0]
@@ -240,16 +242,14 @@ def test_refresh_keeps_showing_the_same_video(tab, data_dir):
 
 
 def test_inputs_that_changed_during_a_run_are_re_read_when_it_ends(
-    qtbot, tab, data_dir
+    qtbot, tab, room_videos
 ):
     tab._start_step(ObjectTrackingStep)
     assert tab.is_busy()
 
     # An input added while the run is on cannot go in yet: the run drives the
     # viewer and holds the video it writes into.
-    tab.experiment.add_fixed_video(
-        FixedVideoInput(id="room", path=data_dir / "three-people.mp4")
-    )
+    tab.experiment.add_fixed_video(FixedVideoInput(id="room", path=room_videos[0]))
     tab.refresh()
     assert tab.video_selector.count() == 1
 
@@ -263,10 +263,8 @@ def test_inputs_that_changed_during_a_run_are_re_read_when_it_ends(
     assert tab.video().data is not None
 
 
-def test_removing_the_shown_video_falls_back_to_the_first(tab, data_dir):
-    tab.experiment.add_fixed_video(
-        FixedVideoInput(id="room", path=data_dir / "three-people.mp4")
-    )
+def test_removing_the_shown_video_falls_back_to_the_first(tab, room_videos):
+    tab.experiment.add_fixed_video(FixedVideoInput(id="room", path=room_videos[0]))
     tab.refresh()
     tab.video_selector.setCurrentIndex(1)
 
@@ -424,11 +422,9 @@ def test_the_video_is_locked_while_a_step_runs(qtbot, tab):
     assert busy == [True, False]
 
 
-def test_a_run_in_progress_ignores_a_refresh(qtbot, tab, data_dir):
+def test_a_run_in_progress_ignores_a_refresh(qtbot, tab, room_videos):
     tab._start_step(ObjectTrackingStep)
-    tab.experiment.add_fixed_video(
-        FixedVideoInput(id="room", path=data_dir / "three-people.mp4")
-    )
+    tab.experiment.add_fixed_video(FixedVideoInput(id="room", path=room_videos[0]))
 
     tab.refresh()
 
