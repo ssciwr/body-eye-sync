@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from body_eye_sync.experiment import run as run_module
@@ -18,6 +19,7 @@ from body_eye_sync.experiment.config import (
     VideoPipeline,
 )
 from body_eye_sync.experiment.audio import Audio
+from body_eye_sync.experiment import loudness as loudness_module
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.run import run_experiment
 from body_eye_sync.experiment.video import Video
@@ -66,6 +68,7 @@ def stub_pipeline(monkeypatch):
         "face": [],
         "pose": [],
         "transcribe": [],
+        "loudness": [],
     }
 
     def fake_tracklets(video_path, **kwargs):
@@ -85,6 +88,10 @@ def stub_pipeline(monkeypatch):
             ]
         )
 
+    def fake_loudness(media_path):
+        calls["loudness"].append({"audio": media_path})
+        return pd.DataFrame({"time": [0.025, 0.075], "level_db": [-30.0, -12.0]})
+
     def fake_faces(video_path, boxes_by_frame, **kwargs):
         calls["face"].append({"video": video_path, "boxes": boxes_by_frame, **kwargs})
         return iter([_face_result(0, (1, 0.0, 0.0, 4.0, 4.0, 0.9))])
@@ -97,6 +104,7 @@ def stub_pipeline(monkeypatch):
     monkeypatch.setattr(run_module, "detect_faces", fake_faces)
     monkeypatch.setattr(run_module, "detect_body_poses", fake_poses)
     monkeypatch.setattr(run_module, "transcribe", fake_transcribe)
+    monkeypatch.setattr(loudness_module, "measure_loudness", fake_loudness)
 
     return calls
 
@@ -230,6 +238,9 @@ def test_audio_input_is_transcribed(tmp_path, stub_pipeline):
     # A per-input transcript says what was said, and nothing about who said it.
     assert "speaker" not in audio.speech.data.columns
     assert "speaker" not in audio.speech.words.columns
+    # Attribution compares recordings by loudness, measured here once and kept.
+    assert [c["audio"] for c in stub_pipeline["loudness"]] == [exp.audio[0].path]
+    assert audio.loudness.data["level_db"].tolist() == [-30.0, -12.0]
 
 
 def test_speech_runs_over_a_video_own_audio_track(tmp_path, stub_pipeline, data_dir):
@@ -248,9 +259,11 @@ def test_speech_runs_over_a_video_own_audio_track(tmp_path, stub_pipeline, data_
     video_dir = results["cam1"]
     assert (video_dir / "results.parquet").exists()
     assert (video_dir / "transcript_segments.parquet").exists()
+    assert (video_dir / "loudness.parquet").exists()
     video = Video()
     video.load(video_dir)
     assert video.speech.data["text"].tolist() == ["hallo welt"]
+    assert video.loudness.data["level_db"].tolist() == [-30.0, -12.0]
     # Frame results and speech results stay in their own tables.
     assert "text" not in video.data.columns
     # The speech stages read the video file itself; there is no separate audio.
@@ -270,7 +283,9 @@ def test_a_video_without_an_audio_track_skips_speech(tmp_path, stub_pipeline, da
     # A silent camera is not an error: it just has no speech to find.
     assert (results["cam1"] / "results.parquet").exists()
     assert not (results["cam1"] / "transcript_segments.parquet").exists()
+    assert not (results["cam1"] / "loudness.parquet").exists()
     assert not stub_pipeline["transcribe"]
+    assert not stub_pipeline["loudness"]
 
 
 def test_speech_pipeline_off_leaves_audio_inputs_unrun(tmp_path, stub_pipeline):

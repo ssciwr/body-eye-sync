@@ -20,6 +20,27 @@ def _time_text(milliseconds: int) -> str:
     return f"{int(seconds) // 60}:{seconds % 60:04.1f}"
 
 
+def _normalised(rms: np.ndarray) -> np.ndarray:
+    """Scale RMS levels into 0..1 across the top 60 dB of the recording."""
+    if not np.any(rms > np.finfo(np.float32).eps):
+        return np.zeros(rms.size, dtype=np.float32)
+    decibels = 20 * np.log10(np.maximum(rms, np.finfo(np.float32).tiny))
+    ceiling = float(np.max(decibels))
+    return np.clip((decibels - (ceiling - 60.0)) / 60.0, 0.0, 1.0)
+
+
+def loudness_overview(levels: np.ndarray, points: int = 1200) -> np.ndarray:
+    """Return a normalized loudness overview to plot from levels measured in dB."""
+    levels = np.asarray(levels, dtype=float)
+    if levels.size == 0:
+        return np.empty(0, dtype=np.float32)
+    count = min(points, levels.size)
+    edges = np.linspace(0, levels.size, count + 1, dtype=np.int64)
+    # Each bar is the RMS of the chunks it covers, as decoding would give it.
+    power = np.add.reduceat(10.0 ** (levels / 10.0), edges[:-1])
+    return _normalised(np.sqrt(power / np.diff(edges)).astype(np.float32))
+
+
 def _loudness_envelope(path: Path, points: int = 1200) -> np.ndarray:
     """Return a normalized RMS loudness overview for an audio-bearing file."""
     from body_eye_sync.preprocessing.audio import load_audio
@@ -34,12 +55,7 @@ def _loudness_envelope(path: Path, points: int = 1200) -> np.ndarray:
     for index, (start, end) in enumerate(zip(edges[:-1], edges[1:])):
         window = samples[start:end]
         rms[index] = np.sqrt(np.mean(window * window))
-
-    if not np.any(rms > np.finfo(np.float32).eps):
-        return np.zeros(count, dtype=np.float32)
-    decibels = 20 * np.log10(np.maximum(rms, np.finfo(np.float32).tiny))
-    ceiling = float(np.max(decibels))
-    return np.clip((decibels - (ceiling - 60.0)) / 60.0, 0.0, 1.0)
+    return _normalised(rms)
 
 
 class _LoudnessGraph(QWidget):
@@ -130,6 +146,7 @@ class AudioPlaybackWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._path: Path | None = None
+        self._levels = np.empty(0)
         self._duration = 0
         self._waveform_generation = 0
         self._waveform_started = False
@@ -160,13 +177,18 @@ class AudioPlaybackWidget(QWidget):
     def path(self) -> Path | None:
         return self._path
 
-    def load(self, path: str | Path) -> None:
-        """Load an audio file or the audio track of a video file."""
+    def load(self, path: str | Path, levels: np.ndarray | None = None) -> None:
+        """Load an audio file or the audio track of a video file.
+
+        ``levels`` are the recording's loudness in dB, if not provided will be measured in a background thread.
+        """
         path = Path(path)
-        if path == self._path:
+        levels = np.empty(0) if levels is None else np.asarray(levels, dtype=float)
+        if path == self._path and levels.size == self._levels.size:
             return
         self.clear()
         self._path = path
+        self._levels = levels
         self._waveform_generation += 1
         self._waveform_started = False
         self._graph.set_values(np.empty(0), "")
@@ -256,6 +278,9 @@ class AudioPlaybackWidget(QWidget):
             return
         self._waveform_started = True
         generation = self._waveform_generation
+        if self._levels.size:
+            self._show_waveform(generation, loudness_overview(self._levels))
+            return
         path = self._path
         threading.Thread(
             target=self._decode_waveform,
@@ -290,4 +315,4 @@ class AudioPlaybackWidget(QWidget):
         self._start_waveform()
 
 
-__all__ = ["AudioPlaybackWidget"]
+__all__ = ["AudioPlaybackWidget", "loudness_overview"]

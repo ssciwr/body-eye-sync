@@ -24,7 +24,10 @@ from qtpy.QtWidgets import (
 from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.video import Video
 from body_eye_sync.gui.utils import get_color
-from body_eye_sync.gui.widgets.audio_playback import _loudness_envelope
+from body_eye_sync.gui.widgets.audio_playback import (
+    _loudness_envelope,
+    loudness_overview,
+)
 from body_eye_sync.gui.widgets.playback_controls import PlaybackControls
 from body_eye_sync.media import media_duration
 
@@ -399,15 +402,14 @@ class SynchronizedAudioPlaybackWidget(QWidget):
 
     def _decode_waveform(self, generation: int, name: str, track: _Track) -> None:
         try:
-            values = _loudness_envelope(track.path)
-            local_times = np.linspace(
-                0.0, track.duration, len(values), endpoint=False, dtype=float
+            levels = track.data.loudness.levels
+            values = (
+                loudness_overview(levels)
+                if levels.size
+                else _loudness_envelope(track.path)
             )
-            times = np.asarray(
-                [
-                    track.data.timeline.to_experiment_time(float(at))
-                    for at in local_times
-                ]
+            times = track.data.timeline.to_experiment_times(
+                np.linspace(0.0, track.duration, len(values), endpoint=False)
             )
         except Exception:
             values, times = np.empty(0), np.empty(0)

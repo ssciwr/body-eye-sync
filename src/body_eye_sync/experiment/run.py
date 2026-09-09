@@ -16,6 +16,7 @@ from body_eye_sync.experiment.config import (
     VideoPipeline,
 )
 from body_eye_sync.experiment.experiment import Experiment
+from body_eye_sync.experiment.loudness import Loudness
 from body_eye_sync.experiment.speech import Speech
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo, Video
 from body_eye_sync.pipeline.body_pose import detect_body_poses
@@ -85,7 +86,9 @@ def run_audio(experiment: Experiment, audio: Audio) -> None:
     audio_path = audio.audio_path
     if audio_path is None or not audio_path.exists():
         raise FileNotFoundError(f"input {audio.id!r} audio not found: {audio_path}")
-    _run_speech_pipeline(audio.speech, audio_path, experiment.pipeline.speech)
+    _run_speech_pipeline(
+        audio.speech, audio.loudness, audio_path, experiment.pipeline.speech
+    )
 
 
 def _run_video_speech(video: Video, pipeline: SpeechPipeline | None) -> None:
@@ -95,7 +98,7 @@ def _run_video_speech(video: Video, pipeline: SpeechPipeline | None) -> None:
     if not video.has_audio_track():
         logger.info("input %r has no audio track; skipping speech", video.id)
         return
-    _run_speech_pipeline(video.speech, video.video_path, pipeline)
+    _run_speech_pipeline(video.speech, video.loudness, video.video_path, pipeline)
 
 
 def _run_video_pipeline(video: Video, pipeline: VideoPipeline) -> None:
@@ -162,9 +165,10 @@ def _run_body_pose(
 
 
 def _run_speech_pipeline(
-    speech: Speech, media_path: Path, pipeline: SpeechPipeline
+    speech: Speech, loudness: Loudness, media_path: Path, pipeline: SpeechPipeline
 ) -> None:
     """Run ``pipeline``'s stages over one recording's audio, in order."""
+    loudness.measure(media_path)
     _run_transcription(speech, media_path, pipeline.transcription)
 
 
