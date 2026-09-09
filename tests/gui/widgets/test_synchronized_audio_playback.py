@@ -1,7 +1,9 @@
-import pandas as pd
-import pytest
 from types import SimpleNamespace
 
+import pandas as pd
+import pytest
+
+from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.gui.widgets.synchronized_audio_playback import (
     SynchronizedAudioPlaybackWidget,
     active_speakers,
@@ -9,16 +11,7 @@ from body_eye_sync.gui.widgets.synchronized_audio_playback import (
 
 
 def _recording(name, rate=1.0):
-    return SimpleNamespace(
-        id=name,
-        path=f"{name}.wav",
-        timeline=SimpleNamespace(
-            offset=0.0,
-            rate=rate,
-            to_experiment_time=lambda local: local * rate,
-            to_local_time=lambda experiment: experiment / rate,
-        ),
-    )
+    return SimpleNamespace(id=name, path=f"{name}.wav", timeline=Timeline(rate=rate))
 
 
 def test_active_speakers_include_overlapping_accepted_turns():

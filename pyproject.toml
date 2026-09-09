@@ -28,6 +28,7 @@ dependencies = [
     "pyside6",
     "insightface",
     "onnxruntime",
+    "orjson",
     "faster-whisper",
     "tqdm",
     "huggingface-hub",

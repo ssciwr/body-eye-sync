@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- support importing Tobii Pro Glasses 2 and Glasses 3 recording folders, including gaze and head movement data [#??](https://github.com/ssciwr/body-eye-sync/issues/??)
 - add a layout chooser to the combined video export tab [#58](https://github.com/ssciwr/body-eye-sync/pull/58)
 - replace Timing correction tab with Clock rate tab and take gaps into account when decoding audio [#48](https://github.com/ssciwr/body-eye-sync/pull/48)
 - add speech transcription, attribution, ELAN export, and GUI audio processing / speech post-processing tabs [#44](https://github.com/ssciwr/body-eye-sync/pull/44)

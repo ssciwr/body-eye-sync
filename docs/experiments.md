@@ -106,8 +106,10 @@ removed and renamed through `Experiment` so their ids stay unique.
 
 - `glasses_videos`: video recorded by a participant's glasses-mounted camera.
   This is the input that carries eye tracking, so it needs a `gaze_path` as well
-  as a `path`: the gaze samples the same device recorded, as a TSV file. They
-  share the video's clock, and so its `timeline`. Video formats with audio,
+  as a `path`: a Tobii Pro Glasses 2/3 recording folder or TSV gaze export.
+  Eye tracking shares the video's clock and `timeline`; see
+  [Eye tracking and head movement](#eye-tracking-and-head-movement).
+  Video formats with audio,
 such as MP4, include that audio during video playback.
   for when glasses video and audio becomes out of sync; amongst other things because that does not happen at just one
   point in time and can be a very small offset differences.
@@ -120,6 +122,42 @@ such as MP4, include that audio during video playback.
 
 Every list may be empty: an experiment with no inputs at all is valid, which is
 what a new one starts as before any files have been added to it.
+
+## Eye tracking and head movement
+
+In **Input files**, use **Add recording folder…** to import one or more
+recordings, or a folder containing them (searched up to five levels deep).
+Supported sources are:
+
+- **Glasses 3** folders containing `recording.g3`.
+- **Glasses 2** folders containing `recording.json` and `segments`.
+  Only single-segment recordings are supported.
+- **TSV gaze exports** with `gaze_x`, `gaze_y`, `pupil_left`, `pupil_right`,
+  and `gaze_video_time` columns, paired with a video.
+
+**Add video…** detects a recording folder or adjacent TSV automatically.
+Recording inputs use participant names where available; IDs are sanitised
+and made unique. Duplicate files are skipped. The gaze column lets you change
+the source; check alignment if the selected recording belongs to another video.
+
+`GlassesVideo.tracking` and `.motion` load and cache sensor data on first access.
+A `gaze_path` may also point to a parent folder containing exactly one recording.
+
+- `TrackingData` contains timestamps, normalised gaze (`gaze_pixels()` converts
+  to pixels), pupil diameters in mm, and optional 3D gaze and per-eye data.
+  Invalid readings are `NaN`; missing samples are not interpolated.
+- `MotionData` contains acceleration in m/s² (including gravity) and angular
+  velocity in degrees/s, each with its own timestamps. Axes are X left,
+  Y up, Z forward. TSV exports have no motion data.
+
+All timestamps use seconds on the video container clock. Samples can precede
+its first frame. Use `Video.frame_at()` and `Video.time_of_frame()` to convert
+between times and frame indices, accounting for the video stream start.
+
+Glasses 3 IMU axes are corrected for firmware before 1.29; unknown versions
+receive no correction. Glasses 2 receives a Y-axis flip only.
+`MotionData.angular_velocity_bias()` estimates gyroscope bias from steady
+sample blocks. Magnetometer data and absolute heading are not provided.
 
 ## Pipeline
 

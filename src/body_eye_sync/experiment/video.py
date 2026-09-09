@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import ClassVar
 
@@ -14,6 +15,7 @@ from body_eye_sync.experiment.embeddings import (
     write_embeddings,
 )
 from body_eye_sync.experiment.speech import Speech
+from body_eye_sync.glasses import MotionData, Streams, TrackingData, read_streams
 from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.pipeline.object_tracking import BoundingBox, tracks_to_dataframe
 from body_eye_sync.pipeline.face_detection import (
@@ -30,6 +32,7 @@ from body_eye_sync.pipeline.body_pose import (
     pose_from_row,
     poses_to_dataframe,
 )
+from body_eye_sync.media import VideoInfo, video_info
 from body_eye_sync.preprocessing.audio import has_audio_stream
 
 
@@ -74,6 +77,8 @@ class Video:
         self.speech = Speech()
         self._has_audio_track = False
         self._audio_track_path: Path | None = None
+        self._info: VideoInfo | None = None
+        self._info_path: Path | None = None
         # Persistent results.
         self._data: pd.DataFrame | None = None
         self._rows_by_frame: dict[int, np.ndarray] = {}
@@ -90,6 +95,45 @@ class Video:
     @property
     def path(self) -> Path | None:
         return self.video_path
+
+    def _video_info(self) -> VideoInfo:
+        """Cache video metadata until the path changes."""
+        if self._info is None or self._info_path != self.video_path:
+            self._info = (
+                VideoInfo() if self.video_path is None else video_info(self.video_path)
+            )
+            self._info_path = self.video_path
+        return self._info
+
+    @property
+    def fps(self) -> float:
+        """Average frame rate, or zero if unavailable."""
+        return self._video_info().frame_rate
+
+    @property
+    def video_start(self) -> float:
+        """First frame timestamp in seconds on the container clock."""
+        return self._video_info().start
+
+    def _frame_rate(self) -> float:
+        """Return a positive frame rate or raise ``ValueError``."""
+        fps = self.fps
+        if fps <= 0.0:
+            raise ValueError(f"{self.id or 'video'} has no frame rate to count in")
+        return fps
+
+    def frame_at(self, local_time: float, *, nearest: bool = False) -> int:
+        """Frame containing ``local_time`` on the container clock.
+
+        With ``nearest=True``, select the nearest frame start instead.
+        The index is not clamped to the video bounds.
+        """
+        frames = (local_time - self.video_start) * self._frame_rate()
+        return round(frames) if nearest else math.floor(frames)
+
+    def time_of_frame(self, index: int) -> float:
+        """Frame start time in seconds on the container clock."""
+        return self.video_start + index / self._frame_rate()
 
     def has_audio_track(self) -> bool:
         """Whether this video carries sound"""
@@ -331,7 +375,7 @@ class Video:
 
 
 class GlassesVideo(Video):
-    """Video and gaze data from a participant's glasses-mounted camera."""
+    """Glasses video with gaze and motion loaded from a recording folder or TSV."""
 
     def __init__(
         self,
@@ -342,10 +386,34 @@ class GlassesVideo(Video):
     ) -> None:
         super().__init__(id=id, path=path, timeline=timeline)
         self.gaze_path = Path(gaze_path) if gaze_path is not None else None
+        self._streams: Streams | None = None
 
     def set_gaze(self, path: str | Path) -> None:
-        """Set the gaze samples recorded with this video."""
+        """Change the gaze source and clear cached sensor data."""
         self.gaze_path = Path(path)
+        self._streams = None
+
+    @property
+    def streams(self) -> Streams | None:
+        """Lazily load and cache sensor data; ``None`` without a gaze source.
+
+        Read errors propagate. :meth:`set_gaze` clears the cache.
+        """
+        if self._streams is None and self.gaze_path is not None:
+            self._streams = read_streams(self.gaze_path, video_path=self.video_path)
+        return self._streams
+
+    @property
+    def tracking(self) -> TrackingData | None:
+        """Eye tracking, or ``None`` without a gaze source."""
+        streams = self.streams
+        return None if streams is None else streams.tracking
+
+    @property
+    def motion(self) -> MotionData | None:
+        """Head motion; empty for TSV exports, ``None`` without a gaze source."""
+        streams = self.streams
+        return None if streams is None else streams.motion
 
 
 class FixedVideo(Video):
