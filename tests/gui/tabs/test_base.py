@@ -13,6 +13,7 @@ from body_eye_sync.experiment.config import (
     TimelineConfig,
 )
 from body_eye_sync.experiment.experiment import Experiment
+from body_eye_sync.media import VideoInfo
 from body_eye_sync.gui.tabs import TAB_TYPES
 from body_eye_sync.gui.tabs.alignment import AlignmentTab
 from body_eye_sync.gui.tabs.base import BaseTab, PlaceholderTab
@@ -99,16 +100,15 @@ def test_alignment_refresh_reuses_viewer_and_updates_controls(
     assert not changes
 
 
-def test_alignment_refresh_replaces_changed_inputs(qtbot, experiment, data_dir):
-    video = experiment.add_fixed_video(
-        FixedVideoInput(id="room", path=data_dir / "three-people.mp4")
-    )
+def test_alignment_refresh_replaces_changed_inputs(
+    qtbot, experiment, data_dir, distinct_videos
+):
+    room, other = distinct_videos(2)
+    video = experiment.add_fixed_video(FixedVideoInput(id="room", path=room))
     tab = AlignmentTab(experiment)
     qtbot.addWidget(tab)
     original = tab.video_cards[0]
-    extra = experiment.add_fixed_video(
-        FixedVideoInput(id="extra", path=video.video_path)
-    )
+    extra = experiment.add_fixed_video(FixedVideoInput(id="extra", path=other))
     tab.refresh()
     assert tab.video_cards[0] is not original
     assert original.viewer._capture is None
@@ -235,12 +235,10 @@ def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
 
 
 def test_automatic_alignment_restores_controls_after_failure(
-    qtbot, experiment, data_dir, monkeypatch
+    qtbot, experiment, distinct_videos, monkeypatch
 ):
-    for index in range(2):
-        experiment.add_fixed_video(
-            FixedVideoInput(id=f"room{index}", path=data_dir / "three-people.mp4")
-        )
+    for index, path in enumerate(distinct_videos(2)):
+        experiment.add_fixed_video(FixedVideoInput(id=f"room{index}", path=path))
     tab = AlignmentTab(experiment)
     qtbot.addWidget(tab)
 
@@ -259,13 +257,13 @@ def test_automatic_alignment_restores_controls_after_failure(
 
 # Covers the video offset controls used during manual alignment.
 def test_alignment_tab_edits_video_time_offset(
-    qtbot, experiment, data_dir, monkeypatch
+    qtbot, experiment, data_dir, distinct_videos, monkeypatch
 ):
     path = data_dir / "three-people.mp4"
     experiment.add_glasses_video(
         GlassesVideoInput(id="cam1", path=path, gaze_path=path.with_suffix(".tsv"))
     )
-    experiment.add_fixed_video(FixedVideoInput(id="room1", path=path))
+    experiment.add_fixed_video(FixedVideoInput(id="room1", path=distinct_videos(1)[0]))
     changed = []
     tab = AlignmentTab(experiment)
     tab.experiment_changed.connect(lambda: changed.append(True))
@@ -450,14 +448,18 @@ We also don't test that the final length for each video is > 0.
 
 
 def test_alignment_tab_play_all_uses_shared_timeline(
-    qtbot, experiment, data_dir, monkeypatch
+    qtbot, experiment, data_dir, distinct_videos, monkeypatch
 ):
     path = data_dir / "three-people.mp4"
     experiment.add_glasses_video(
         GlassesVideoInput(id="cam1", path=path, gaze_path=path.with_suffix(".tsv"))
     )
     experiment.add_fixed_video(
-        FixedVideoInput(id="room1", path=path, timeline=TimelineConfig(offset=0.04))
+        FixedVideoInput(
+            id="room1",
+            path=distinct_videos(1)[0],
+            timeline=TimelineConfig(offset=0.04),
+        )
     )
     tab = AlignmentTab(experiment)
     qtbot.addWidget(tab)
@@ -480,16 +482,16 @@ def test_alignment_tab_play_all_uses_shared_timeline(
     assert secondary_audio_seeks == []
 
 
-def test_alignment_tab_uses_corrected_clock_rates(qtbot, experiment, data_dir):
-    path = data_dir / "three-people.mp4"
+def test_alignment_tab_uses_corrected_clock_rates(qtbot, experiment, distinct_videos):
+    slow, steady = distinct_videos(2)
     experiment.add_fixed_video(
         FixedVideoInput(
             id="slow",
-            path=path,
+            path=slow,
             timeline=TimelineConfig(offset=0.0, rate=2.0),
         )
     )
-    experiment.add_fixed_video(FixedVideoInput(id="steady", path=path))
+    experiment.add_fixed_video(FixedVideoInput(id="steady", path=steady))
     tab = AlignmentTab(experiment)
     qtbot.addWidget(tab)
     slow, steady = tab.video_cards
@@ -513,16 +515,19 @@ def test_alignment_tab_uses_corrected_clock_rates(qtbot, experiment, data_dir):
 
 
 def test_alignment_tab_play_all_preserves_exact_start_across_frame_rates(
-    qtbot, experiment, data_dir
+    qtbot, experiment, distinct_videos
 ):
-    path = data_dir / "three-people.mp4"
-    experiment.add_fixed_video(FixedVideoInput(id="room1", path=path))
-    experiment.add_fixed_video(FixedVideoInput(id="room2", path=path))
+    first, second = distinct_videos(2)
+    experiment.add_fixed_video(FixedVideoInput(id="room1", path=first))
+    experiment.add_fixed_video(FixedVideoInput(id="room2", path=second))
     tab = AlignmentTab(experiment)
     qtbot.addWidget(tab)
     primary = tab.video_cards[0].viewer
     secondary = tab.video_cards[1].viewer
-    secondary._fps = 10.0
+    # A frame rate belongs to the file, not to the viewer showing it, so the
+    # second rate is stubbed on the video: 10 fps starting where the file does.
+    secondary._video._info = VideoInfo(frame_rate=10.0)
+    secondary._video._info_path = secondary._video.video_path
     primary.set_time_seconds(0.05, show_requested_time=True)
 
     tab.play_all_button.click()

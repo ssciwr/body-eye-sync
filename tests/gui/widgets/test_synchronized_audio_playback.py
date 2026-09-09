@@ -1,8 +1,10 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
-from types import SimpleNamespace
 
+from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.gui.widgets.synchronized_audio_playback import (
     SynchronizedAudioPlaybackWidget,
     active_speakers,
@@ -14,13 +16,7 @@ def _recording(name, rate=1.0, levels=np.empty(0)):
         id=name,
         path=f"{name}.wav",
         loudness=SimpleNamespace(levels=levels),
-        timeline=SimpleNamespace(
-            offset=0.0,
-            rate=rate,
-            to_experiment_time=lambda local: local * rate,
-            to_experiment_times=lambda local: np.asarray(local) * rate,
-            to_local_time=lambda experiment: experiment / rate,
-        ),
+        timeline=Timeline(rate=rate),
     )
 
 

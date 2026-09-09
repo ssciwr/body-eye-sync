@@ -140,8 +140,8 @@ class _VideoSampler:
     def __init__(self, source: _Source, cell_size: tuple[int, int]) -> None:
         assert source.video is not None
         self.timeline = source.data.timeline
-        self.duration = source.video.duration
         self.start = source.video.start
+        self.end = source.video.end
         self.width, self.height = cell_size
         self.container = av.open(str(source.data.path))
         self.stream = self.container.streams[source.video.index]
@@ -172,7 +172,7 @@ class _VideoSampler:
     def _local_time(self, experiment_time: float) -> float | None:
         """Where this moment sits in the recording, if the recording holds it."""
         local_time = self.timeline.to_local_time(experiment_time)
-        if not self.start <= local_time < self.start + self.duration:
+        if not self.start <= local_time < self.end:
             return None
         return local_time
 
@@ -345,13 +345,17 @@ class _SynchronizedAudio:
 
 
 def _compose_frame(
+    canvas: np.ndarray,
     samplers: list[_VideoSampler | None],
     labels: list[_LabelOverlay | None] | None,
     experiment_time: float,
     frame_layout: LayoutFrame,
 ) -> av.VideoFrame:
-    """Draw every slot that has a picture onto an otherwise black frame."""
-    canvas = np.zeros((frame_layout.height, frame_layout.width, 3), dtype=np.uint8)
+    """Draw every slot that has a picture onto ``canvas``, blacked out first.
+
+    The frame copies the canvas, so the same one serves every frame.
+    """
+    canvas.fill(0)
     for index, (sampler, placement) in enumerate(
         zip(samplers, frame_layout.placements)
     ):
@@ -361,13 +365,13 @@ def _compose_frame(
         if cell is None:
             continue
         image = cell.image
-        label = None if labels is None else labels[index]
-        if label is not None:
-            image = image.copy()
-            _blend_label(image, label)
         x = placement.x + cell.x
         y = placement.y + cell.y
-        canvas[y : y + image.shape[0], x : x + image.shape[1]] = image
+        target = canvas[y : y + image.shape[0], x : x + image.shape[1]]
+        target[:] = image
+        label = None if labels is None else labels[index]
+        if label is not None:
+            _blend_label(target, label)
     return av.VideoFrame.from_ndarray(canvas, format="rgb24")
 
 
@@ -440,6 +444,9 @@ def _render(
 
             video_frames = math.ceil(duration * OUTPUT_FPS - 1e-9)
             audio_samples = round(duration * _AUDIO_SAMPLE_RATE) if audio_streams else 0
+            canvas = np.zeros(
+                (frame_layout.height, frame_layout.width, 3), dtype=np.uint8
+            )
             video_index = 0
             audio_index = 0
             last_reported = -1.0
@@ -450,6 +457,7 @@ def _render(
                     audio_index >= audio_samples or video_time <= audio_time
                 ):
                     frame = _compose_frame(
+                        canvas,
                         samplers,
                         labels,
                         output_start + video_time,

@@ -1,12 +1,18 @@
+import json
 from pathlib import Path
 
 import pytest
+from qtpy.QtWidgets import QWidget
 
 from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.config import ExperimentConfig
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo
-from body_eye_sync.gui.tabs.input_files import InputFilesTab
+from body_eye_sync.gui.tabs.input_files import (
+    GAZE_FILE_ACTION,
+    GAZE_FOLDER_ACTION,
+    InputFilesTab,
+)
 
 _ID, _FILE, _EXTRA = range(3)
 _GAZE = _GLASSES = _EXTRA
@@ -56,6 +62,41 @@ def _glasses_video(folder, name="cam1"):
     return folder / f"{name}.mp4"
 
 
+def _gaze_action(section, row, label):
+    """The action of a row's gaze menu that picks a source of that kind."""
+    button = section.table.cellWidget(row, _GAZE)
+    return next(action for action in button.menu().actions() if action.text() == label)
+
+
+def _answer_folder_dialog(monkeypatch, *chosen):
+    """Answer the folder chooser with ``chosen`` (nothing = cancelled)."""
+    asked = []
+
+    def choose_folders(_parent, title):
+        asked.append(title)
+        return [Path(folder) for folder in chosen if str(folder)]
+
+    monkeypatch.setattr(
+        "body_eye_sync.gui.tabs.input_files.choose_folders", choose_folders
+    )
+    return asked
+
+
+def _answer_gaze_folder_dialog(monkeypatch, chosen):
+    """Answer the "recording folder for …" chooser, which takes one folder."""
+    asked = []
+
+    def get_existing_directory(_parent, title, *args, **kwargs):
+        asked.append(title)
+        return str(chosen)
+
+    monkeypatch.setattr(
+        "body_eye_sync.gui.tabs.input_files.QFileDialog.getExistingDirectory",
+        get_existing_directory,
+    )
+    return asked
+
+
 def _headers(section):
     header = section.table.horizontalHeader()
     return [section.table.horizontalHeaderItem(i).text() for i in range(header.count())]
@@ -89,7 +130,9 @@ def test_an_empty_section_says_so_instead_of_showing_a_table(tab):
     assert not section.remove_button.isEnabled()
     assert layout.itemAt(0).widget() is section.empty_label
     assert layout.itemAt(1).widget() is section.table
-    assert actions.itemAt(1).widget() is section.add_button
+    # A whole recording is the better thing to add, so it is offered first.
+    assert actions.itemAt(1).widget() is section.add_folder_button
+    assert actions.itemAt(2).widget() is section.add_button
 
 
 def test_add_glasses_video_uses_the_filename_as_its_id(tab, changes, data_dir):
@@ -122,7 +165,8 @@ def test_each_type_has_the_extra_columns_it_needs(tab, tmp_path):
     tab.audio_section.add_files([tmp_path / "mic1.wav"])
 
     # An extra column, and its widget, is only where it means something.
-    assert _headers(tab.glasses_section) == ["Id", "File", "Gaze file"]
+    # The glasses section has two file columns, so each says which it is.
+    assert _headers(tab.glasses_section) == ["Id", "Video file", "Gaze file"]
     assert _headers(tab.fixed_section) == ["Id", "File"]
     assert _headers(tab.audio_section) == ["Id", "File", "Glasses video"]
     assert tab.glasses_section.table.cellWidget(0, _GAZE) is not None
@@ -206,7 +250,7 @@ def test_the_gaze_file_can_be_changed(tab, changes, tmp_path, monkeypatch):
     _answer_gaze_dialog(monkeypatch, other)
     changes.clear()
 
-    tab.glasses_section.table.cellWidget(0, _GAZE).click()
+    _gaze_action(tab.glasses_section, 0, GAZE_FILE_ACTION).trigger()
 
     assert tab.experiment.glasses_videos[0].gaze_path == other
     assert tab.glasses_section.table.cellWidget(0, _GAZE).text() == "corrected.tsv"
@@ -360,3 +404,418 @@ def test_cancelling_the_file_dialog_adds_nothing(tab, changes, monkeypatch):
 
     assert tab.experiment.inputs == []
     assert changes == []
+
+
+def test_a_glasses_recording_folder_is_added_whole(
+    tab, changes, tmp_path, monkeypatch, glasses3_recording
+):
+    recording = glasses3_recording(tmp_path / "1401" / "20220728T161118Z")
+    _answer_folder_dialog(monkeypatch, tmp_path / "1401")
+
+    tab.glasses_section.add_folder_button.click()
+
+    added = tab.experiment.glasses_videos
+    assert len(added) == 1
+    # Named for the participant the glasses recorded, not for the folder.
+    assert added[0].id == "1401"
+    assert added[0].video_path == recording / "scenevideo.mp4"
+    assert added[0].gaze_path == recording
+    assert changes == [True]
+
+
+def test_a_glasses_2_recording_folder_is_added_whole(
+    tab, tmp_path, monkeypatch, glasses2_recording
+):
+    recording = glasses2_recording(tmp_path / "1403" / "es6hcql")
+    _answer_folder_dialog(monkeypatch, recording)
+
+    tab.glasses_section.add_folder_button.click()
+
+    added = tab.experiment.glasses_videos
+    assert len(added) == 1
+    assert added[0].id == "1403"
+    assert added[0].video_path == recording / "segments" / "1" / "fullstream.mp4"
+    assert added[0].gaze_path == recording
+
+
+def test_a_folder_of_recordings_adds_every_one_of_them(
+    tab, messages, tmp_path, monkeypatch, glasses3_recording
+):
+    card = tmp_path / "card"
+    for name in ("20220728T161118Z", "20220728T170000Z"):
+        glasses3_recording(card / name)
+    _answer_folder_dialog(monkeypatch, card)
+
+    tab.glasses_section.add_folder_button.click()
+
+    # Both recordings name the same participant, so the second id is made unique.
+    assert [video.id for video in tab.experiment.glasses_videos] == ["1401", "1401-2"]
+    assert messages == ["Added 2 glasses recordings"]
+
+
+def test_a_recording_without_its_video_is_left_out(
+    tab, messages, tmp_path, monkeypatch, glasses3_recording
+):
+    """A folder whose scene video never made it off the card cannot be an input."""
+    recording = glasses3_recording(tmp_path / "1401" / "20220728T161118Z")
+    (recording / "scenevideo.mp4").unlink()
+    _answer_folder_dialog(monkeypatch, recording)
+
+    tab.glasses_section.add_folder_button.click()
+
+    assert tab.experiment.glasses_videos == []
+    assert "no video to go with it" in messages[0]
+
+
+@pytest.mark.parametrize("generation", ["glasses2_recording", "glasses3_recording"])
+def test_a_video_inside_a_recording_folder_takes_the_folder_as_its_gaze(
+    tab, tmp_path, monkeypatch, request, generation
+):
+    """Picking the scene video out of its folder needs no second question."""
+    recording = request.getfixturevalue(generation)(tmp_path / "20220728T161118Z")
+    asked = _answer_gaze_dialog(monkeypatch, "")
+
+    video = next(recording.rglob("*.mp4"))
+    tab.glasses_section.add_files([video])
+
+    assert tab.experiment.glasses_videos[0].gaze_path == recording
+    assert asked == []
+
+
+@pytest.mark.parametrize(
+    ("by_video", "failure"),
+    [
+        (False, "segments"),
+        (True, "segments"),
+        (False, "metadata"),
+        (True, "metadata"),
+        (False, "missing_segments"),
+    ],
+)
+def test_rejected_recordings_do_not_abort_successful_imports(
+    tab,
+    changes,
+    messages,
+    tmp_path,
+    monkeypatch,
+    glasses2_recording,
+    by_video,
+    failure,
+):
+    card = tmp_path / "card"
+    first = glasses2_recording(card / "1")
+    rejected = glasses2_recording(card / "2")
+    last = glasses2_recording(card / "3")
+    if failure == "segments":
+        (rejected / "segments" / "2").mkdir()
+    elif failure == "metadata":
+        (rejected / "participant.json").write_text("invalid JSON")
+    else:
+        (rejected / "segments" / "1").rename(rejected / "segments" / "invalid")
+    asked = _answer_gaze_dialog(monkeypatch, "")
+
+    if by_video:
+        tab.glasses_section.add_files(
+            [
+                folder / "segments" / "1" / "fullstream.mp4"
+                for folder in (first, rejected, last)
+            ]
+        )
+    else:
+        _answer_folder_dialog(monkeypatch, card)
+        tab.glasses_section.add_folder_button.click()
+
+    assert [video.gaze_path for video in tab.experiment.glasses_videos] == [first, last]
+    assert tab.glasses_section.table.rowCount() == 2
+    assert changes == [True]
+    assert any(
+        str(rejected) in message and "not added" in message for message in messages
+    )
+    assert asked == []
+
+
+@pytest.mark.parametrize("by_video", [False, True])
+@pytest.mark.parametrize(
+    ("participant", "expected"),
+    [
+        ("Subject [01]", "Subject _01_"),
+        ("A/B", "A_B"),
+        ("A\\B", "A_B"),
+        (".", "input"),
+        ("..", "input"),
+        ("   ", "input"),
+    ],
+)
+def test_participant_names_make_valid_unique_input_ids(
+    tab,
+    tmp_path,
+    monkeypatch,
+    glasses2_recording,
+    participant,
+    expected,
+    by_video,
+):
+    folders = [glasses2_recording(tmp_path / name) for name in ("one", "two")]
+    for folder in folders:
+        (folder / "participant.json").write_text(
+            json.dumps({"pa_info": {"Name": participant}})
+        )
+
+    if by_video:
+        _answer_gaze_dialog(monkeypatch, "")
+        tab.glasses_section.add_files(
+            [folder / "segments" / "1" / "fullstream.mp4" for folder in folders]
+        )
+    else:
+        _answer_folder_dialog(monkeypatch, *folders)
+        tab.glasses_section.add_folder_button.click()
+
+    assert [video.id for video in tab.experiment.glasses_videos] == [
+        expected,
+        f"{expected}-2",
+    ]
+
+
+def test_the_gaze_source_can_be_changed_to_a_recording_folder(
+    tab, changes, tmp_path, monkeypatch, glasses3_recording
+):
+    recording = glasses3_recording(tmp_path / "20220728T161118Z")
+    tab.glasses_section.add_files([_glasses_video(tmp_path, "cam1")])
+    _answer_gaze_folder_dialog(monkeypatch, recording)
+    changes.clear()
+
+    _gaze_action(tab.glasses_section, 0, GAZE_FOLDER_ACTION).trigger()
+
+    assert tab.experiment.glasses_videos[0].gaze_path == recording
+    # A folder reads as one in the table, so it is not taken for a file.
+    assert tab.glasses_section.table.cellWidget(0, _GAZE).text() == (
+        "20220728T161118Z/"
+    )
+    assert changes == [True]
+
+
+def test_changing_to_a_folder_recorded_with_another_video_warns(
+    tab, messages, tmp_path, monkeypatch, glasses3_recording
+):
+    """The videos people were given are often cut from the ones on the card."""
+    recording = glasses3_recording(tmp_path / "20220728T161118Z")
+    tab.glasses_section.add_files([_glasses_video(tmp_path, "cam1")])
+    _answer_gaze_folder_dialog(monkeypatch, recording)
+
+    _gaze_action(tab.glasses_section, 0, GAZE_FOLDER_ACTION).trigger()
+
+    assert "was recorded with scenevideo.mp4, not cam1.mp4" in messages[-1]
+
+
+def test_a_folder_that_is_not_a_recording_is_refused_as_a_gaze_source(
+    tab, changes, messages, tmp_path, monkeypatch
+):
+    tab.glasses_section.add_files([_glasses_video(tmp_path, "cam1")])
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _answer_gaze_folder_dialog(monkeypatch, elsewhere)
+    changes.clear()
+
+    _gaze_action(tab.glasses_section, 0, GAZE_FOLDER_ACTION).trigger()
+
+    assert tab.experiment.glasses_videos[0].gaze_path == tmp_path / "cam1.tsv"
+    assert changes == []
+    assert "elsewhere is not a glasses recording folder" in messages[-1]
+
+
+def test_a_video_from_a_recording_folder_is_named_the_same_either_way(
+    tab, tmp_path, monkeypatch, glasses3_recording
+):
+    """The same recording gets the same id however the user picked it."""
+    by_folder = glasses3_recording(tmp_path / "one" / "20220728T161118Z")
+    by_video = glasses3_recording(tmp_path / "two" / "20220728T161118Z")
+    _answer_folder_dialog(monkeypatch, by_folder)
+
+    tab.glasses_section.add_folder_button.click()
+    tab.glasses_section.add_files([by_video / "scenevideo.mp4"])
+
+    # Not "scenevideo", which is what every Glasses 3 recording calls its video.
+    assert [video.id for video in tab.experiment.glasses_videos] == ["1401", "1401-2"]
+
+
+def test_a_video_with_a_gaze_file_beside_it_is_still_named_for_the_video(tab, tmp_path):
+    tab.glasses_section.add_files([_glasses_video(tmp_path, "cam1")])
+
+    assert tab.experiment.glasses_videos[0].id == "cam1"
+
+
+def test_the_same_video_cannot_be_added_twice(tab, changes, messages, tmp_path):
+    video = _glasses_video(tmp_path, "cam1")
+    tab.glasses_section.add_files([video])
+    changes.clear()
+
+    tab.glasses_section.add_files([video])
+
+    assert [v.id for v in tab.experiment.glasses_videos] == ["cam1"]
+    assert changes == []
+    assert "cam1.mp4 is already an input, as 'cam1'" in messages[-1]
+
+
+def test_a_video_already_added_is_not_asked_about_again(tab, tmp_path, monkeypatch):
+    """A file that will be refused should not first put up a dialog."""
+    video = tmp_path / "cam1.mp4"  # no gaze file beside it, so one is asked for
+    other = _write_gaze(tmp_path / "gaze.tsv")
+    _answer_gaze_dialog(monkeypatch, other)
+    tab.glasses_section.add_files([video])
+    asked = _answer_gaze_dialog(monkeypatch, other)
+
+    tab.glasses_section.add_files([video])
+
+    assert asked == []
+
+
+def test_the_same_video_cannot_be_added_to_two_different_sections(
+    tab, messages, tmp_path
+):
+    video = _glasses_video(tmp_path, "cam1")
+    tab.glasses_section.add_files([video])
+
+    tab.fixed_section.add_files([video])
+
+    assert tab.experiment.fixed_videos == []
+    assert "cam1.mp4 is already an input, as 'cam1'" in messages[-1]
+
+
+def test_the_same_recording_folder_cannot_be_added_twice(
+    tab, messages, tmp_path, monkeypatch, glasses3_recording
+):
+    recording = glasses3_recording(tmp_path / "20220728T161118Z")
+    _answer_folder_dialog(monkeypatch, recording)
+    tab.glasses_section.add_folder_button.click()
+
+    tab.glasses_section.add_folder_button.click()
+
+    assert [v.id for v in tab.experiment.glasses_videos] == ["1401"]
+    assert "scenevideo.mp4 is already an input, as '1401'" in messages[-1]
+
+
+def test_a_folder_and_the_video_inside_it_are_the_same_recording(
+    tab, messages, tmp_path, monkeypatch, glasses3_recording
+):
+    """Adding a recording, then its video, is adding it twice by another route."""
+    recording = glasses3_recording(tmp_path / "20220728T161118Z")
+    _answer_folder_dialog(monkeypatch, recording)
+    tab.glasses_section.add_folder_button.click()
+
+    tab.glasses_section.add_files([recording / "scenevideo.mp4"])
+
+    assert [v.id for v in tab.experiment.glasses_videos] == ["1401"]
+    assert "scenevideo.mp4 is already an input, as '1401'" in messages[-1]
+
+
+def test_a_card_holding_a_recording_already_added_adds_only_the_rest(
+    tab, messages, tmp_path, monkeypatch, glasses3_recording
+):
+    card = tmp_path / "card"
+    first = glasses3_recording(card / "20220728T161118Z")
+    glasses3_recording(card / "20220728T170000Z")
+    _answer_folder_dialog(monkeypatch, first)
+    tab.glasses_section.add_folder_button.click()
+    _answer_folder_dialog(monkeypatch, card)
+
+    tab.glasses_section.add_folder_button.click()
+
+    assert len(tab.experiment.glasses_videos) == 2
+    assert messages[-1] == "Added 1 glasses recording"
+
+
+def test_several_recording_folders_can_be_picked_at_once(
+    tab, messages, tmp_path, monkeypatch, glasses3_recording
+):
+    first = glasses3_recording(tmp_path / "one" / "20220728T161118Z")
+    second = glasses3_recording(tmp_path / "two" / "20220728T170000Z")
+    _answer_folder_dialog(monkeypatch, first, second)
+
+    tab.glasses_section.add_folder_button.click()
+
+    assert len(tab.experiment.glasses_videos) == 2
+    assert messages[-1] == "Added 2 glasses recordings"
+
+
+def test_a_folder_picked_alongside_one_holding_it_is_not_added_twice(
+    tab, messages, tmp_path, monkeypatch, glasses3_recording
+):
+    card = tmp_path / "card"
+    recording = glasses3_recording(card / "20220728T161118Z")
+    _answer_folder_dialog(monkeypatch, card, recording)
+
+    tab.glasses_section.add_folder_button.click()
+
+    assert len(tab.experiment.glasses_videos) == 1
+    assert messages[-1] == "Added 1 glasses recording"
+
+
+def test_recordings_filed_deeper_than_one_folder_down_are_still_found(
+    tab,
+    tmp_path,
+    monkeypatch,
+    glasses3_recording,
+    glasses2_recording,
+):
+    """As they are on a card: Glasses 2 keeps them three folders down."""
+    session = tmp_path / "session"
+    glasses3_recording(session / "1401" / "20220728T161118Z")
+    glasses2_recording(session / "projects" / "sr2ixeu" / "recordings" / "es6hcql")
+    _answer_folder_dialog(monkeypatch, session)
+
+    tab.glasses_section.add_folder_button.click()
+
+    assert sorted(v.id for v in tab.experiment.glasses_videos) == ["1401", "1403"]
+
+
+def test_a_folder_holding_nothing_says_what_would_have_worked(
+    tab, messages, tmp_path, monkeypatch
+):
+    empty = tmp_path / "holiday photos"
+    (empty / "nested").mkdir(parents=True)
+    _answer_folder_dialog(monkeypatch, empty)
+
+    tab.glasses_section.add_folder_button.click()
+
+    assert tab.experiment.glasses_videos == []
+    assert messages[-1] == (
+        "No glasses recording in holiday photos: open a recording folder, or "
+        "one with recordings somewhere inside it"
+    )
+
+
+def test_the_folder_chooser_is_built_to_take_more_than_one(qtbot, monkeypatch):
+    """Qt's ready-made chooser takes one folder, so this one is built to."""
+    from qtpy.QtWidgets import (
+        QAbstractItemView,
+        QFileDialog,
+        QListView,
+        QTreeView,
+    )
+
+    from body_eye_sync.gui.tabs.input_files import choose_folders
+
+    seen = {}
+
+    def exec_(dialog):
+        seen["mode"] = dialog.fileMode()
+        seen["views"] = [
+            view.selectionMode()
+            for view in [
+                *dialog.findChildren(QListView),
+                *dialog.findChildren(QTreeView),
+            ]
+        ]
+        return 0  # the user cancelled
+
+    monkeypatch.setattr(QFileDialog, "exec", exec_)
+    widget = QWidget()
+    qtbot.addWidget(widget)
+
+    assert choose_folders(widget, "Add folders") == []
+    assert seen["mode"] == QFileDialog.FileMode.Directory
+    assert seen["views"]
+    assert all(
+        mode == QAbstractItemView.SelectionMode.ExtendedSelection
+        for mode in seen["views"]
+    )

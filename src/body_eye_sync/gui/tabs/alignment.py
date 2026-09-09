@@ -21,6 +21,7 @@ from qtpy.QtWidgets import (
 
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.preprocess import align_experiment
+from body_eye_sync.experiment.timeline import to_experiment_time
 from body_eye_sync.experiment.video import Video
 from body_eye_sync.gui.tabs.base import BaseTab
 from body_eye_sync.gui.widgets import VideoViewer
@@ -106,8 +107,9 @@ class _VideoAlignmentControls(QWidget):
         self._show_timeline_state(shared_timeline_time)
 
     def _refresh_timeline_state(self, _frame: object = None) -> None:
-        shared_time = (
-            self.viewer.current_time_seconds * self.video.timeline.rate + self.offset()
+        # The offset shown in the spin box, which may not have been applied yet.
+        shared_time = to_experiment_time(
+            self.viewer.current_time_seconds, self.offset(), self.video.timeline.rate
         )
         self._show_timeline_state(shared_time)
 
@@ -333,8 +335,12 @@ class AlignmentTab(BaseTab):
         return True
 
     def _set_offset_from_current_frame(self, source: _VideoAlignmentCard) -> None:
+        # The offset that puts the current frame at experiment time zero.
         offset = round(
-            -source.viewer.current_time_seconds * source.video.timeline.rate, 3
+            -to_experiment_time(
+                source.viewer.current_time_seconds, 0.0, source.video.timeline.rate
+            ),
+            3,
         )
         loaded_cards = [card for card in self.video_cards if card.loaded]
         message = QMessageBox(self)
@@ -436,7 +442,7 @@ class AlignmentTab(BaseTab):
             )
             self._play_all_primary = None
         for card in self.video_cards:
-            if card.viewer._play_button.isChecked():
+            if card.viewer.is_playing():
                 card.viewer.stop()
         self.play_all_button.blockSignals(True)
         self.play_all_button.setChecked(False)
