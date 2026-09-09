@@ -3,7 +3,7 @@
 Clustering strategy
 --------------------------
 1. **Face embeddings as the primary identity signal**
-    – after running an experiment with face detection enabled,
+    - After running an experiment with face detection enabled,
     each ``Video`` instance carries top K face embeddings per tracklet, via
     ``video.face_embeddings``.
     - The K embeddings are first aggregated into a single
@@ -14,7 +14,7 @@ Clustering strategy
 
 2. **Body embeddings as fallback** to associate tracklets
     without-a-face embedding with an existing face identity
-    – tracklets that yield no valid face embedding (e.g. the person's face was
+    - Tracklets that yield no valid face embedding (e.g. the person's face was
     never visible) are clustered using body embeddings.
     - The top K body embeddings are also carried per tracklet, via ``video.body_embeddings``.
     - The K embeddings are aggregated into a single representative embedding per tracklet.
