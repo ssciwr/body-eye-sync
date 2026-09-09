@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left, insort
 from dataclasses import dataclass
-from pathlib import Path
+from functools import cached_property
+from operator import attrgetter
 import re
 from typing import Callable
 import unicodedata
@@ -14,10 +16,10 @@ from rapidfuzz import fuzz
 
 from body_eye_sync.experiment.config import SpeechPostProcessingSettings
 from body_eye_sync.experiment.timeline import Timeline
-from body_eye_sync.preprocessing.audio import SAMPLE_RATE, load_audio
+from body_eye_sync.pipeline.loudness import HOP_SECONDS as _HOP_SECONDS
 
-# length of audio chunks used for loudness comparison
-_HOP_SECONDS = 0.05
+Progress = Callable[[float], bool]
+
 _SENTENCE_END = re.compile(r"[.!?…][\"')\]]*$")
 _COMMA_END = re.compile(r",[\"')\]]*$")
 
@@ -35,32 +37,6 @@ class AttributionCancelled(Exception):
     """Raised when a caller's ``progress`` callback asks for the pass to stop."""
 
 
-def _continue(progress: Callable[[float], bool] | None, value: float) -> None:
-    if progress is not None and progress(value) is False:
-        raise AttributionCancelled
-
-
-def _to_experiment_times(local_times: np.ndarray, timeline: Timeline) -> np.ndarray:
-    """Move an array of local times onto a recording's experiment clock."""
-    local_times = np.asarray(local_times, dtype=float)
-    return np.fromiter(
-        (timeline.to_experiment_time(time) for time in local_times.flat),
-        dtype=float,
-        count=local_times.size,
-    ).reshape(local_times.shape)
-
-
-def envelope(path: str | Path) -> np.ndarray:
-    """How loud a recording is over time, in dB, one value every _HOP_SECONDS ms."""
-    samples = load_audio(path, SAMPLE_RATE)
-    frame = int(_HOP_SECONDS * SAMPLE_RATE)
-    if samples.size < frame:
-        return np.empty(0)
-    frames = samples[: samples.size // frame * frame].reshape(-1, frame)
-    rms = np.sqrt((frames.astype(np.float64) ** 2).mean(axis=1))
-    return 20 * np.log10(np.maximum(rms, 1e-8))
-
-
 @dataclass
 class Levels:
     """How loud every recording is compared to its own quiet baseline."""
@@ -70,16 +46,25 @@ class Levels:
     above_floor: np.ndarray
     live_above_floor_db: float
 
+    @cached_property
     def live(self) -> np.ndarray:
         """Which recordings are carrying speech at each moment."""
         return self.above_floor > self.live_above_floor_db
 
+    @cached_property
     def loudest(self) -> np.ndarray:
         """The row of the loudest live recording at each moment, or ``-1`` if unclear."""
         if not self.ids or self.times.size == 0:
             return np.empty(0, dtype=int)
-        live = self.live().any(axis=0)
-        return np.where(live, self.above_floor.argmax(axis=0), -1)
+        return np.where(self.live.any(axis=0), self.above_floor.argmax(axis=0), -1)
+
+    def _window(self, start: float, end: float) -> slice:
+        """The columns covering ``[start, end)``, on the evenly spaced time grid."""
+        stop = max(end, start + _HOP_SECONDS)
+        return slice(
+            int(np.searchsorted(self.times, start, side="left")),
+            int(np.searchsorted(self.times, stop, side="left")),
+        )
 
     def share(
         self,
@@ -90,8 +75,7 @@ class Levels:
         """How much of ``[start, end)`` one recording is the loudest for, ignoring silent stretches."""
         if name not in self.ids:
             return 0.0
-        window = (self.times >= start) & (self.times < max(end, start + _HOP_SECONDS))
-        winners = self.loudest()[window]
+        winners = self.loudest[self._window(start, end)]
         winners = winners[winners >= 0]
         if winners.size == 0:
             return 0.0
@@ -111,31 +95,26 @@ class Levels:
         """
         if name not in self.ids:
             return 0.0
-        window = (self.times >= start) & (self.times < max(end, start + _HOP_SECONDS))
-        if not window.any():
+        window = self._window(start, end)
+        if window.start >= window.stop:
             return 0.0
-        return float(self.live()[self.ids.index(name)][window].mean())
+        return float(self.live[self.ids.index(name)][window].mean())
 
 
 def measure_levels(
-    paths: dict[str, Path],
+    loudness: dict[str, pd.DataFrame],
     timelines: dict[str, Timeline],
     settings: SpeechPostProcessingSettings,
-    *,
-    progress: Callable[[float], bool] | None = None,
 ) -> Levels:
-    """Measure every recording's loudness and put it on the experiment clock."""
+    """Put every recording's measured loudness on the experiment clock."""
     measured: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-    for index, (name, path) in enumerate(paths.items()):
-        # decoding the audio is the slow part, so this is what is used for the progress indicator
-        _continue(progress, index / len(paths))
-        levels = envelope(path)
-        if levels.size == 0:
+    for name, table in loudness.items():
+        if table is None or table.empty:
             continue
+        levels = table["level_db"].to_numpy(dtype=float)
         timeline = timelines.get(name, Timeline())
-        local = np.arange(levels.size) * _HOP_SECONDS + _HOP_SECONDS / 2
         measured[name] = (
-            _to_experiment_times(local, timeline),
+            timeline.to_experiment_times(table["time"].to_numpy(dtype=float)),
             levels,
         )
     if not measured:
@@ -191,9 +170,23 @@ def _on_experiment_clock(
     columns: tuple[str, str] = ("start", "end"),
 ) -> np.ndarray:
     """A table's start/end columns, moved onto the experiment clock."""
-    return _to_experiment_times(
-        table[list(columns)].to_numpy().ravel(), timeline
+    return timeline.to_experiment_times(
+        table[list(columns)].to_numpy().ravel()
     ).reshape(-1, 2)
+
+
+def _words_by_segment(words: pd.DataFrame) -> dict[int, list[object]]:
+    """Every segment's words, in the order they were spoken.
+
+    Grouping the table once costs what a single scan of it costs; filtering it
+    again for every segment is what an hour of conversation cannot afford.
+    """
+    usable = words.dropna(subset=["start", "end", "word"])
+    usable = usable.sort_values(["segment_id", "word_index", "start"])
+    grouped: dict[int, list[object]] = {}
+    for word in usable.itertuples(index=False):
+        grouped.setdefault(int(word.segment_id), []).append(word)
+    return grouped
 
 
 def _split_attribution_segments(
@@ -220,11 +213,10 @@ def _split_attribution_segments(
                 text += " " + token
         return text
 
+    by_segment = _words_by_segment(words)
     for segment in transcript.itertuples(index=False):
-        segment_words = words[words["segment_id"] == int(segment.segment_id)].copy()
-        segment_words = segment_words.dropna(subset=["start", "end", "word"])
-        segment_words = segment_words.sort_values(["word_index", "start"])
-        if segment_words.empty:
+        ordered_words = by_segment.get(int(segment.segment_id), [])
+        if not ordered_words:
             split_rows.append(
                 {
                     "segment_id": int(segment.segment_id),
@@ -235,7 +227,6 @@ def _split_attribution_segments(
             )
             continue
 
-        ordered_words = list(segment_words.itertuples(index=False))
         gap_breaks = {
             index - 1
             for index in range(1, len(ordered_words))
@@ -337,33 +328,46 @@ def _split_attribution_segments(
     return pd.DataFrame(split_rows, columns=["segment_id", "start", "end", "text"])
 
 
+@dataclass
+class _Spoken:
+    """One recording's words, in the order they were spoken."""
+
+    #: When each word was said, on the experiment clock, ascending.
+    at: np.ndarray
+    words: list[str]
+
+
 def _spoken_words(
     words: dict[str, pd.DataFrame | None], timelines: dict[str, Timeline]
-) -> dict[str, pd.DataFrame]:
+) -> dict[str, _Spoken]:
     """Every recording's words, timed on the experiment clock by their middles."""
     spoken = {}
     for name, table in words.items():
         if table is None or table.empty:
             continue
         bounds = _on_experiment_clock(table, timelines.get(name, Timeline()))
-        spoken[name] = pd.DataFrame(
-            {
-                "at": bounds.mean(axis=1),
-                "word": table["word"].astype(str).str.lower(),
-            }
+        at = bounds.mean(axis=1)
+        # In time order, so that a stretch of it is a slice of the words.
+        order = np.argsort(at, kind="stable")
+        spoken[name] = _Spoken(
+            at[order],
+            table["word"].astype(str).str.lower().to_numpy()[order].tolist(),
         )
     return spoken
 
 
 def _said_between(
-    spoken: dict[str, pd.DataFrame], name: str, start: float, end: float
+    spoken: dict[str, _Spoken], name: str, start: float, end: float
 ) -> list[str]:
     """The words one recording puts inside a stretch of experiment time."""
-    table = spoken.get(name)
-    if table is None:
+    said = spoken.get(name)
+    if said is None:
         return []
-    inside = table[(table["at"] >= start) & (table["at"] < end)]
-    return inside["word"].tolist()
+    return said.words[
+        int(np.searchsorted(said.at, start, side="left")) : int(
+            np.searchsorted(said.at, end, side="left")
+        )
+    ]
 
 
 def _normalised_characters(text: str) -> str:
@@ -381,10 +385,13 @@ def _fuzzy_agreement(first: str, second: str) -> float:
     return fuzz.ratio(first, second) / 100.0
 
 
+_START = attrgetter("start")
+
+
 def _is_bleed(
     candidate: _Segment,
     accepted: list[_Segment],
-    spoken: dict[str, pd.DataFrame],
+    spoken: dict[str, _Spoken],
     settings: SpeechPostProcessingSettings,
 ) -> bool:
     """Whether a segment is another speaker's voice reaching this microphone.
@@ -413,16 +420,32 @@ def _is_bleed(
 
 def _accept(
     segments: list[_Segment],
-    spoken: dict[str, pd.DataFrame],
+    spoken: dict[str, _Spoken],
     settings: SpeechPostProcessingSettings,
+    progress: Progress | None = None,
 ) -> list[_Segment]:
-    """Keep every turn that is not a copy of one already kept, strongest first."""
+    """Keep every turn that is not a copy of one already kept, strongest first.
+
+    The turns kept so far are held in time order, so that only the few whose
+    windows can overlap a candidate are compared against it.
+    """
     kept: list[_Segment] = []
-    for turn in sorted(
+    longest = 0.0
+    candidates = sorted(
         segments, key=lambda s: (-s.share, -s.live, -(s.end - s.start), s.name)
-    ):
-        if not _is_bleed(turn, kept, spoken, settings):
-            kept.append(turn)
+    )
+    for index, turn in enumerate(candidates):
+        # report progress every 100 segments
+        if index % 100 == 0 and progress is not None:
+            if progress(index / len(candidates)) is False:
+                raise AttributionCancelled
+        # A kept turn can only overlap this one if it starts before this one
+        # ends, and no earlier than the longest turn kept so far before it.
+        first = bisect_left(kept, turn.start - longest, key=_START)
+        last = bisect_left(kept, turn.end, key=_START)
+        if not _is_bleed(turn, kept[first:last], spoken, settings):
+            insort(kept, turn, key=_START)
+            longest = max(longest, turn.end - turn.start)
     return kept
 
 
@@ -432,6 +455,8 @@ def attribute_segments(
     timelines: dict[str, Timeline],
     settings: SpeechPostProcessingSettings,
     words: dict[str, pd.DataFrame | None] | None = None,
+    *,
+    progress: Progress | None = None,
 ) -> pd.DataFrame:
     """Give each transcribed segment to the wearer whose microphone won it."""
     words = words or {}
@@ -478,7 +503,7 @@ def attribute_segments(
                 turn.segment_id,
                 turn.text,
             )
-            for turn in _accept(spoke, spoken, settings)
+            for turn in _accept(spoke, spoken, settings, progress)
         ),
         key=lambda row: (row[0], row[1], row[2]),
     )

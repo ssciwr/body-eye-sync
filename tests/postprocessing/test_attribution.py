@@ -7,16 +7,19 @@ import pandas as pd
 import pytest
 
 from body_eye_sync.experiment.config import SpeechPostProcessingSettings
-from body_eye_sync.experiment.timeline import Shift, Timeline
+from body_eye_sync.experiment.timeline import Timeline
+from body_eye_sync.pipeline.loudness import measure_loudness
 from body_eye_sync.preprocessing.audio import SAMPLE_RATE
 from body_eye_sync.postprocessing.attribution import (
     TURN_COLUMNS,
+    AttributionCancelled,
     Levels,
     _Segment,
+    _accept,
     _is_bleed,
+    _Spoken,
     _split_attribution_segments,
     attribute_segments as _attribute_segments,
-    envelope,
     measure_levels as _measure_levels,
 )
 
@@ -25,12 +28,18 @@ HOP_SECONDS = 0.05
 SETTINGS = SpeechPostProcessingSettings()
 
 
-def measure_levels(paths, timelines, settings=SETTINGS, **kwargs):
-    return _measure_levels(paths, timelines, settings, **kwargs)
+def measure_levels(paths, timelines, settings=SETTINGS):
+    """Measure the recordings, as audio processing does, then place them."""
+    loudness = {name: measure_loudness(path) for name, path in paths.items()}
+    return _measure_levels(loudness, timelines, settings)
 
 
-def attribute_segments(transcripts, levels, timelines, words=None, settings=SETTINGS):
-    return _attribute_segments(transcripts, levels, timelines, settings, words)
+def attribute_segments(
+    transcripts, levels, timelines, words=None, settings=SETTINGS, progress=None
+):
+    return _attribute_segments(
+        transcripts, levels, timelines, settings, words, progress=progress
+    )
 
 
 def _write(path, samples):
@@ -70,23 +79,6 @@ def _timelines(**overrides):
     return timelines
 
 
-def test_envelope_follows_the_loudness_of_the_recording(tmp_path):
-    _write(tmp_path / "a.wav", _speech([(1.0, 4.0)]))
-
-    levels = envelope(tmp_path / "a.wav")
-
-    assert levels.size == pytest.approx(DURATION / HOP_SECONDS, abs=1)
-    loud = levels[int(2.0 / HOP_SECONDS)]
-    quiet = levels[int(10.0 / HOP_SECONDS)]
-    assert loud > quiet + 20
-
-
-def test_envelope_of_a_recording_too_short_to_measure_is_empty(tmp_path):
-    _write(tmp_path / "blip.wav", np.zeros(10))
-
-    assert envelope(tmp_path / "blip.wav").size == 0
-
-
 def test_levels_cover_the_time_every_recording_shares(two_speakers):
     levels = measure_levels(two_speakers, _timelines())
 
@@ -111,7 +103,7 @@ def test_a_quieter_microphone_still_wins_its_own_speech(two_speakers):
     # because each recording is measured against its own quiet baseline.
     levels = measure_levels(two_speakers, _timelines())
 
-    loudest = levels.loudest()
+    loudest = levels.loudest
     speaking = levels.times[(levels.times > 6.5) & (levels.times < 8.5)]
     window = np.isin(levels.times, speaking)
     assert (loudest[window] == levels.ids.index("b")).all()
@@ -121,7 +113,7 @@ def test_nobody_is_loudest_while_nobody_is_speaking(two_speakers):
     levels = measure_levels(two_speakers, _timelines())
 
     quiet = (levels.times > 4.5) & (levels.times < 5.5)
-    assert (levels.loudest()[quiet] == -1).all()
+    assert (levels.loudest[quiet] == -1).all()
     assert levels.share("a", 4.5, 5.5) == 0.0
 
 
@@ -131,13 +123,13 @@ def test_offsets_line_the_recordings_up_before_they_are_compared(tmp_path):
     _write(tmp_path / "b.wav", _speech([(8.0, 11.0)], gain=0.5, seed=2))
     paths = {"a": tmp_path / "a.wav", "b": tmp_path / "b.wav"}
 
-    levels = measure_levels(paths, _timelines(b=Timeline(-2.0, [])))
+    levels = measure_levels(paths, _timelines(b=Timeline(-2.0)))
 
     # On the experiment clock "b" speaks from 6s to 9s, not 8s to 11s, so the
     # stretch where its own clock put the end of that turn is silent.
     assert levels.share("b", 6.0, 9.0) == pytest.approx(1.0)
     assert levels.share("b", 9.5, 11.0) == 0.0
-    assert (levels.loudest()[(levels.times > 9.5) & (levels.times < 11.0)] == -1).all()
+    assert (levels.loudest[(levels.times > 9.5) & (levels.times < 11.0)] == -1).all()
 
 
 def test_a_recording_that_lost_content_is_still_placed_correctly(tmp_path):
@@ -145,9 +137,9 @@ def test_a_recording_that_lost_content_is_still_placed_correctly(tmp_path):
     _write(tmp_path / "b.wav", _speech([(6.0, 9.0)], gain=0.5, seed=2))
     paths = {"a": tmp_path / "a.wav", "b": tmp_path / "b.wav"}
 
-    # "b" stalled for a second early on, so everything after sits a second
-    # earlier on its own clock than it does in the room.
-    levels = measure_levels(paths, _timelines(b=Timeline(0.0, [Shift(2.0, 1.0)])))
+    # "b" ran on a clock that gained a second over the recording, so its
+    # later moments sit progressively earlier than they did in the room.
+    levels = measure_levels(paths, _timelines(b=Timeline(0.0, rate=1.0 + 1.0 / 9.0)))
 
     assert levels.share("b", 7.0, 10.0) == pytest.approx(1.0)
 
@@ -157,10 +149,10 @@ def test_recordings_that_do_not_overlap_cannot_be_compared(tmp_path):
     _write(tmp_path / "b.wav", _speech([(1.0, 4.0)]))
     paths = {"a": tmp_path / "a.wav", "b": tmp_path / "b.wav"}
 
-    levels = measure_levels(paths, _timelines(b=Timeline(1000.0, [])))
+    levels = measure_levels(paths, _timelines(b=Timeline(1000.0)))
 
     assert levels.ids == []
-    assert levels.loudest().size == 0
+    assert levels.loudest.size == 0
 
 
 def _transcript(*rows):
@@ -329,17 +321,13 @@ def test_shifted_word_timings_do_not_hide_duplicate_split_clauses():
         "b", 0, 1.3, 2.5, "weil dann sind die schon überbacken.", 0.1, 0.8
     )
     spoken = {
-        "a": pd.DataFrame(
-            {
-                "at": [1.1, 1.3, 1.5, 1.8, 2.0, 2.1],
-                "word": ["weil", "dann", "sind", "die", "schon", "überbacken."],
-            }
+        "a": _Spoken(
+            np.array([1.1, 1.3, 1.5, 1.8, 2.0, 2.1]),
+            ["weil", "dann", "sind", "die", "schon", "überbacken."],
         ),
-        "b": pd.DataFrame(
-            {
-                "at": [1.4, 1.6, 1.8, 2.1, 2.3, 2.4],
-                "word": ["weil", "dann", "sind", "die", "schon", "überbacken."],
-            }
+        "b": _Spoken(
+            np.array([1.4, 1.6, 1.8, 2.1, 2.3, 2.4]),
+            ["weil", "dann", "sind", "die", "schon", "überbacken."],
         ),
     }
 
@@ -352,17 +340,12 @@ def test_a_generic_two_word_match_does_not_remove_a_different_clause():
         "b", 0, 1.4, 2.6, "Du meinst also, wenn es so crunchig ist.", 0.1, 0.8
     )
     spoken = {
-        "a": pd.DataFrame(
-            {
-                "at": [1.1, 1.3, 1.5, 1.7, 1.9, 2.1],
-                "word": first.text.lower().split(),
-            }
+        "a": _Spoken(
+            np.array([1.1, 1.3, 1.5, 1.7, 1.9, 2.1]), first.text.lower().split()
         ),
-        "b": pd.DataFrame(
-            {
-                "at": [1.45, 1.6, 1.75, 1.9, 2.05, 2.2, 2.35, 2.5],
-                "word": second.text.lower().split(),
-            }
+        "b": _Spoken(
+            np.array([1.45, 1.6, 1.75, 1.9, 2.05, 2.2, 2.35, 2.5]),
+            second.text.lower().split(),
         ),
     }
 
@@ -377,17 +360,13 @@ def test_fuzzy_characters_match_noisy_whisper_versions_with_shifted_timings():
         "b", 0, 81.82, 83.9, "Ja, ja, ich hab voll auf beides.", 0.33, 0.55
     )
     spoken = {
-        "a": pd.DataFrame(
-            {
-                "at": [82.76, 83.33, 83.53, 83.69, 83.86, 84.11],
-                "word": ["jaja,", "ich", "mache", "voll", "oft", "beides."],
-            }
+        "a": _Spoken(
+            np.array([82.76, 83.33, 83.53, 83.69, 83.86, 84.11]),
+            ["jaja,", "ich", "mache", "voll", "oft", "beides."],
         ),
-        "b": pd.DataFrame(
-            {
-                "at": [82.11, 82.54, 82.99, 83.16, 83.3, 83.48, 83.73],
-                "word": ["ja,", "ja,", "ich", "hab", "voll", "auf", "beides."],
-            }
+        "b": _Spoken(
+            np.array([82.11, 82.54, 82.99, 83.16, 83.3, 83.48, 83.73]),
+            ["ja,", "ja,", "ich", "hab", "voll", "auf", "beides."],
         ),
     }
 
@@ -405,11 +384,23 @@ def test_fuzzy_characters_match_noisy_whisper_versions_with_shifted_timings():
     )
 
 
+def test_a_long_turn_still_catches_a_copy_that_starts_much_later():
+    # Only the kept turns whose windows can overlap a candidate are compared
+    # against it, and a long one reaches candidates that start well after it.
+    long_turn = _Segment("a", 0, 0.0, 12.0, "the same words over again", 0.9, 1.0)
+    copy = _Segment("b", 0, 9.0, 12.0, "the same words over again", 0.1, 0.8)
+    later = _Segment("a", 1, 20.0, 21.0, "something else entirely", 0.9, 1.0)
+
+    kept = _accept([long_turn, copy, later], {}, SETTINGS)
+
+    assert [turn.text for turn in kept] == [long_turn.text, later.text]
+
+
 def test_transcripts_are_placed_on_the_experiment_clock(tmp_path):
     _write(tmp_path / "a.wav", _speech([(1.0, 4.0)], seed=1))
     _write(tmp_path / "b.wav", _speech([(8.0, 11.0)], gain=0.5, seed=2))
     paths = {"a": tmp_path / "a.wav", "b": tmp_path / "b.wav"}
-    timelines = _timelines(b=Timeline(-2.0, []))
+    timelines = _timelines(b=Timeline(-2.0))
     levels = measure_levels(paths, timelines)
 
     # "b" timed its own speech from 8s; the experiment puts it at 6s.
@@ -706,3 +697,37 @@ def test_two_copies_that_both_lost_are_still_kept_once():
     assert kept["speaker"].tolist() == ["a"]
     # The unrelated turn is untouched.
     assert "etwas ganz anderes" in turns["text"].tolist()
+
+
+def _both_transcripts():
+    """Both microphones heard both speakers, so both transcribed both."""
+    return {
+        "a": _transcript((1.0, 4.0, "mine"), (6.0, 9.0, "theirs")),
+        "b": _transcript((1.0, 4.0, "theirs"), (6.0, 9.0, "mine")),
+    }
+
+
+def test_progress_is_reported_as_the_pass_works_through_the_turns(two_speakers):
+    levels = measure_levels(two_speakers, _timelines())
+    reported = []
+
+    turns = attribute_segments(
+        _both_transcripts(),
+        levels,
+        _timelines(),
+        progress=lambda value: reported.append(value) is None,
+    )
+
+    assert len(turns) == 2
+    assert reported == sorted(reported)
+    assert reported[0] == 0.0
+    assert max(reported) < 1.0
+
+
+def test_a_pass_stops_where_the_caller_asks_it_to(two_speakers):
+    levels = measure_levels(two_speakers, _timelines())
+
+    with pytest.raises(AttributionCancelled):
+        attribute_segments(
+            _both_transcripts(), levels, _timelines(), progress=lambda value: False
+        )
