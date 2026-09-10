@@ -225,7 +225,9 @@ def test_merge_identity_mappings_prioritize_target_no_overlapping_add_new_to_tar
 
 def test_merge_identity_mappings_prioritize_target_multiple_overlapping_ignore_source():
     target = {1: {1, 2, 5}, 2: {3, 4}}
-    source = {9: {2, 3, 5}}
+    source = {
+        9: {2, 3, 5, 6}
+    }  # track 6 is ignored as source has multiple overlapping clusters with target
 
     clustering._merge_identity_mappings_prioritize_target(target, source)
 
