@@ -128,8 +128,6 @@ def _aggregate_embeddings(
     # compute mean L2-normalised embedding per tracklet
     result: dict[int, np.ndarray] = {}
     for track_id, emb_list in group_embs.items():
-        if not emb_list:
-            continue
         mean_emb = np.mean(emb_list, axis=0)
         norm = np.linalg.norm(mean_emb)
         result[track_id] = mean_emb / norm if norm > 0 else mean_emb
