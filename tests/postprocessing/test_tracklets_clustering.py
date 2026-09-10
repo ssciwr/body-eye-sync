@@ -30,6 +30,18 @@ def test_aggregate_embeddings_averages_per_tracklet_and_skips_missing_rows():
     assert np.allclose(aggregated[2], np.array([0.0, 1.0]))  # L2-normalized
 
 
+def test_aggregate_embeddings_none_embs_are_skipped():
+    embeddings = _embeddings_df(
+        (1, None),
+        (1, None),
+        (2, None),
+    )
+
+    aggregated = clustering._aggregate_embeddings(embeddings)
+
+    assert aggregated == {}
+
+
 def test_cosine_distance_matrix_computes_pairwise_cosine_distance():
     embeddings = np.array(
         [
@@ -140,6 +152,17 @@ def test_jaccard_similarity_uses_intersection_over_union():
     assert clustering._jaccard_similarity(set(), set()) == 0.0
 
 
+def test_merge_identity_mappings_same_priority_no_source_return_target():
+    target = {1: {1, 2}, 2: {3, 4}}
+    source = {}
+
+    clustering._merge_identity_mappings_same_priority(
+        target, source, merge_jaccard_threshold=0.5
+    )
+
+    assert target == {1: {1, 2}, 2: {3, 4}}
+
+
 def test_merge_identity_mappings_same_priority_merges_overlapping_clusters_and_preserves_new_ones():
     target = {1: {1, 2}, 2: {3, 4}}
     source = {11: {2, 5}, 12: {3, 6}, 13: {10}}
@@ -202,14 +225,14 @@ def test_merge_identity_mappings_prioritize_target_no_overlapping_add_new_to_tar
 
 def test_merge_identity_mappings_prioritize_target_multiple_overlapping_ignore_source():
     target = {1: {1, 2, 5}, 2: {3, 4}}
-    source = {9: {2, 3, 5}, 10: {4}}
+    source = {9: {2, 3, 5}}
 
     clustering._merge_identity_mappings_prioritize_target(target, source)
 
     assert target == {1: {1, 2, 5}, 2: {3, 4}}
 
 
-def test_cluster_tracklets_uses_face_then_body_then_unique_ids():
+def test_cluster_tracklets_uses_face_then_body_then_unique_ids(capsys):
     face_embeddings = _embeddings_df(
         (1, np.array([1.0, 0.0])),
         (2, np.array([1.0, 0.0])),
@@ -221,7 +244,7 @@ def test_cluster_tracklets_uses_face_then_body_then_unique_ids():
         (4, np.array([1.0, 0.0])),
     )
 
-    result = clustering.cluster_tracklets(
+    result_no_debug = clustering.cluster_tracklets(
         track_ids=[1, 2, 3, 4, 5],
         face_embeddings=face_embeddings,
         body_embeddings=body_embeddings,
@@ -229,12 +252,39 @@ def test_cluster_tracklets_uses_face_then_body_then_unique_ids():
         body_distance_threshold=0.1,
         min_face_detections=1,
         min_body_detections=2,
+        debug=False,  # no debug info printed out
     )
 
-    assert result.track_id_to_person_id == {1: 1, 2: 1, 3: 1, 4: 2, 5: 3}
-    assert result.person_id_to_track_ids == {1: [1, 2, 3], 2: [4], 3: [5]}
-    assert set(result.tracklet_face_embedding) == {1, 2}
-    assert set(result.tracklet_body_embedding) == {1, 2, 3, 4}
+    assert result_no_debug.track_id_to_person_id == {1: 1, 2: 1, 3: 1, 4: 2, 5: 3}
+    assert result_no_debug.person_id_to_track_ids == {1: [1, 2, 3], 2: [4], 3: [5]}
+    assert set(result_no_debug.tracklet_face_embedding) == {1, 2}
+    assert set(result_no_debug.tracklet_body_embedding) == {1, 2, 3, 4}
+
+    # assert debug information
+    printout_no_debug = capsys.readouterr().out
+
+    assert printout_no_debug == ""
+
+    result_with_debug = clustering.cluster_tracklets(
+        track_ids=[1, 2, 3, 4, 5],
+        face_embeddings=face_embeddings,
+        body_embeddings=body_embeddings,
+        face_distance_threshold=0.1,
+        body_distance_threshold=0.1,
+        min_face_detections=1,
+        min_body_detections=2,
+        debug=True,  # print debug info
+    )
+
+    printout_with_debug = capsys.readouterr().out
+
+    assert "Face clusters: 1 (tracklets: 2)" in printout_with_debug
+    assert "Body clusters: 2 (tracklets: 4)" in printout_with_debug
+    assert "Final identities: 3" in printout_with_debug
+    assert f"{'Person ID':<10} {'Track IDs'}" in printout_with_debug
+    assert "-" * 40 in printout_with_debug
+    for pid, tids in result_with_debug.person_id_to_track_ids.items():
+        assert f"{pid:<10} {tids}" in printout_with_debug
 
 
 def test_cluster_tracklets_returns_an_empty_result_for_empty_input():
