@@ -132,7 +132,14 @@ def _ensure_model_available(model_name: str, root: str) -> None:
 
 
 def default_providers() -> list[str]:
-    """Pick onnxruntime execution providers, preferring CUDA when available."""
+    """Pick ONNX Runtime providers, using CUDA only on a usable NVIDIA GPU."""
+    try:
+        import torch
+    except ImportError:
+        return ["CPUExecutionProvider"]
+    if not torch.cuda.is_available():
+        return ["CPUExecutionProvider"]
+
     try:
         import onnxruntime as ort
     except ImportError:

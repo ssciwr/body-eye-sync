@@ -27,7 +27,9 @@ dependencies = [
     "qtpy",
     "pyside6",
     "insightface",
-    "onnxruntime",
+    "onnxruntime>=1.21,<1.27; sys_platform == 'darwin'",
+    # 1.21--1.26 targets CUDA 12/cuDNN 9; 1.27+ targets CUDA 13.
+    "onnxruntime-gpu>=1.21,<1.27; sys_platform != 'darwin'",
     "faster-whisper",
     "tqdm",
     "huggingface-hub",
@@ -36,6 +38,7 @@ dependencies = [
     "pympi-ling",
     "crisperwhisper[transformers]>=2.0.2",
 ]
+
 authors = [
     { name = "SSC" },
 ]
@@ -61,6 +64,11 @@ torch = [
 torchvision = [
     { index = "pytorch-cu126", marker = "sys_platform != 'darwin'" },
 ]
+
+[tool.uv]
+# InsightFace and faster-whisper require the CPU distribution by name. The GPU
+# wheel is API-compatible, so keep that transitive dependency only on macOS.
+override-dependencies = ["onnxruntime>=1.21,<1.27; sys_platform == 'darwin'"]
 
 [[tool.uv.index]]
 name = "pytorch-cu126"
