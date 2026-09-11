@@ -11,13 +11,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 CURRENT_VERSION = 1
 
 
+#: Characters an input id cannot hold, as it names output paths.
+RESERVED_ID_CHARACTERS = "/\\[]"
+#: Names an input id cannot be, for the same reason.
+RESERVED_IDS = (".", "..")
+
+
 def validate_input_id(input_id: str) -> str:
     """Return an input id, having checked it is safe for generated names."""
     if not input_id:
         raise ValueError("input id cannot be empty")
-    if any(char in input_id for char in ("/", "\\", "[", "]")) or input_id in (
-        ".",
-        "..",
+    if (
+        any(char in input_id for char in RESERVED_ID_CHARACTERS)
+        or input_id in RESERVED_IDS
     ):
         raise ValueError(f"input id cannot contain reserved characters: {input_id!r}")
     return input_id
@@ -25,23 +31,6 @@ def validate_input_id(input_id: str) -> str:
 
 class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class TimeShiftConfig(_Model):
-    """A stretch of a recording that was never written.
-
-    Some devices stall briefly and carry on without it, so everything after
-    sits earlier on their own clock than it does in the room. ``at`` is where
-    that happens on the recording's own clock and ``seconds`` is how much is
-    missing, which is added to the offset from there on.
-    """
-
-    at: float = Field(
-        description="Where the loss falls on the recording's own clock, in seconds."
-    )
-    seconds: float = Field(
-        gt=0, description="How much content is missing there, in seconds."
-    )
 
 
 class TimelineConfig(_Model):
@@ -54,9 +43,15 @@ class TimelineConfig(_Model):
             "experiment timeline."
         ),
     )
-    shifts: list[TimeShiftConfig] = Field(
-        default_factory=list,
-        description="Content the recording lost partway through, if any.",
+    rate: float = Field(
+        1.0,
+        gt=0,
+        description=(
+            "Experiment seconds per second of this input's own clock. Every "
+            "device counts time on its own crystal, and two of them differ by "
+            "tens of parts per million, which is tens of milliseconds across a "
+            "long recording."
+        ),
     )
 
 
@@ -82,7 +77,10 @@ class GlassesVideoInput(_Input):
     """Video and gaze data recorded by a participant's glasses-mounted camera."""
 
     gaze_path: Path = Field(
-        description="Gaze samples recorded alongside this video, as a TSV file."
+        description=(
+            "Gaze samples recorded alongside this video: a Tobii Pro Glasses "
+            "recording folder, or a TSV gaze export."
+        )
     )
 
 
@@ -259,7 +257,7 @@ class TranscriptionStep(_Model):
     )
     beam_size: int = Field(5, ge=1, description="Decoding beam width.")
     vad_filter: bool = Field(
-        True,
+        False,
         description=(
             "Skip silent stretches, which speeds up the pass and suppresses text "
             "invented over silence."

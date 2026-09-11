@@ -5,7 +5,7 @@ import pandas as pd
 
 import pytest
 
-from body_eye_sync.experiment.video import Video
+from body_eye_sync.experiment.video import GlassesVideo, Video
 from body_eye_sync.pipeline.object_tracking import BoundingBox
 from body_eye_sync.pipeline.face_detection import FaceBox, FaceFrameResult
 from body_eye_sync.pipeline.body_pose import BodyPose, PoseFrameResult
@@ -264,3 +264,99 @@ def test_has_audio_track_is_asked_again_when_the_file_changes(data_dir):
     video.video_path = data_dir / "three-people-talking.mp4"
 
     assert video.has_audio_track()
+
+
+def test_glasses_video_without_a_gaze_source_has_no_tracking():
+    assert GlassesVideo(id="p1").tracking is None
+
+
+def test_glasses_video_reads_a_gaze_export_against_its_own_video(data_dir):
+    video = GlassesVideo(
+        id="p1",
+        path=data_dir / "three-people.mp4",
+        gaze_path=data_dir / "three-people.tsv",
+    )
+
+    assert len(video.tracking) == 31
+    assert video.tracking.recording.participant == "1403"
+
+
+def test_glasses_video_reads_a_recording_folder(glasses3_recording):
+    video = GlassesVideo(id="p1", gaze_path=glasses3_recording())
+
+    assert len(video.tracking) == 4
+    assert video.tracking.recording.device == "Tobii Pro Glasses 3"
+
+
+def test_glasses_video_reads_its_tracking_once(data_dir):
+    video = GlassesVideo(
+        id="p1",
+        path=data_dir / "three-people.mp4",
+        gaze_path=data_dir / "three-people.tsv",
+    )
+
+    assert video.tracking is video.tracking
+
+
+def test_changing_the_gaze_source_drops_what_was_read(data_dir, glasses3_recording):
+    video = GlassesVideo(
+        id="p1",
+        path=data_dir / "three-people.mp4",
+        gaze_path=data_dir / "three-people.tsv",
+    )
+    assert len(video.tracking) == 31
+
+    video.set_gaze(glasses3_recording())
+
+    assert len(video.tracking) == 4
+
+
+def test_frame_rate_and_start_come_from_the_file(data_dir):
+    video = Video(id="room", path=data_dir / "three-people.mp4")
+
+    assert video.fps == pytest.approx(25.0)
+    assert video.video_start == pytest.approx(0.0)
+
+
+def test_frame_at_and_time_of_frame_are_inverses(data_dir):
+    video = Video(id="room", path=data_dir / "three-people.mp4")
+
+    assert video.time_of_frame(0) == pytest.approx(0.0)
+    assert video.time_of_frame(3) == pytest.approx(0.12)
+    assert video.frame_at(0.12) == 3
+    assert video.frame_at(video.time_of_frame(4)) == 4
+
+
+def test_frame_at_takes_the_frame_a_moment_falls_within(data_dir):
+    video = Video(id="room", path=data_dir / "three-people.mp4")
+
+    # Frame 2 is shown from 0.08 s until frame 3 replaces it at 0.12 s.
+    assert video.frame_at(0.08) == 2
+    assert video.frame_at(0.119) == 2
+    assert video.frame_at(0.12) == 3
+    # Seeking wants the frame beginning nearest the moment instead.
+    assert video.frame_at(0.119, nearest=True) == 3
+
+
+def test_frames_are_counted_from_where_the_video_starts(tmp_path, video_starting_late):
+    """A camera that starts after its microphone still has frame 0 first."""
+    path = video_starting_late(tmp_path / "glasses.mp4", delay=0.24)
+    video = Video(id="p1", path=path)
+
+    assert video.video_start == pytest.approx(0.24)
+    assert video.time_of_frame(0) == pytest.approx(0.24)
+    assert video.frame_at(0.24) == 0
+    assert video.frame_at(0.28) == 1
+    # The recording covers the moment its sound track starts, but has no
+    # picture for it yet.
+    assert video.frame_at(0.0) == -6
+
+
+def test_a_video_with_no_frame_rate_will_not_count_frames():
+    video = Video(id="p1")
+
+    assert video.fps == 0.0
+    with pytest.raises(ValueError, match="no frame rate"):
+        video.frame_at(1.0)
+    with pytest.raises(ValueError, match="no frame rate"):
+        video.time_of_frame(1)

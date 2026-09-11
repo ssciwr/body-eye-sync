@@ -1,23 +1,17 @@
-import pandas as pd
 from types import SimpleNamespace
 
+import pandas as pd
+import pytest
+
+from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.gui.widgets.synchronized_audio_playback import (
     SynchronizedAudioPlaybackWidget,
     active_speakers,
 )
 
 
-def _recording(name):
-    return SimpleNamespace(
-        id=name,
-        path=f"{name}.wav",
-        timeline=SimpleNamespace(
-            offset=0.0,
-            shifts=[],
-            to_experiment_time=lambda local: local,
-            to_local_time=lambda experiment: experiment,
-        ),
-    )
+def _recording(name, rate=1.0):
+    return SimpleNamespace(id=name, path=f"{name}.wav", timeline=Timeline(rate=rate))
 
 
 def test_active_speakers_include_overlapping_accepted_turns():
@@ -117,3 +111,19 @@ def test_mute_background_controls_non_contributing_recordings(qtbot, monkeypatch
     assert not widget._tracks["p1"].output.muted
     assert widget._tracks["p2"].output.muted
     assert widget._tracks["room"].output.muted
+
+
+def test_players_run_at_the_recordings_corrected_clock_rates(qtbot, monkeypatch):
+    monkeypatch.setattr(
+        "body_eye_sync.gui.widgets.synchronized_audio_playback.media_duration",
+        lambda _path: 10.0,
+    )
+    widget = SynchronizedAudioPlaybackWidget()
+    qtbot.addWidget(widget)
+    widget.load([_recording("slow-clock", rate=1.0001)])
+
+    widget._ensure_players()
+
+    player = widget._tracks["slow-clock"].player
+    assert player is not None
+    assert player.playbackRate() == pytest.approx(1.0 / 1.0001)

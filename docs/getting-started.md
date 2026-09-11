@@ -1,7 +1,7 @@
 # Getting Started
 
 The window is a set of tabs, one per stage of working with an experiment:
-**Input files**, **Alignment**, **Timing correction**, **Video processing**,
+**Input files**, **Alignment**, **Clock rate**, **Video processing**,
 **Audio processing**, **Speech post processing**, **Post processing** and
 **Data export**. Post processing does nothing so far.
 
@@ -32,10 +32,12 @@ Every recording starts whenever its device was switched on, so nothing relates
 them until each input's offset is known. In the **Alignment** tab there is a button
 to automatically align the inputs, and you can also manually set the offset for each video.
 
-The **Timing correction** tab then checks whether a single offset actually held
-for the whole recording, and detects and corrects:
-
-- **Gaps** -- stretches where a device stalled and didn't write leading to missing content
+The **Clock rate** tab then checks whether a single offset actually held for the
+whole recording. Each device counts time on its own crystal, and two crystals
+differ by tens of parts per million, so recordings that start aligned drift
+apart over a session. The tab measures each input's offset repeatedly against a
+reference recording, plots what it measured, and corrects the clock rate of any
+input whose drift is large enough to be worth correcting.
 
 ## Configure the Video Pipeline
 
@@ -94,9 +96,9 @@ speaker for each segment.
 
 ## Export a Combined Video
 
-You can export a single video that shows every aligned video input in a grid,
+You can export a single video that shows the aligned video inputs together,
 with an audio track for each input, and optionally an additional merge audio track
-that combines the audio from all inputs. And missing recording intervals become black
+that combines the audio from all inputs. Any missing recording intervals become black
 video and silence.
 
 If the experiment has speech turns, they are written beside the video as it is

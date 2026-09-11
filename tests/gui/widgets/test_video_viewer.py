@@ -110,19 +110,21 @@ def test_video_viewer_decodes_through_small_forward_jump(viewer, monkeypatch):
     assert seeks == []
 
 
-def test_video_viewer_seeks_for_large_forward_jump(viewer, monkeypatch):
+@pytest.mark.parametrize("position,target", [(0, 0), (1, 12), (4, 0)])
+def test_video_viewer_seeks_only_when_needed(viewer, monkeypatch, position, target):
     seeks = []
     capture = SimpleNamespace(
-        read=lambda: (True, "frame 12"),
+        read=lambda: (True, "frame"),
+        get=lambda _property: position,
         set=lambda _property, index: seeks.append(index),
     )
     monkeypatch.setattr(viewer, "_capture", capture)
-    viewer._current = 0
+    viewer._current = -1
 
-    index, frame = viewer._read(12)
+    index, frame = viewer._read(target)
 
-    assert (index, frame) == (12, "frame 12")
-    assert seeks == [12]
+    assert (index, frame) == (target, "frame")
+    assert seeks == ([] if position == target else [target])
 
 
 def test_video_viewer_advance_uses_media_clock(viewer, monkeypatch):
@@ -227,11 +229,13 @@ def test_video_viewer_can_show_negative_preroll_time(viewer, seconds):
 def test_video_viewer_set_transport_enabled_toggles_controls(viewer):
     viewer.enable_controls(False)
     assert not viewer._play_button.isEnabled()
+    assert not viewer._mute_button.isEnabled()
     assert not viewer._slider.isEnabled()
     assert not viewer._spinbox.isEnabled()
 
     viewer.enable_controls(True)
     assert viewer._play_button.isEnabled()
+    assert viewer._mute_button.isEnabled()
     assert viewer._slider.isEnabled()
     assert viewer._spinbox.isEnabled()
 
@@ -286,3 +290,21 @@ def test_video_viewer_can_hide_stored_and_live_overlays(qtbot, data_dir):
     assert viewer.current_frame == 1
     assert not viewer.show_overlays
     assert viewer._overlay_items == []
+
+
+def test_viewer_places_frames_on_the_clock_the_sound_track_is_read_on(
+    qtbot, tmp_path, video_starting_late
+):
+    """Account for the video stream start when displaying and seeking frames."""
+    video = Video()
+    video.video_path = video_starting_late(tmp_path / "glasses.mp4", delay=0.24)
+    viewer = VideoViewer()
+    qtbot.addWidget(viewer)
+    viewer.load(video)
+
+    viewer.set_frame(0)
+    assert viewer.current_media_time_seconds == pytest.approx(0.24)
+
+    viewer.set_time_seconds(0.28)
+    assert viewer._current == 1
+    assert viewer.current_media_time_seconds == pytest.approx(0.28)

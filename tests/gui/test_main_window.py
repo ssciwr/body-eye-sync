@@ -14,14 +14,14 @@ from body_eye_sync.gui.tabs import (
     TAB_TYPES,
     AlignmentTab,
     InputFilesTab,
-    TimingCorrectionTab,
+    ClockRateTab,
     VideoProcessingTab,
 )
 
 TAB_TITLES = [
     "Input files",
     "Alignment",
-    "Timing correction",
+    "Clock rate",
     "Video processing",
     "Audio processing",
     "Speech post processing",
@@ -128,7 +128,7 @@ def test_a_change_only_refreshes_another_tab_when_it_is_opened(window, monkeypat
     assert refreshed == [True]
 
 
-def test_finishing_alignment_saves_offsets_and_moves_to_timing_correction_tab(
+def test_finishing_alignment_saves_offsets_and_moves_to_clock_rate_tab(
     window, data_dir, tmp_path
 ):
     window.tab(InputFilesTab).add_glasses_videos([data_dir / "three-people.mp4"])
@@ -139,7 +139,7 @@ def test_finishing_alignment_saves_offsets_and_moves_to_timing_correction_tab(
     tab.done_button.click()
     reloaded = Experiment.load(tmp_path)
     assert reloaded.glasses_videos[0].timeline.offset == pytest.approx(1.25)
-    assert window.tabs.currentWidget() is window.tab(TimingCorrectionTab)
+    assert window.tabs.currentWidget() is window.tab(ClockRateTab)
     assert not window._dirty
 
 
@@ -156,10 +156,11 @@ A visual red label appears to warn you when you are previewing frames in a given
 """
 
 
-def test_alignment_offset_preview_survives_adding_input(window, data_dir, qtbot):
-    path = data_dir / "three-people.mp4"
+def test_alignment_offset_preview_survives_adding_input(window, distinct_videos, qtbot):
+    # Distinct files, since one recording can only be one input.
+    paths = distinct_videos(3)
     input_tab = window.tab(InputFilesTab)
-    input_tab.add_fixed_videos([path, path])
+    input_tab.add_fixed_videos(paths[:2])
     alignment_tab = window.tab(AlignmentTab)
     window.tabs.setCurrentWidget(alignment_tab)
     second_card = alignment_tab.video_cards[1]
@@ -174,7 +175,7 @@ def test_alignment_offset_preview_survives_adding_input(window, data_dir, qtbot)
     assert second_card.viewer._time_label.text() == "-30.000 s"  # so far, normal.
 
     window.tabs.setCurrentWidget(input_tab)  # Now we disrupt/change the process
-    input_tab.add_fixed_videos([path])
+    input_tab.add_fixed_videos([paths[2]])
     window.tabs.setCurrentWidget(alignment_tab)
     second_card = alignment_tab.video_cards[1]
     assert second_card.controls.spin.value() == pytest.approx(30.0)

@@ -28,6 +28,15 @@ CONFIG_FILENAME = "experiment.yaml"
 OUTPUTS_DIRNAME = "outputs"
 
 
+def _same_file_key(path: Path) -> object:
+    """File identity as (device, inode), falling back to the resolved path."""
+    try:
+        found = path.stat()
+        return found.st_dev, found.st_ino
+    except OSError:
+        return path.resolve()
+
+
 class Experiment:
     """An experiment: its inputs, their results, and the pipeline to run.
 
@@ -84,6 +93,7 @@ class Experiment:
     def add_glasses_video(self, spec: GlassesVideoInput) -> GlassesVideo:
         """Add a glasses video input, returning its :class:`GlassesVideo`."""
         self._check_id(spec.id)
+        self.check_path(spec.path)
         video = GlassesVideo(
             id=spec.id,
             path=self._resolve(spec.path),
@@ -96,6 +106,7 @@ class Experiment:
     def add_fixed_video(self, spec: FixedVideoInput) -> FixedVideo:
         """Add a fixed video input, returning its :class:`FixedVideo`."""
         self._check_id(spec.id)
+        self.check_path(spec.path)
         video = FixedVideo(
             id=spec.id,
             path=self._resolve(spec.path),
@@ -111,6 +122,7 @@ class Experiment:
         this experiment.
         """
         self._check_id(spec.id)
+        self.check_path(spec.path)
         glasses_video = None
         if spec.glasses_video is not None:
             glasses_video = next(
@@ -161,6 +173,28 @@ class Experiment:
             except OSError:
                 data.id = old_id
                 raise
+
+    def input_for_path(self, path: str | Path | None) -> Video | Audio | None:
+        """Return the input using this file, or ``None`` if none does."""
+        if path is None:
+            return None
+        wanted = _same_file_key(self._resolve(Path(path)))
+        return next(
+            (
+                data
+                for data in self.inputs
+                if data.path is not None and _same_file_key(data.path) == wanted
+            ),
+            None,
+        )
+
+    def check_path(self, path: Path) -> None:
+        """Check no input is reading this file already."""
+        existing = self.input_for_path(path)
+        if existing is not None:
+            raise ValueError(
+                f"{Path(path).name} is already an input, as {existing.id!r}"
+            )
 
     def _check_id(self, input_id: str) -> None:
         """Check an id can name an output directory, and nothing else uses it."""

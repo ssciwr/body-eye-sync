@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import uuid
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -16,8 +16,14 @@ from PIL import Image, ImageDraw, ImageFont
 
 from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.experiment.video import Video
+from body_eye_sync.export.layout import (
+    LayoutFrame,
+    LayoutKind,
+    layout_frame,
+    slot_count,
+)
+from body_eye_sync.media import container_origin, stream_duration, stream_start
 
 logger = logging.getLogger(__name__)
 
@@ -35,20 +41,17 @@ class VideoGridCancelled(VideoGridError):
 
 
 @dataclass(frozen=True)
-class _Segment:
-    """One uninterrupted piece of a recording, on both of its clocks."""
-
-    local_start: float
-    local_end: float
-    experiment_start: float
-
-
-@dataclass(frozen=True)
 class _StreamInfo:
     """The first usable stream of one media kind in an input file."""
 
     index: int
     duration: float
+    # where the stream starts on the container's clock
+    start: float = 0.0
+
+    @property
+    def end(self) -> float:
+        return self.start + self.duration
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,15 @@ class _Source:
 
 
 @dataclass(frozen=True)
+class _Cell:
+    """One sampled frame, scaled to fit its slot, and where it sits in it."""
+
+    image: np.ndarray
+    x: int
+    y: int
+
+
+@dataclass(frozen=True)
 class _LabelOverlay:
     """The non-transparent part of a pre-rendered input label."""
 
@@ -79,35 +91,14 @@ class _LabelOverlay:
     alpha: np.ndarray
 
 
-def _segments(timeline: Timeline, duration: float) -> list[_Segment]:
-    """Split ``[0, duration)`` wherever the recording lost content."""
-    losses = sorted(shift.at for shift in timeline.shifts if 0.0 < shift.at < duration)
-    bounds = [0.0, *losses, duration]
-    return [
-        _Segment(start, end, timeline.to_experiment_time(start))
-        for start, end in zip(bounds, bounds[1:])
-    ]
-
-
 def _stream_info(container, stream) -> _StreamInfo | None:
-    """One stream and its duration, when the file offers a usable pair."""
+    """One stream, its duration and its start, when the file offers them."""
     if stream is None:
         return None
-    duration = _stream_duration(container, stream)
-    return _StreamInfo(stream.index, duration) if duration is not None else None
-
-
-def _stream_duration(container, stream) -> float | None:
-    """Duration of one stream, falling back to the whole container."""
-    if stream.duration is not None and stream.time_base is not None:
-        duration = float(stream.duration * stream.time_base)
-        if math.isfinite(duration) and duration > 0:
-            return duration
-    if container.duration is not None:
-        duration = float(container.duration / av.time_base)
-        if math.isfinite(duration) and duration > 0:
-            return duration
-    return None
+    duration = stream_duration(container, stream)
+    if duration is None:
+        return None
+    return _StreamInfo(stream.index, duration, stream_start(container, stream))
 
 
 def _probe_source(data: Video | Audio) -> _Source:
@@ -149,12 +140,13 @@ class _VideoSampler:
     def __init__(self, source: _Source, cell_size: tuple[int, int]) -> None:
         assert source.video is not None
         self.timeline = source.data.timeline
-        self.duration = source.video.duration
+        self.start = source.video.start
+        self.end = source.video.end
         self.width, self.height = cell_size
         self.container = av.open(str(source.data.path))
         self.stream = self.container.streams[source.video.index]
         self._frames = iter(self.container.decode(self.stream))
-        self._origin: float | None = None
+        self._origin = container_origin(self.container)
         self._previous: tuple[float, av.VideoFrame] | None = None
         try:
             self._current = self._next_frame()
@@ -162,7 +154,7 @@ class _VideoSampler:
             self.container.close()
             raise
         self._cached_frame: av.VideoFrame | None = None
-        self._cached_cell: np.ndarray | None = None
+        self._cached_cell: _Cell | None = None
 
     def close(self) -> None:
         self.container.close()
@@ -180,7 +172,7 @@ class _VideoSampler:
     def _local_time(self, experiment_time: float) -> float | None:
         """Where this moment sits in the recording, if the recording holds it."""
         local_time = self.timeline.to_local_time(experiment_time)
-        if local_time is None or not 0.0 <= local_time < self.duration:
+        if not self.start <= local_time < self.end:
             return None
         return local_time
 
@@ -195,7 +187,8 @@ class _VideoSampler:
             return None
         return min(candidates, key=lambda value: abs(value[0] - local_time))[1]
 
-    def cell_at(self, experiment_time: float) -> np.ndarray | None:
+    def cell_at(self, experiment_time: float) -> _Cell | None:
+        """This moment's frame, scaled into the slot when the recording has one, otherwise None."""
         local_time = self._local_time(experiment_time)
         if local_time is None:
             return None
@@ -209,10 +202,7 @@ class _VideoSampler:
         width = max(1, min(self.width, round(frame.width * scale)))
         height = max(1, min(self.height, round(frame.height * scale)))
         image = frame.reformat(width=width, height=height, format="rgb24").to_ndarray()
-        cell = np.zeros((self.height, self.width, 3), dtype=np.uint8)
-        x = (self.width - width) // 2
-        y = (self.height - height) // 2
-        cell[y : y + height, x : x + width] = image
+        cell = _Cell(image, (self.width - width) // 2, (self.height - height) // 2)
         self._cached_frame = frame
         self._cached_cell = cell
         return cell
@@ -251,12 +241,17 @@ def _label_overlay(text: str, size: tuple[int, int]) -> _LabelOverlay:
 
 
 def _blend_label(cell: np.ndarray, overlay: _LabelOverlay) -> None:
-    height, width = overlay.alpha.shape[:2]
+    """Blend the label into a picture, clipped to what the picture can hold."""
+    height = min(overlay.alpha.shape[0], cell.shape[0] - overlay.y)
+    width = min(overlay.alpha.shape[1], cell.shape[1] - overlay.x)
+    if height <= 0 or width <= 0:
+        return
+    alpha = overlay.alpha[:height, :width]
+    colors = overlay.colors[:height, :width]
     target = cell[overlay.y : overlay.y + height, overlay.x : overlay.x + width]
-    target[:] = (
-        target.astype(np.float32) * (1.0 - overlay.alpha)
-        + overlay.colors * overlay.alpha
-    ).astype(np.uint8)
+    target[:] = (target.astype(np.float32) * (1.0 - alpha) + colors * alpha).astype(
+        np.uint8
+    )
 
 
 class _SynchronizedAudio:
@@ -266,15 +261,13 @@ class _SynchronizedAudio:
         self,
         source: _Source,
         output_start: float,
-        output_duration: float,
     ) -> None:
         assert source.audio is not None
         self.container = av.open(str(source.data.path))
         self.stream = self.container.streams[source.audio.index]
         self._frames = self._filtered_frames(
-            _segments(source.data.timeline, source.audio.duration),
-            output_start,
-            output_duration,
+            source.data.timeline.to_experiment_time(source.audio.start) - output_start,
+            source.data.timeline.rate,
         )
         self._fifo = av.AudioFifo()
         self._finished = False
@@ -285,75 +278,38 @@ class _SynchronizedAudio:
 
     def _filtered_frames(
         self,
-        segments: list[_Segment],
-        output_start: float,
-        output_duration: float,
+        delay: float,
+        rate: float = 1.0,
     ) -> Iterator[av.AudioFrame]:
         graph = av.filter.Graph()
         input_filter = graph.add_abuffer(template=self.stream)
-        if len(segments) == 1:
-            branches = [input_filter]
-        else:
-            split = graph.add("asplit", str(len(segments)))
-            input_filter.link_to(split)
-            branches = [split] * len(segments)
-
-        delayed = []
-        for index, (branch, segment) in enumerate(zip(branches, segments)):
-            trim = graph.add(
-                "atrim",
-                f"start={_number(segment.local_start)}:"
-                f"end={_number(segment.local_end)}",
-            )
-            if len(segments) == 1:
-                branch.link_to(trim)
-            else:
-                branch.link_to(trim, output_idx=index)
-            chain = [trim, graph.add("asetpts", "PTS-STARTPTS")]
-            delay_samples = max(
-                0,
-                round((segment.experiment_start - output_start) * _AUDIO_SAMPLE_RATE),
-            )
-            chain.extend(
-                [
-                    graph.add("aresample", str(_AUDIO_SAMPLE_RATE)),
-                    graph.add(
-                        "aformat",
-                        "sample_fmts=fltp:sample_rates="
-                        f"{_AUDIO_SAMPLE_RATE}:channel_layouts=stereo",
-                    ),
-                    graph.add("adelay", f"delays={delay_samples}S:all=1"),
-                ]
-            )
-            _link_chain(chain)
-            delayed.append(chain[-1])
-
-        silence = graph.add("anullsrc", f"r={_AUDIO_SAMPLE_RATE}:cl=stereo")
-        silence_trim = graph.add("atrim", f"duration={_number(output_duration)}")
-        silence_pts = graph.add("asetpts", "PTS-STARTPTS")
-        _link_chain([silence, silence_trim, silence_pts])
-        mix = graph.add(
-            "amix",
-            f"inputs={len(delayed) + 1}:duration=first:"
-            "normalize=0:dropout_transition=0",
-        )
-        silence_pts.link_to(mix, input_idx=0)
-        for index, branch in enumerate(delayed, start=1):
-            branch.link_to(mix, input_idx=index)
-        output_trim = graph.add("atrim", f"duration={_number(output_duration)}")
-        output_pts = graph.add("asetpts", "PTS-STARTPTS")
+        chain = [
+            input_filter,
+            # Rebase the first decoded sample to zero while preserving later
+            # timestamp gaps.
+            graph.add("asetpts", "PTS-STARTPTS"),
+            # Materialise those gaps as silence on the recording's own clock.
+            graph.add(
+                "aresample",
+                f"{_AUDIO_SAMPLE_RATE}:async=1:min_hard_comp=0.001",
+            ),
+            graph.add(
+                "aformat",
+                "sample_fmts=fltp:sample_rates="
+                f"{_AUDIO_SAMPLE_RATE}:channel_layouts=stereo",
+            ),
+        ]
+        if rate != 1.0:
+            chain.append(graph.add("atempo", _number(1.0 / rate)))
+        delay_samples = max(0, round(delay * _AUDIO_SAMPLE_RATE))
+        chain.append(graph.add("adelay", f"delays={delay_samples}S:all=1"))
         sink = graph.add("abuffersink")
-        _link_chain([mix, output_trim, output_pts, sink])
+        chain.append(sink)
+        _link_chain(chain)
         graph.configure()
 
-        origin: float | None = None
         ended = False
         for frame in self.container.decode(self.stream):
-            if frame.pts is not None and frame.time_base is not None:
-                absolute_time = float(frame.pts * frame.time_base)
-                if origin is None:
-                    origin = absolute_time
-                frame.pts = round((absolute_time - origin) / float(frame.time_base))
             input_filter.push(frame)
             while True:
                 try:
@@ -392,27 +348,34 @@ class _SynchronizedAudio:
 
 
 def _compose_frame(
-    samplers: list[_VideoSampler],
-    labels: list[_LabelOverlay] | None,
+    canvas: np.ndarray,
+    samplers: list[_VideoSampler | None],
+    labels: list[_LabelOverlay | None] | None,
     experiment_time: float,
-    columns: int,
-    rows: int,
-    cell_size: tuple[int, int],
+    frame_layout: LayoutFrame,
 ) -> av.VideoFrame:
-    width, height = cell_size
-    grid = np.zeros((rows * height, columns * width, 3), dtype=np.uint8)
-    for index, sampler in enumerate(samplers):
+    """Draw every slot that has a picture onto ``canvas``, blacked out first.
+
+    The frame copies the canvas, so the same one serves every frame.
+    """
+    canvas.fill(0)
+    for index, (sampler, placement) in enumerate(
+        zip(samplers, frame_layout.placements)
+    ):
+        if sampler is None:
+            continue
         cell = sampler.cell_at(experiment_time)
         if cell is None:
-            cell = np.zeros((height, width, 3), dtype=np.uint8)
-        elif labels is not None:
-            cell = cell.copy()
-        if labels is not None:
-            _blend_label(cell, labels[index])
-        x = index % columns * width
-        y = index // columns * height
-        grid[y : y + height, x : x + width] = cell
-    return av.VideoFrame.from_ndarray(grid, format="rgb24")
+            continue
+        image = cell.image
+        x = placement.x + cell.x
+        y = placement.y + cell.y
+        target = canvas[y : y + image.shape[0], x : x + image.shape[1]]
+        target[:] = image
+        label = None if labels is None else labels[index]
+        if label is not None:
+            _blend_label(target, label)
+    return av.VideoFrame.from_ndarray(canvas, format="rgb24")
 
 
 def _encode_frame(container, stream, frame) -> None:
@@ -422,42 +385,48 @@ def _encode_frame(container, stream, frame) -> None:
 
 def _render(
     output_path: Path,
-    video_sources: list[_Source],
+    slot_sources: list[_Source | None],
     audio_sources: list[_Source],
     output_start: float,
     output_end: float,
-    columns: int,
-    rows: int,
-    cell_size: tuple[int, int],
+    frame_layout: LayoutFrame,
     show_labels: bool,
     include_merged_audio: bool,
     progress: Callable[[float], bool] | None,
 ) -> None:
     """Decode, synchronize, compose, encode, and mux entirely through PyAV."""
     duration = output_end - output_start
-    samplers: list[_VideoSampler] = []
+    samplers: list[_VideoSampler | None] = []
     audio_readers: list[_SynchronizedAudio] = []
+    slots = list(zip(slot_sources, frame_layout.placements))
     try:
-        for source in video_sources:
-            samplers.append(_VideoSampler(source, cell_size))
+        for source, placement in slots:
+            samplers.append(
+                None
+                if source is None
+                else _VideoSampler(source, (placement.width, placement.height))
+            )
         for source in audio_sources:
-            audio_readers.append(_SynchronizedAudio(source, output_start, duration))
+            audio_readers.append(_SynchronizedAudio(source, output_start))
         labels = (
-            [_label_overlay(source.data.id, cell_size) for source in video_sources]
+            [
+                None
+                if source is None
+                else _label_overlay(source.data.id, (placement.width, placement.height))
+                for source, placement in slots
+            ]
             if show_labels
             else None
         )
 
         with av.open(str(output_path), "w", options={"movflags": "+faststart"}) as out:
-            grid_width = columns * cell_size[0]
-            grid_height = rows * cell_size[1]
             video_stream = out.add_stream(
                 "libx264",
                 rate=OUTPUT_FPS,
                 options={"preset": "medium", "crf": "18"},
             )
-            video_stream.width = grid_width
-            video_stream.height = grid_height
+            video_stream.width = frame_layout.width
+            video_stream.height = frame_layout.height
             video_stream.pix_fmt = "yuv420p"
 
             audio_track_names = [source.data.id for source in audio_sources]
@@ -478,6 +447,9 @@ def _render(
 
             video_frames = math.ceil(duration * OUTPUT_FPS - 1e-9)
             audio_samples = round(duration * _AUDIO_SAMPLE_RATE) if audio_streams else 0
+            canvas = np.zeros(
+                (frame_layout.height, frame_layout.width, 3), dtype=np.uint8
+            )
             video_index = 0
             audio_index = 0
             last_reported = -1.0
@@ -488,12 +460,11 @@ def _render(
                     audio_index >= audio_samples or video_time <= audio_time
                 ):
                     frame = _compose_frame(
+                        canvas,
                         samplers,
                         labels,
                         output_start + video_time,
-                        columns,
-                        rows,
-                        cell_size,
+                        frame_layout,
                     )
                     frame.pts = video_index
                     frame.time_base = Fraction(1, OUTPUT_FPS)
@@ -531,16 +502,46 @@ def _render(
             progress(1.0)
     finally:
         for sampler in samplers:
-            sampler.close()
+            if sampler is not None:
+                sampler.close()
         for reader in audio_readers:
             reader.close()
+
+
+def _slot_ids(
+    kind: LayoutKind,
+    videos: list[Video],
+    video_ids: Sequence[str | None] | None,
+) -> list[str | None]:
+    """Which video fills each slot of the layout, in drawing order."""
+    if video_ids is None:
+        slot_ids: list[str | None] = [video.id for video in videos]
+    else:
+        slot_ids = list(video_ids)
+        placed = [slot_id for slot_id in slot_ids if slot_id is not None]
+        if not placed:
+            raise ValueError("no video inputs selected")
+        duplicates = {slot_id for slot_id in placed if placed.count(slot_id) > 1}
+        if duplicates:
+            raise ValueError(f"videos placed more than once: {sorted(duplicates)}")
+        unknown = set(placed) - {video.id for video in videos}
+        if unknown:
+            raise ValueError(f"unknown video ids: {sorted(unknown)}")
+    slots = slot_count(kind, len(slot_ids))
+    if len(slot_ids) > slots:
+        raise ValueError(
+            f"the {kind.value!r} layout has {slots} slots, "
+            f"but {len(slot_ids)} videos were given"
+        )
+    return slot_ids + [None] * (slots - len(slot_ids))
 
 
 def construct_video_grid(
     experiment: Experiment,
     output_path: str | Path,
     *,
-    columns: int | None = None,
+    layout: LayoutKind | str = LayoutKind.grid,
+    video_ids: Sequence[str | None] | None = None,
     cell_size: tuple[int, int] = (640, 360),
     show_labels: bool = True,
     input_ids: Iterable[str] | None = None,
@@ -548,19 +549,29 @@ def construct_video_grid(
     overwrite: bool = False,
     progress: Callable[[float], bool] | None = None,
 ) -> VideoGridResult:
-    """Write selected experiment videos as a synchronized 25 fps grid.
+    """Write selected experiment videos as one synchronized 25 fps video.
 
     The output interval is the union of all selected media on the experiment
     clock. ``input_ids`` defaults to every experiment input. Every selected
     input that carries audio contributes a separately selectable, full-duration
     audio track named after its input id; selected audio-only inputs contribute
-    a track but no grid cell. ``include_merged_audio`` appends a track mixing all
+    a track but no picture. ``include_merged_audio`` appends a track mixing all
     of those synchronized source tracks. Before and after a recording, and
-    wherever it lost content, its cell is black and its audio track is silent.
+    wherever it lost content, its slot shows whatever is behind it -- black, or
+    the video it overlaps -- and its audio track is silent.
+
+    ``layout`` arranges the pictures: the grid holds every selected video, while
+    ``"2+1"`` shows two videos over a third and ``"4+1"`` shows one central video
+    with a video lapping over each of its corners. Those two leave any slot they
+    are not given a video for empty.
+    ``video_ids`` says which video fills each slot of that layout, in
+    drawing order, with ``None`` for a slot left empty; it defaults to the
+    selected videos in experiment order.
 
     ``progress`` receives fractions between zero and one. Returning ``False``
     cancels construction and leaves no partial output behind.
     """
+    kind = LayoutKind(layout)
     all_inputs = {data.id: data for data in experiment.inputs}
     if input_ids is None:
         selected_ids = set(all_inputs)
@@ -580,10 +591,11 @@ def construct_video_grid(
     ]
     if not videos:
         raise ValueError("no video inputs selected")
-    if columns is not None and columns <= 0:
-        raise ValueError("columns must be positive")
     if len(cell_size) != 2 or any(value <= 0 or value % 2 for value in cell_size):
         raise ValueError("cell dimensions must be positive even integers")
+
+    slot_ids = _slot_ids(kind, videos, video_ids)
+    frame_layout = layout_frame(kind, len(slot_ids), cell_size)
 
     output_path = Path(output_path)
     if output_path.suffix.lower() != ".mp4":
@@ -595,23 +607,25 @@ def construct_video_grid(
     sources = [_probe_source(data) for data in selected_inputs]
     sources_by_id = {source.data.id: source for source in sources}
 
-    video_sources = [sources_by_id[video.id] for video in videos]
+    slot_sources = [
+        None if slot_id is None else sources_by_id[slot_id] for slot_id in slot_ids
+    ]
+    video_sources = [source for source in slot_sources if source is not None]
     for source in video_sources:
         if source.video is None:
             raise VideoGridError(f"input {source.data.id!r} has no usable video stream")
     audio_sources = [source for source in sources if source.audio is not None]
 
-    streams = [
-        (source.data.timeline, source.video.duration) for source in video_sources
-    ] + [(source.data.timeline, source.audio.duration) for source in audio_sources]
-    output_start = min(timeline.to_experiment_time(0.0) for timeline, _ in streams)
+    streams = [(source.data.timeline, source.video) for source in video_sources] + [
+        (source.data.timeline, source.audio) for source in audio_sources
+    ]
+    output_start = min(
+        timeline.to_experiment_time(stream.start) for timeline, stream in streams
+    )
     output_end = max(
-        timeline.to_experiment_time(duration) for timeline, duration in streams
+        timeline.to_experiment_time(stream.end) for timeline, stream in streams
     )
 
-    column_count = columns or math.ceil(math.sqrt(len(videos)))
-    column_count = min(column_count, len(videos))
-    row_count = math.ceil(len(videos) / column_count)
     temporary_output = output_path.with_name(
         f".{output_path.stem}.{uuid.uuid4().hex}{output_path.suffix}"
     )
@@ -619,13 +633,11 @@ def construct_video_grid(
         try:
             _render(
                 temporary_output,
-                video_sources,
+                slot_sources,
                 audio_sources,
                 output_start,
                 output_end,
-                column_count,
-                row_count,
-                cell_size,
+                frame_layout,
                 show_labels,
                 include_merged_audio,
                 progress,
@@ -638,7 +650,7 @@ def construct_video_grid(
     finally:
         temporary_output.unlink(missing_ok=True)
 
-    logger.info("wrote synchronized video grid to %s", output_path)
+    logger.info("wrote synchronized combined video to %s", output_path)
     return VideoGridResult(
         path=output_path,
         experiment_start=output_start,

@@ -15,11 +15,10 @@ from body_eye_sync.experiment.config import (
     ObjectTrackingStep,
     Pipeline,
     TimelineConfig,
-    TimeShiftConfig,
     VideoPipeline,
 )
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.timeline import Shift, Timeline
+from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo
 from body_eye_sync.pipeline.transcription import TranscriptSegment, Word
 
@@ -493,35 +492,32 @@ def test_newer_file_version_rejected(tmp_path):
         Experiment.load(tmp_path)
 
 
-def test_time_shifts_survive_a_save_and_load(tmp_path):
+def test_clock_rates_survive_a_save_and_load(tmp_path):
     exp = Experiment(_config(audio=[AudioInput(id="mic1", path="p1.wav")]), tmp_path)
     exp.glasses_videos[0].timeline.offset = 12.5
-    exp.glasses_videos[0].timeline.shifts = [Shift(at=100.0, seconds=0.4)]
+    exp.glasses_videos[0].timeline.rate = 1.0000474
     exp.save()
 
     reloaded = Experiment.load(tmp_path)
 
     video = reloaded.glasses_videos[0]
     assert video.timeline.offset == pytest.approx(12.5)
-    assert [(s.at, s.seconds) for s in video.timeline.shifts] == [(100.0, 0.4)]
+    assert video.timeline.rate == pytest.approx(1.0000474)
     # An input that kept time stores nothing extra.
-    assert reloaded.audio[0].timeline.shifts == []
+    assert reloaded.audio[0].timeline.rate == 1.0
 
 
 def test_an_input_places_its_own_clock_on_the_experiment(tmp_path):
     exp = Experiment(_config(), tmp_path)
     video = exp.glasses_videos[0]
     video.timeline.offset = 20.0
-    video.timeline.shifts = [Shift(at=100.0, seconds=0.4)]
+    video.timeline.rate = 1.0001  # its clock gains 100 ms every 1000 seconds
 
-    # Before the loss only the offset applies; after it, the missing content too.
-    assert video.timeline.to_experiment_time(50.0) == pytest.approx(70.0)
-    assert video.timeline.to_experiment_time(150.0) == pytest.approx(170.4)
-    # And back again.
-    assert video.timeline.to_local_time(170.4) == pytest.approx(150.0)
-    # The experiment ran on through the loss; this video has nothing for it.
-    assert video.timeline.to_local_time(120.2) is None
-    assert video.timeline.unobserved() == [pytest.approx((120.0, 120.4))]
+    assert video.timeline.to_experiment_time(50.0) == pytest.approx(70.005)
+    assert video.timeline.to_experiment_time(1000.0) == pytest.approx(1020.1)
+    assert video.timeline.to_local_time(1020.1) == pytest.approx(1000.0)
+    assert video.timeline.corrects_drift
+    assert video.timeline.drift_ppm == pytest.approx(100.0)
 
 
 def test_an_input_that_kept_time_is_just_its_offset(tmp_path):
@@ -531,9 +527,70 @@ def test_an_input_that_kept_time_is_just_its_offset(tmp_path):
 
     assert video.timeline.to_experiment_time(30.0) == pytest.approx(37.0)
     assert video.timeline.to_local_time(37.0) == pytest.approx(30.0)
-    assert video.timeline.unobserved() == []
+    assert not video.timeline.corrects_drift
+    assert video.timeline.drift_ppm == pytest.approx(0.0)
 
 
-def test_serialised_missing_content_duration_must_be_positive():
+def test_a_serialised_clock_rate_must_be_positive():
     with pytest.raises(ValidationError):
-        TimeShiftConfig(at=10.0, seconds=-0.1)
+        TimelineConfig(rate=0.0)
+
+
+def test_input_for_path_finds_whichever_input_is_reading_a_file(tmp_path, data_dir):
+    """Whatever lets someone pick a recording asks this before adding it."""
+    video = data_dir / "three-people.mp4"
+    experiment = Experiment(ExperimentConfig())
+    experiment.add_fixed_video(FixedVideoInput(id="room", path=video))
+
+    assert experiment.input_for_path(video).id == "room"
+    assert experiment.input_for_path(tmp_path / "elsewhere.mp4") is None
+    assert experiment.input_for_path(None) is None
+
+    experiment.add_audio(AudioInput(id="mic", path=tmp_path / "mic.wav"))
+    assert experiment.input_for_path(tmp_path / "mic.wav").id == "mic"
+
+
+def test_input_for_path_sees_through_how_a_path_was_spelled(tmp_path, data_dir):
+
+    video = data_dir / "three-people.mp4"
+    link = tmp_path / "same-video.mp4"
+    link.symlink_to(video)
+    experiment = Experiment(ExperimentConfig())
+    experiment.add_fixed_video(FixedVideoInput(id="room", path=video))
+
+    assert experiment.input_for_path(link).id == "room"
+
+
+def test_one_recording_can_only_be_one_input(data_dir, tmp_path):
+    """Two inputs of one recording would be tracked and counted twice over."""
+    video = data_dir / "three-people.mp4"
+    experiment = Experiment(ExperimentConfig())
+    experiment.add_fixed_video(FixedVideoInput(id="room", path=video))
+
+    with pytest.raises(ValueError, match="already an input, as 'room'"):
+        experiment.add_fixed_video(FixedVideoInput(id="room-again", path=video))
+    # Nor as another kind of input, nor as the audio of one.
+    with pytest.raises(ValueError, match="already an input"):
+        experiment.add_glasses_video(
+            GlassesVideoInput(id="cam", path=video, gaze_path=tmp_path / "g.tsv")
+        )
+    with pytest.raises(ValueError, match="already an input"):
+        experiment.add_audio(AudioInput(id="mic", path=video))
+    assert [data.id for data in experiment.inputs] == ["room"]
+
+
+def test_an_experiment_file_that_names_one_recording_twice_still_loads(
+    data_dir, tmp_path
+):
+    """Adding refuses it; what is already written is read as it stands."""
+    video = data_dir / "three-people.mp4"
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="room", path=video),
+                FixedVideoInput(id="room-again", path=video),
+            ]
+        )
+    )
+
+    assert [data.id for data in experiment.inputs] == ["room", "room-again"]

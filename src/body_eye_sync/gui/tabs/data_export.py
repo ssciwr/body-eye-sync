@@ -24,12 +24,14 @@ from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import GlassesVideo, Video
 from body_eye_sync.export.elan import export_elan
+from body_eye_sync.export.layout import LayoutKind
 from body_eye_sync.export.video_grid import (
     VideoGridCancelled,
     VideoGridResult,
     construct_video_grid,
 )
 from body_eye_sync.gui.tabs.base import BaseTab
+from body_eye_sync.gui.widgets.video_layout_editor import VideoLayoutEditor
 
 _INPUT_ID_ROLE = Qt.ItemDataRole.UserRole
 _IS_VIDEO_ROLE = int(Qt.ItemDataRole.UserRole) + 1
@@ -58,12 +60,16 @@ class _VideoExportWorker(QObject):
         experiment: Experiment,
         output_path: Path,
         input_ids: list[str],
+        layout: LayoutKind,
+        video_ids: list[str | None],
         include_merged_audio: bool,
     ) -> None:
         super().__init__()
         self._experiment = experiment
         self._output_path = output_path
         self._input_ids = input_ids
+        self._layout = layout
+        self._video_ids = video_ids
         self._include_merged_audio = include_merged_audio
         self._cancel = threading.Event()
         self._reported = -1
@@ -85,6 +91,8 @@ class _VideoExportWorker(QObject):
                 self._experiment,
                 self._output_path,
                 input_ids=self._input_ids,
+                layout=self._layout,
+                video_ids=self._video_ids,
                 include_merged_audio=self._include_merged_audio,
                 overwrite=True,
                 progress=self._progress,
@@ -115,8 +123,8 @@ class DataExportTab(BaseTab):
 
         description = QLabel(
             "Select the inputs to include in the synchronized 25 fps video. "
-            "Video inputs become grid cells; audio-only inputs contribute audio "
-            "tracks."
+            "Video inputs fill the slots of the chosen layout; audio-only inputs "
+            "contribute audio tracks."
         )
         description.setWordWrap(True)
 
@@ -124,6 +132,9 @@ class DataExportTab(BaseTab):
         self.input_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.input_list.setAlternatingRowColors(True)
         self.input_list.itemChanged.connect(self._update_availability)
+
+        self.layout_editor = VideoLayoutEditor()
+        self.layout_editor.changed.connect(self._update_availability)
 
         self.merged_audio_checkbox = QCheckBox("Include merged audio track")
         self.merged_audio_checkbox.setToolTip(
@@ -144,10 +155,10 @@ class DataExportTab(BaseTab):
 
         layout = QVBoxLayout(self)
         layout.addWidget(description)
-        layout.addWidget(self.input_list)
+        layout.addWidget(self.input_list, stretch=1)
+        layout.addWidget(self.layout_editor, stretch=2)
         layout.addWidget(self.merged_audio_checkbox)
         layout.addLayout(buttons)
-        layout.addStretch(1)
         self.refresh()
 
     def set_experiment(self, experiment: Experiment) -> None:
@@ -180,12 +191,14 @@ class DataExportTab(BaseTab):
         self.input_list.blockSignals(False)
         self._update_availability()
 
-    def selected_input_ids(self) -> list[str]:
+    def selected_input_ids(self, videos_only: bool = False) -> list[str]:
+        """The checked inputs, in list order; optionally only the videos."""
         return [
             item.data(_INPUT_ID_ROLE)
             for index in range(self.input_list.count())
             if (item := self.input_list.item(index)).checkState()
             == Qt.CheckState.Checked
+            and (not videos_only or bool(item.data(_IS_VIDEO_ROLE)))
         ]
 
     def is_busy(self) -> bool:
@@ -193,15 +206,14 @@ class DataExportTab(BaseTab):
 
     @Slot()
     def _update_availability(self) -> None:
-        has_selected_video = any(
-            self.input_list.item(index).checkState() == Qt.CheckState.Checked
-            and bool(self.input_list.item(index).data(_IS_VIDEO_ROLE))
-            for index in range(self.input_list.count())
-        )
+        self.layout_editor.set_videos(self.selected_input_ids(videos_only=True))
+        # There is nothing to export until the layout shows at least one video.
+        placed = any(self.layout_editor.slots())
         running = self._thread is not None
         self.input_list.setEnabled(not running)
+        self.layout_editor.setEnabled(not running)
         self.merged_audio_checkbox.setEnabled(not running)
-        self.export_button.setEnabled(not running and has_selected_video)
+        self.export_button.setEnabled(not running and placed)
         self.cancel_button.setVisible(running)
         self.cancel_button.setEnabled(True)
         self.cancel_button.setText("Cancel")
@@ -232,6 +244,8 @@ class DataExportTab(BaseTab):
             self.experiment,
             output_path,
             input_ids,
+            self.layout_editor.layout_kind(),
+            self.layout_editor.slots(),
             self.merged_audio_checkbox.isChecked(),
         )
         self._worker.progress.connect(self._on_progress)

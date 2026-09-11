@@ -1,4 +1,4 @@
-"""Measure and fit timeline corrections for a collection of media inputs."""
+"""Determine offset and rate to make recordings align in time."""
 
 from __future__ import annotations
 
@@ -8,19 +8,25 @@ from pathlib import Path
 
 import numpy as np
 
-from body_eye_sync.experiment.timeline import (
-    Shift,
-    Timeline,
-    sum_missing_before,
-    to_experiment_time,
-)
+from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.preprocessing.audio import SAMPLE_RATE, audio_samples
 
-DEFAULT_MIN_SHIFT = 0.05
 
 SPECTRAL_HOP = 160 / SAMPLE_RATE
 SPECTRAL_COEFFICIENTS = 26
 SPECTRAL_MIN_QUALITY = 7.0
+
+#: Below this, a measured clock difference is noise rather than a difference.
+MIN_DRIFT_PPM = 2.0
+
+#: A slope needs at least this much recording behind it to mean anything.
+MIN_DRIFT_SPAN = 60.0
+
+#: And at least this many measurements, before an interval around it means much.
+MIN_DRIFT_POINTS = 8
+
+#: How sure of a clock difference to be before correcting for it.
+DRIFT_CONFIDENCE = 0.95
 
 
 def spectral_features(media_path: str | Path) -> np.ndarray:
@@ -75,34 +81,10 @@ def pairwise_offset(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
     return float(lags[peak] * SPECTRAL_HOP), quality
 
 
-def media_duration(path: str | Path) -> float | None:
-    """How long a recording runs, read from its container without decoding it."""
-    import av
-
-    try:
-        with av.open(str(path)) as container:
-            if container.duration is not None:
-                return float(container.duration / av.time_base)
-            durations = [
-                float(stream.duration * stream.time_base)
-                for stream in container.streams
-                if stream.duration is not None and stream.time_base is not None
-            ]
-            return max(durations, default=None)
-    except Exception:
-        return None
-
-
 @dataclass
 class OffsetPoint:
     time: float
     offset: float
-
-
-@dataclass
-class FittedTimeline:
-    timeline: Timeline
-    residual: float = 0.0
 
 
 def offset_curve(
@@ -122,7 +104,9 @@ def offset_curve(
     ``offset`` seeds the search and only has to be close enough that the true
     lag falls within ``search`` of it.
 
-    ``window`` sets how precisely a loss can be placed
+    ``window`` is how much audio each measurement correlates. Windows do not
+    overlap, so their errors are independent and the spread of the points is
+    an honest measure of how well the lag is known.
 
     ``min_quality`` is the lock threshold for each window.
     """
@@ -130,7 +114,7 @@ def offset_curve(
     if len(reference) == 0 or len(other) == 0:
         return points
     span = max(len(reference), len(other) + int(offset / SPECTRAL_HOP)) * SPECTRAL_HOP
-    starts = np.arange(0.0, span, window / 2)
+    starts = np.arange(0.0, span, window)
     for index, start in enumerate(starts):
         a0, a1 = int(start / SPECTRAL_HOP), int((start + window) / SPECTRAL_HOP)
         b0 = int((start - offset - search) / SPECTRAL_HOP)
@@ -146,68 +130,50 @@ def offset_curve(
     return points
 
 
-def detect_shifts(
-    points: list[OffsetPoint],
-    *,
-    min_shift: float = DEFAULT_MIN_SHIFT,
-) -> list[Shift]:
-    """Turn stable changes in an offset curve into missing-content shifts."""
-    if len(points) < 2:
-        return []
-    level = None
-    shifts: list[Shift] = []
-    for index in range(len(points) - 1):
-        before, after = points[index : index + 2]
-        if abs(after.offset - before.offset) >= min_shift / 2:
-            continue
-        next_level = (before.offset + after.offset) / 2
-        if level is None:
-            level = next_level
-            continue
-        amount = next_level - level
-        if amount < min_shift:
-            continue
-        shifts.append(Shift(at=before.time - level, seconds=amount))
-        level = next_level
-    return shifts
-
-
 def fit_timeline(
-    points: list[OffsetPoint],
-    *,
-    min_shift: float = DEFAULT_MIN_SHIFT,
-) -> FittedTimeline:
-    """Fit an initial offset and discrete missing content."""
-    if not points:
-        return FittedTimeline(Timeline())
-    shifts = detect_shifts(
-        points,
-        min_shift=min_shift,
-    )
-    return fit_offset(points, shifts)
+    points: list[OffsetPoint], *, min_drift_ppm: float = MIN_DRIFT_PPM
+) -> Timeline | None:
+    """Fit where a drifting recording starts and how fast its clock runs.
 
+    The fit is a straight line through the measured offsets, so its slope is
+    the difference between the two devices' clocks. It is a Theil-Sen line —
+    the median of the slopes between every pair of points — because a window
+    that locks onto the wrong lag misses by a second where the others agree to
+    a few milliseconds, and least squares would follow it.
 
-def fit_offset(points: list[OffsetPoint], shifts: list[Shift]) -> FittedTimeline:
-    """Where a recording starts, given the content it lost.
-
-    The offset is the median over the points so that a handful of badly measured
-    windows cannot drag it, and the residual is how far the fitted timeline
-    still misses them by.
+    ``None`` unless the slope clears three separate bars: measured over at least
+    ``MIN_DRIFT_SPAN`` of recording, so it is not extrapolated across a session
+    from a moment of it; a ``DRIFT_CONFIDENCE`` interval that excludes no
+    difference at all, so it is not noise; and at least ``min_drift_ppm``, so
+    it is worth correcting.
     """
-    base_offsets = [
-        point.offset - sum_missing_before(shifts, point.time - point.offset)
-        for point in points
-    ]
-    offset = float(np.median(base_offsets))
-    errors = [
-        to_experiment_time(point.time - point.offset, offset, shifts) - point.time
-        for point in points
-    ]
-    residual = float(np.sqrt(np.mean(np.square(errors))))
-    return FittedTimeline(Timeline(offset=offset, shifts=shifts), residual)
+    if not points:
+        return None
+    local = np.asarray([point.time - point.offset for point in points])
+    experiment = np.asarray([point.time for point in points])
+    rate = _fitted_rate(local, experiment, min_drift_ppm)
+    if rate is None:
+        return None
+    # also use the median for the offset to reduce effect of outliers
+    offset = float(np.median(experiment - local * rate))
+    return Timeline(offset=offset, rate=rate)
 
 
-MIN_TOTAL_GAP = 0.1
+def _fitted_rate(
+    local: np.ndarray, experiment: np.ndarray, min_drift_ppm: float
+) -> float | None:
+    """The non-unit clock rate the points support, if any."""
+    from scipy.stats import theilslopes
+
+    if len(local) < MIN_DRIFT_POINTS or float(np.ptp(local)) < MIN_DRIFT_SPAN:
+        return None
+    slope, _, low, high = theilslopes(experiment, local, DRIFT_CONFIDENCE)
+    if low <= 1.0 <= high:
+        return None
+    if abs(float(slope) - 1.0) * 1e6 < min_drift_ppm:
+        return None
+    return float(slope)
+
 
 #: How long each measurement window is
 DEFAULT_WINDOW = 10.0
@@ -216,24 +182,25 @@ DEFAULT_WINDOW = 10.0
 DEFAULT_SEARCH = 12.0
 
 
-class TimingCorrectionCancelled(Exception):
-    """Raised when a caller cancels timing-correction analysis."""
+class ClockRateAnalysisCancelled(Exception):
+    """Raised when a caller cancels clock-rate analysis."""
 
 
 @dataclass
-class TimingCorrectionAnalysis:
-    """Measured lag curves and their proposed timeline corrections."""
+class ClockRateAnalysis:
+    """Measured lag curves and the timelines fitted to them."""
 
     reference: str
     points: dict[str, list[OffsetPoint]]
-    fits: dict[str, FittedTimeline]
-    # Inputs that came back without a correction
+    #: Significant non-unit clock-rate fits, keyed by input id.
+    fits: dict[str, Timeline]
+    #: Inputs for which no usable offset measurements could be made.
     unavailable: list[str]
 
 
 def _continue(progress: Callable[[float], bool] | None, value: float) -> None:
     if progress is not None and progress(value) is False:
-        raise TimingCorrectionCancelled
+        raise ClockRateAnalysisCancelled
 
 
 def _reference_with_most_overlap(features, offsets: dict[str, float]) -> str:
@@ -255,45 +222,30 @@ def _reference_with_most_overlap(features, offsets: dict[str, float]) -> str:
     return max(features, key=score)
 
 
-def _with_sensitivity_floor(
-    points: list[OffsetPoint],
-    fit: FittedTimeline,
-    min_total_gap: float,
-) -> FittedTimeline:
-    """Remove corrections too small to distinguish reliably from noise."""
-    shifts = fit.timeline.shifts
-    if sum(abs(shift.seconds) for shift in shifts) < min_total_gap:
-        shifts = []
-    if shifts == fit.timeline.shifts:
-        return fit
-    return fit_offset(points, shifts)
-
-
-def analyse_timing_corrections(
+def analyse_clock_rates(
     paths: dict[str, str | Path],
     offsets: dict[str, float],
     *,
     window: float = DEFAULT_WINDOW,
     search: float = DEFAULT_SEARCH,
     min_quality: float = SPECTRAL_MIN_QUALITY,
-    min_shift: float = DEFAULT_MIN_SHIFT,
-    min_total_gap: float = MIN_TOTAL_GAP,
+    min_drift_ppm: float = MIN_DRIFT_PPM,
     progress: Callable[[float], bool] | None = None,
-) -> TimingCorrectionAnalysis:
-    """Measure local lags and propose corrections for every usable input.
+) -> ClockRateAnalysis:
+    """Measure local lags and fit a timeline for every usable input.
 
     The reference is selected automatically as the recording with the greatest
     total overlap with the others on the existing alignment timeline. Its
-    clock remains unchanged; all returned fits are expressed on the existing
-    experiment clock and can therefore be applied directly to the inputs.
+    clock is the one the others are measured against, so it keeps a rate of
+    one; all returned fits are expressed on the existing experiment clock and
+    can therefore be applied directly to the inputs.
 
-    The complete gap correction is suppressed when its total is smaller than
-    ``min_total_gap``.
+    A clock difference smaller than ``min_drift_ppm`` is left uncorrected.
     """
     if set(paths) != set(offsets):
         raise ValueError("paths and offsets must describe the same inputs")
     if len(paths) < 2:
-        raise ValueError("timing correction needs at least two inputs")
+        raise ValueError("clock-rate analysis needs at least two inputs")
 
     features = {}
     unavailable = []
@@ -310,9 +262,7 @@ def analyse_timing_corrections(
     reference = _reference_with_most_overlap(features, offsets)
     reference_offset = offsets[reference]
     points: dict[str, list[OffsetPoint]] = {reference: []}
-    fits = {
-        reference: FittedTimeline(Timeline(offset=reference_offset)),
-    }
+    fits: dict[str, Timeline] = {}
     others = [name for name in features if name != reference]
     for index, name in enumerate(others):
         start = 0.55 + 0.45 * index / len(others)
@@ -336,11 +286,6 @@ def analyse_timing_corrections(
         if not measured:
             unavailable.append(name)
             continue
-        relative_fit = _with_sensitivity_floor(
-            measured,
-            fit_timeline(measured, min_shift=min_shift),
-            min_total_gap,
-        )
         points[name] = [
             replace(
                 point,
@@ -349,13 +294,12 @@ def analyse_timing_corrections(
             )
             for point in measured
         ]
-        fits[name] = replace(
-            relative_fit,
-            timeline=replace(
-                relative_fit.timeline,
-                offset=relative_fit.timeline.offset + reference_offset,
-            ),
-        )
+        relative_fit = fit_timeline(measured, min_drift_ppm=min_drift_ppm)
+        if relative_fit is not None:
+            fits[name] = replace(
+                relative_fit,
+                offset=relative_fit.offset + reference_offset,
+            )
 
     _continue(progress, 1.0)
-    return TimingCorrectionAnalysis(reference, points, fits, unavailable)
+    return ClockRateAnalysis(reference, points, fits, unavailable)
