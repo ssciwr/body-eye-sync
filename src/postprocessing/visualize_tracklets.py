@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping, Sequence
+from fractions import Fraction
 from functools import lru_cache
 import logging
 from pathlib import Path
@@ -38,6 +39,9 @@ from body_eye_sync.postprocessing.tracklets_clustering import (  # noqa: E402
 )
 
 logger = logging.getLogger(__name__)
+
+# MP4 sample entry for H.264; the default writer uses libx264 for portability.
+CHROME_COMPATIBLE_CODEC = "avc1"
 
 
 def run_video_pipeline(
@@ -173,7 +177,7 @@ def visualize_saved_videos(
     body_distance_threshold: float = 0.15,
     min_face_detections: int = 1,
     min_body_detections: int = 3,
-    codec: str = "mp4v",
+    codec: str = CHROME_COMPATIBLE_CODEC,
     debug: bool = False,
 ) -> list[Path]:
     """Load, cluster, display, and save two previously processed videos.
@@ -254,6 +258,80 @@ def _person_id_for_track(
         ) from error
 
 
+class _ChromeCompatibleWriter:
+    """Write H.264 video in an MP4 container using PyAV."""
+
+    def __init__(
+        self,
+        path: Path,
+        fps: float,
+        frame_size: tuple[int, int],
+    ) -> None:
+        import av
+
+        width, height = frame_size
+        # H.264's broadly supported yuv420p format requires even dimensions.
+        self._width = width + width % 2
+        self._height = height + height % 2
+        fps_fraction = Fraction.from_float(fps).limit_denominator(65_535)
+        self._time_base = Fraction(1, 1) / fps_fraction
+        self._frame_index = 0
+        self._closed = False
+
+        self._container = av.open(
+            str(path),
+            "w",
+            options={"movflags": "+faststart"},
+        )
+        try:
+            self._stream = self._container.add_stream(
+                "libx264",
+                rate=fps_fraction,
+                options={"preset": "veryfast", "crf": "23"},
+            )
+            self._stream.width = self._width
+            self._stream.height = self._height
+            self._stream.pix_fmt = "yuv420p"
+            self._stream.time_base = self._time_base
+        except BaseException:
+            self._container.close()
+            raise
+
+    def write(self, frame: np.ndarray) -> None:
+        import av
+
+        if self._closed:
+            raise RuntimeError("cannot write to a closed video writer")
+
+        frame_height, frame_width = frame.shape[:2]
+        if (frame_width, frame_height) != (self._width, self._height):
+            padded = np.zeros(
+                (self._height, self._width, frame.shape[2]),
+                dtype=frame.dtype,
+            )
+            padded[:frame_height, :frame_width] = frame
+            frame = padded
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        video_frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+        video_frame.pts = self._frame_index
+        video_frame.time_base = self._time_base
+        for packet in self._stream.encode(video_frame):
+            self._container.mux(packet)
+        self._frame_index += 1
+
+    def release(self) -> None:
+        if self._closed:
+            return
+
+        self._closed = True
+        try:
+            for packet in self._stream.encode(None):
+                self._container.mux(packet)
+        finally:
+            self._container.close()
+
+
 def annotate_frame(
     frame: np.ndarray,
     boxes: Sequence[BoundingBox],
@@ -323,7 +401,7 @@ def display_video(
     video: Video,
     person_ids: Mapping[tuple[str, int], int],
     output_path: str | Path | None = None,
-    codec: str = "mp4v",
+    codec: str = CHROME_COMPATIBLE_CODEC,
 ) -> bool:
     """Display ``video`` with person-ID overlays and optionally save it.
 
@@ -361,14 +439,27 @@ def display_video(
             if destination is not None and writer is None:
                 frame_width = frame.shape[1]
                 frame_height = frame.shape[0]
-                writer = cv2.VideoWriter(
-                    str(destination),
-                    cv2.VideoWriter_fourcc(*codec),
-                    fps,
-                    (frame_width, frame_height),
-                )
-                if not writer.isOpened():
-                    raise OSError(f"could not create output video: {destination}")
+                # OpenCV's mp4v commonly emits MPEG-4 Part 2, which Chrome rejects.
+                if codec.lower() == CHROME_COMPATIBLE_CODEC:
+                    try:
+                        writer = _ChromeCompatibleWriter(
+                            destination,
+                            fps,
+                            (frame_width, frame_height),
+                        )
+                    except Exception as error:
+                        raise OSError(
+                            f"could not create output video: {destination}"
+                        ) from error
+                else:
+                    writer = cv2.VideoWriter(
+                        str(destination),
+                        cv2.VideoWriter_fourcc(*codec),
+                        fps,
+                        (frame_width, frame_height),
+                    )
+                    if not writer.isOpened():
+                        raise OSError(f"could not create output video: {destination}")
             if writer is not None:
                 writer.write(frame)
 
@@ -420,8 +511,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--codec",
-        default="mp4v",
-        help="four-character OpenCV video codec (default: mp4v)",
+        default=CHROME_COMPATIBLE_CODEC,
+        help=(
+            "four-character codec selector; avc1 is encoded as H.264 "
+            "for browser playback (default: avc1)"
+        ),
     )
     parser.add_argument("--detector", default="yolo26m")
     parser.add_argument("--reid", default="osnet_x1_0_msmt17")

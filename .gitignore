@@ -145,3 +145,7 @@ cython_debug/
 
 # vscode
 .vscode/*
+
+
+# my data
+postprocessing_output/*
