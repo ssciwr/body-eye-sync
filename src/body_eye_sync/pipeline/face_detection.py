@@ -226,7 +226,12 @@ def detect_faces(
 
     root = _insightface_root()
     _ensure_model_available(model_name, root)
-    app = FaceAnalysis(name=model_name, providers=providers, root=root)
+    app = FaceAnalysis(
+        name=model_name,
+        providers=providers,
+        root=root,
+        allowed_modules=["detection", "recognition"],
+    )
     ctx_id = 0 if providers[0].startswith("CUDA") else -1
     app.prepare(ctx_id=ctx_id, det_size=(det_size, det_size))
 
