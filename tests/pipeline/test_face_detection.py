@@ -1,3 +1,6 @@
+import sys
+from types import SimpleNamespace
+
 import numpy as np
 
 from body_eye_sync.pipeline.object_tracking import BoundingBox
@@ -7,10 +10,44 @@ from body_eye_sync.pipeline.face_detection import (
     FaceBox,
     FaceFrameResult,
     _ensure_model_available,
+    default_providers,
     detect_faces,
     face_box_from_row,
     faces_to_dataframe,
 )
+
+
+def test_default_providers_uses_cuda_when_torch_and_onnxruntime_can(monkeypatch):
+    torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True))
+    ort = SimpleNamespace(
+        get_available_providers=lambda: [
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "onnxruntime", ort)
+
+    assert default_providers() == [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+
+
+def test_default_providers_falls_back_without_a_working_cuda_device(monkeypatch):
+    torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+    monkeypatch.setitem(sys.modules, "torch", torch)
+
+    assert default_providers() == ["CPUExecutionProvider"]
+
+
+def test_default_providers_falls_back_when_ort_has_no_cuda_provider(monkeypatch):
+    torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True))
+    ort = SimpleNamespace(get_available_providers=lambda: ["CPUExecutionProvider"])
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "onnxruntime", ort)
+
+    assert default_providers() == ["CPUExecutionProvider"]
 
 
 def _face(track_id, score=0.9):
