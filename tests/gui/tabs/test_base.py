@@ -66,6 +66,71 @@ def test_placeholder_tabs_say_so(qtbot, experiment, tab_type):
     assert label.text() == f"{tab_type.title} is not implemented yet"
 
 
+def test_alignment_refresh_reuses_viewer_and_updates_controls(
+    qtbot, experiment, data_dir, monkeypatch
+):
+    video = experiment.add_fixed_video(
+        FixedVideoInput(id="room", path=data_dir / "three-people.mp4")
+    )
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    card = tab.video_cards[0]
+    capture = card.viewer._capture
+    card.viewer.set_frame(3)
+    video.id = "renamed"
+    video.timeline.offset = -0.04
+    changes = []
+    tab.experiment_changed.connect(lambda: changes.append(True))
+
+    def unexpected(*args):
+        pytest.fail("Unchanged video should not be stopped or reloaded")
+
+    monkeypatch.setattr(card.viewer, "load", unexpected)
+    monkeypatch.setattr(card.viewer, "stop", unexpected)
+    tab.refresh()
+    tab.refresh()
+
+    assert tab.video_cards == [card]
+    assert card.viewer._capture is capture
+    assert card.input_label.text() == "renamed"
+    assert card.controls.spin.value() == -0.04
+    assert card.viewer.current_time_seconds == pytest.approx(0.04)
+    assert card.shared_timeline_label.text() == "Shared Timeline point 0.000 s"
+    assert not changes
+
+
+def test_alignment_refresh_replaces_changed_inputs(qtbot, experiment, data_dir):
+    video = experiment.add_fixed_video(
+        FixedVideoInput(id="room", path=data_dir / "three-people.mp4")
+    )
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    original = tab.video_cards[0]
+    extra = experiment.add_fixed_video(
+        FixedVideoInput(id="extra", path=video.video_path)
+    )
+    tab.refresh()
+    assert tab.video_cards[0] is not original
+    assert original.viewer._capture is None
+    original = tab.video_cards[0]
+    added = tab.video_cards[1]
+
+    video.video_path = data_dir / "three-people-talking.mp4"
+    tab.refresh()
+    assert len(tab.video_cards) == 2
+    assert tab.video_cards[0] is not original
+    assert tab.video_cards[0].loaded_path == video.video_path
+    assert original.viewer._capture is None
+    assert added.viewer._capture is None
+    original = tab.video_cards[0]
+
+    experiment.remove_input(extra)
+    tab.refresh()
+    assert len(tab.video_cards) == 1
+    assert tab.video_cards[0] is not original
+    assert original.viewer._capture is None
+
+
 def test_alignment_tab_renders_all_videos_without_overlays(qtbot, experiment, data_dir):
     path = data_dir / "three-people.mp4"
     experiment = Experiment(
@@ -126,6 +191,11 @@ def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
     tab.progress_changed.connect(lambda *values: progress.append(values))
 
     def align(current_experiment, *, progress):
+        assert not tab.isEnabled()
+        assert not tab.video_cards[0].viewer._play_button.isEnabled()
+        assert not tab.video_cards[0].controls.spin.isEnabled()
+        assert not tab.done_button.isEnabled()
+        assert not tab.video_cards[0].viewer._timer.isActive()
         current_experiment.fixed_videos[0].timeline.offset = 0.125
         current_experiment.fixed_videos[1].timeline.offset = 0.375
         progress(0.5)
@@ -136,6 +206,7 @@ def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
         align,
     )
 
+    tab.video_cards[0].viewer._play_button.setChecked(True)
     tab.align_button.click()
 
     assert [card.controls.spin.value() for card in tab.video_cards] == pytest.approx(
@@ -155,10 +226,35 @@ def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
         (50, 100, "Aligning recordings…"),
     ]
     assert tab.align_button.isEnabled()
+    assert tab.video_cards[0].viewer._play_button.isEnabled()
+    assert tab.done_button.isEnabled()
 
     tab.video_cards[1].controls.up_button.click()
 
     assert experiment.fixed_videos[1].timeline.offset == pytest.approx(0.425)
+
+
+def test_automatic_alignment_restores_controls_after_failure(
+    qtbot, experiment, data_dir, monkeypatch
+):
+    for index in range(2):
+        experiment.add_fixed_video(
+            FixedVideoInput(id=f"room{index}", path=data_dir / "three-people.mp4")
+        )
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+
+    def fail(*args, **kwargs):
+        assert not tab.isEnabled()
+        raise RuntimeError("Alignment failed")
+
+    monkeypatch.setattr("body_eye_sync.gui.tabs.alignment.align_experiment", fail)
+    with pytest.raises(RuntimeError, match="Alignment failed"):
+        tab._align()
+
+    assert tab.isEnabled()
+    assert tab.align_button.isEnabled()
+    assert tab.video_cards[0].viewer._play_button.isEnabled()
 
 
 # Covers the video offset controls used during manual alignment.
@@ -382,6 +478,38 @@ def test_alignment_tab_play_all_uses_shared_timeline(
     assert tab.video_cards[0].viewer.current_time_seconds == pytest.approx(0.08)
     assert tab.video_cards[1].viewer.current_time_seconds == pytest.approx(0.04)
     assert secondary_audio_seeks == []
+
+
+def test_alignment_tab_uses_corrected_clock_rates(qtbot, experiment, data_dir):
+    path = data_dir / "three-people.mp4"
+    experiment.add_fixed_video(
+        FixedVideoInput(
+            id="slow",
+            path=path,
+            timeline=TimelineConfig(offset=0.0, rate=2.0),
+        )
+    )
+    experiment.add_fixed_video(FixedVideoInput(id="steady", path=path))
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    slow, steady = tab.video_cards
+
+    tab._show_shared_timeline_time(0.08)
+
+    assert slow.viewer.current_time_seconds == pytest.approx(0.04)
+    assert steady.viewer.current_time_seconds == pytest.approx(0.08)
+
+    slow.controls.up_button.click()
+    assert slow.video.timeline.offset == pytest.approx(0.05)
+    assert slow.viewer.current_time_seconds == pytest.approx(0.015)
+    slow.controls.down_button.click()
+
+    slow.viewer.set_time_seconds(0.04, show_requested_time=True)
+    tab.play_all_button.click()
+
+    assert steady.viewer.current_time_seconds == pytest.approx(0.08)
+    assert steady.shared_timeline_label.text() == "Shared Timeline point 0.080 s"
+    tab.play_all_button.click()
 
 
 def test_alignment_tab_play_all_preserves_exact_start_across_frame_rates(

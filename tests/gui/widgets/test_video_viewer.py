@@ -110,19 +110,21 @@ def test_video_viewer_decodes_through_small_forward_jump(viewer, monkeypatch):
     assert seeks == []
 
 
-def test_video_viewer_seeks_for_large_forward_jump(viewer, monkeypatch):
+@pytest.mark.parametrize("position,target", [(0, 0), (1, 12), (4, 0)])
+def test_video_viewer_seeks_only_when_needed(viewer, monkeypatch, position, target):
     seeks = []
     capture = SimpleNamespace(
-        read=lambda: (True, "frame 12"),
+        read=lambda: (True, "frame"),
+        get=lambda _property: position,
         set=lambda _property, index: seeks.append(index),
     )
     monkeypatch.setattr(viewer, "_capture", capture)
-    viewer._current = 0
+    viewer._current = -1
 
-    index, frame = viewer._read(12)
+    index, frame = viewer._read(target)
 
-    assert (index, frame) == (12, "frame 12")
-    assert seeks == [12]
+    assert (index, frame) == (target, "frame")
+    assert seeks == ([] if position == target else [target])
 
 
 def test_video_viewer_advance_uses_media_clock(viewer, monkeypatch):
@@ -227,11 +229,13 @@ def test_video_viewer_can_show_negative_preroll_time(viewer, seconds):
 def test_video_viewer_set_transport_enabled_toggles_controls(viewer):
     viewer.enable_controls(False)
     assert not viewer._play_button.isEnabled()
+    assert not viewer._mute_button.isEnabled()
     assert not viewer._slider.isEnabled()
     assert not viewer._spinbox.isEnabled()
 
     viewer.enable_controls(True)
     assert viewer._play_button.isEnabled()
+    assert viewer._mute_button.isEnabled()
     assert viewer._slider.isEnabled()
     assert viewer._spinbox.isEnabled()
 
