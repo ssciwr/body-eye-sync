@@ -602,3 +602,32 @@ def test_cluster_tracklets_from_input_returns_an_empty_result_for_empty_input():
     assert result.person_id_to_tracklet_ids == {}
     assert result.tracklet_face_embedding == {}
     assert result.tracklet_body_embedding == {}
+
+
+def test_cluster_tracklets_from_input_raises_error_for_missing_video_id():
+    face_embeddings = _embeddings_df(
+        (1, np.array([1.0, 0.0])),
+        (2, np.array([1.0, 0.0])),
+    )
+    input1 = clustering.TrackletClusteringInput(
+        track_ids=[1, 2], face_embeddings=face_embeddings, video_id="video1"
+    )
+
+    face_embeddings2 = _embeddings_df(
+        (3, np.array([0.0, 1.0])),
+        (4, np.array([1.0, 0.0])),
+    )
+    input2 = clustering.TrackletClusteringInput(
+        track_ids=[3, 4],
+        face_embeddings=face_embeddings2,
+        video_id=None,
+    )
+
+    with pytest.raises(ValueError):
+        clustering.cluster_tracklets_from_input(
+            [input1, input2],
+            face_distance_threshold=0.1,
+            body_distance_threshold=0.1,
+            min_face_detections=1,
+            min_body_detections=2,
+        )

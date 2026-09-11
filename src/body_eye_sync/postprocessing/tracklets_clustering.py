@@ -149,7 +149,7 @@ def _aggregate_embeddings(
     dict[TrackletId, np.ndarray]
         Tracklet id -> L2-normalised representative embedding.
     """
-    if embeddings is None:
+    if embeddings is None or embeddings.empty:
         return {}
 
     embedding_column = next(
