@@ -9,19 +9,16 @@ from body_eye_sync.experiment.config import (
     GlassesVideoInput,
 )
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.timeline import Shift, Timeline
+from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.experiment.preprocess import (
     align_experiment,
-    apply_timing_corrections,
-    clear_timing_corrections,
-    has_timing_corrections,
+    apply_clock_rates,
+    clear_clock_rates,
+    has_corrected_clock_rates,
     recordings,
 )
 from body_eye_sync.preprocessing.alignment import Alignment
-from body_eye_sync.preprocessing.timing_correction import (
-    FittedTimeline,
-    TimingCorrectionAnalysis,
-)
+from body_eye_sync.preprocessing.clock_rate import ClockRateAnalysis
 
 
 def _experiment(tmp_path, ids=("cam1", "mic1")):
@@ -38,9 +35,12 @@ def _experiment(tmp_path, ids=("cam1", "mic1")):
     return Experiment(config, tmp_path)
 
 
-def _analysis(fits, unavailable=()):
-    return TimingCorrectionAnalysis(
-        reference="cam1", points={}, fits=fits, unavailable=list(unavailable)
+def _analysis(fits, points=None, unavailable=()):
+    return ClockRateAnalysis(
+        reference="cam1",
+        points={} if points is None else points,
+        fits=fits,
+        unavailable=list(unavailable),
     )
 
 
@@ -75,82 +75,88 @@ def test_align_experiment_needs_two_recordings(tmp_path, monkeypatch):
     assert align_experiment(experiment).offsets == {}
 
 
-def test_apply_timing_corrections_only_touches_inputs_that_need_it(tmp_path):
+def test_apply_clock_rates_applies_only_significant_drift_fits(tmp_path):
     experiment = _experiment(tmp_path)
     inputs = recordings(experiment)
     inputs["cam1"].timeline.offset = 0.25
     inputs["mic1"].timeline.offset = 0.5
 
-    corrected = apply_timing_corrections(
+    corrected = apply_clock_rates(
         experiment,
         _analysis(
-            {
-                # Held time: an offset alone is not a correction.
-                "cam1": FittedTimeline(Timeline(offset=9.0)),
-                "mic1": FittedTimeline(
-                    Timeline(
-                        offset=0.75,
-                        shifts=[Shift(3.0, 0.1)],
-                    )
-                ),
-            }
+            {"mic1": Timeline(offset=0.75, rate=1.00003)},
+            points={"cam1": [], "mic1": []},
         ),
     )
 
     assert corrected == ["mic1"]
-    # cam1 keeps the offset alignment gave it, rather than the fit's refinement.
     assert inputs["cam1"].timeline.offset == 0.25
     assert inputs["mic1"].timeline.offset == 0.75
-    assert [(s.at, s.seconds) for s in inputs["mic1"].timeline.shifts] == [(3.0, 0.1)]
+    assert inputs["mic1"].timeline.rate == pytest.approx(1.00003)
 
 
-def test_apply_timing_corrections_ignores_fits_for_absent_inputs(tmp_path):
+def test_apply_clock_rates_can_replace_an_old_rate_with_one(tmp_path):
+    experiment = _experiment(tmp_path)
+    inputs = recordings(experiment)
+    inputs["mic1"].timeline = Timeline(offset=0.5, rate=1.00003)
+
+    changed = apply_clock_rates(
+        experiment,
+        _analysis({}, points={"cam1": [], "mic1": []}),
+    )
+
+    assert changed == ["mic1"]
+    assert inputs["mic1"].timeline == Timeline(offset=0.5, rate=1.0)
+
+
+def test_apply_clock_rates_ignores_fits_for_absent_inputs(tmp_path):
     experiment = _experiment(tmp_path)
 
-    corrected = apply_timing_corrections(
+    corrected = apply_clock_rates(
         experiment,
-        _analysis({"gone": FittedTimeline(Timeline(offset=1.0))}),
+        _analysis({"gone": Timeline(offset=1.0, rate=1.00003)}),
     )
 
     assert corrected == []
 
 
-def test_has_timing_corrections_ignores_offsets(tmp_path):
+def test_has_corrected_clock_rates_ignores_offsets(tmp_path):
     experiment = _experiment(tmp_path)
     inputs = recordings(experiment)
     inputs["mic1"].timeline.offset = 1.0
 
     # An offset is where a recording starts, not a correction to its clock.
-    assert not has_timing_corrections(experiment)
+    assert not has_corrected_clock_rates(experiment)
 
-    inputs["mic1"].timeline.shifts = [Shift(at=5.0, seconds=0.02)]
+    inputs["mic1"].timeline.rate = 1.00003
 
-    assert has_timing_corrections(experiment)
+    assert has_corrected_clock_rates(experiment)
 
 
-def test_clear_timing_corrections_resets_gaps_only(tmp_path):
+def test_clear_clock_rates_resets_clock_rates_only(tmp_path):
     experiment = _experiment(tmp_path)
     inputs = recordings(experiment)
     inputs["mic1"].timeline.offset = 1.0
-    inputs["mic1"].timeline.shifts = [Shift(at=5.0, seconds=0.02)]
+    inputs["mic1"].timeline.rate = 1.00003
 
     # Only the input that carried a correction is reported as changed.
-    assert clear_timing_corrections(experiment) == ["mic1"]
+    assert clear_clock_rates(experiment) == ["mic1"]
 
-    assert inputs["mic1"].timeline.shifts == []
+    assert inputs["mic1"].timeline.rate == 1.0
     assert inputs["mic1"].timeline.offset == 1.0
-    assert not has_timing_corrections(experiment)
+    assert not has_corrected_clock_rates(experiment)
 
 
-def test_clear_timing_corrections_is_a_no_op_when_there_are_none(tmp_path):
-    assert clear_timing_corrections(_experiment(tmp_path)) == []
+def test_clear_clock_rates_is_a_no_op_when_there_are_none(tmp_path):
+    assert clear_clock_rates(_experiment(tmp_path)) == []
 
 
-def test_timeline_reports_whether_it_corrects_timing(tmp_path):
+def test_timeline_reports_whether_its_clock_ran_at_a_different_rate(tmp_path):
     experiment = _experiment(tmp_path)
     inputs = recordings(experiment)
     inputs["mic1"].timeline.offset = 1.0
-    inputs["mic1"].timeline.shifts = [Shift(at=5.0, seconds=0.02)]
+    inputs["mic1"].timeline.rate = 1.00003
 
-    assert not inputs["cam1"].timeline.corrects_timing
-    assert inputs["mic1"].timeline.corrects_timing
+    assert not inputs["cam1"].timeline.corrects_drift
+    assert inputs["mic1"].timeline.corrects_drift
+    assert inputs["mic1"].timeline.drift_ppm == pytest.approx(30.0)

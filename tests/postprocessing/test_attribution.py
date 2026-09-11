@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from body_eye_sync.experiment.config import SpeechPostProcessingSettings
-from body_eye_sync.experiment.timeline import Shift, Timeline
+from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.preprocessing.audio import SAMPLE_RATE
 from body_eye_sync.postprocessing.attribution import (
     TURN_COLUMNS,
@@ -131,7 +131,7 @@ def test_offsets_line_the_recordings_up_before_they_are_compared(tmp_path):
     _write(tmp_path / "b.wav", _speech([(8.0, 11.0)], gain=0.5, seed=2))
     paths = {"a": tmp_path / "a.wav", "b": tmp_path / "b.wav"}
 
-    levels = measure_levels(paths, _timelines(b=Timeline(-2.0, [])))
+    levels = measure_levels(paths, _timelines(b=Timeline(-2.0)))
 
     # On the experiment clock "b" speaks from 6s to 9s, not 8s to 11s, so the
     # stretch where its own clock put the end of that turn is silent.
@@ -145,9 +145,9 @@ def test_a_recording_that_lost_content_is_still_placed_correctly(tmp_path):
     _write(tmp_path / "b.wav", _speech([(6.0, 9.0)], gain=0.5, seed=2))
     paths = {"a": tmp_path / "a.wav", "b": tmp_path / "b.wav"}
 
-    # "b" stalled for a second early on, so everything after sits a second
-    # earlier on its own clock than it does in the room.
-    levels = measure_levels(paths, _timelines(b=Timeline(0.0, [Shift(2.0, 1.0)])))
+    # "b" ran on a clock that gained a second over the recording, so its
+    # later moments sit progressively earlier than they did in the room.
+    levels = measure_levels(paths, _timelines(b=Timeline(0.0, rate=1.0 + 1.0 / 9.0)))
 
     assert levels.share("b", 7.0, 10.0) == pytest.approx(1.0)
 
@@ -157,7 +157,7 @@ def test_recordings_that_do_not_overlap_cannot_be_compared(tmp_path):
     _write(tmp_path / "b.wav", _speech([(1.0, 4.0)]))
     paths = {"a": tmp_path / "a.wav", "b": tmp_path / "b.wav"}
 
-    levels = measure_levels(paths, _timelines(b=Timeline(1000.0, [])))
+    levels = measure_levels(paths, _timelines(b=Timeline(1000.0)))
 
     assert levels.ids == []
     assert levels.loudest().size == 0
@@ -409,7 +409,7 @@ def test_transcripts_are_placed_on_the_experiment_clock(tmp_path):
     _write(tmp_path / "a.wav", _speech([(1.0, 4.0)], seed=1))
     _write(tmp_path / "b.wav", _speech([(8.0, 11.0)], gain=0.5, seed=2))
     paths = {"a": tmp_path / "a.wav", "b": tmp_path / "b.wav"}
-    timelines = _timelines(b=Timeline(-2.0, []))
+    timelines = _timelines(b=Timeline(-2.0))
     levels = measure_levels(paths, timelines)
 
     # "b" timed its own speech from 8s; the experiment puts it at 6s.

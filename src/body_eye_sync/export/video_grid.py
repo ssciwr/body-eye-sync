@@ -16,8 +16,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.experiment.video import Video
+from body_eye_sync.media import container_origin, stream_duration, stream_start
 
 logger = logging.getLogger(__name__)
 
@@ -35,20 +35,17 @@ class VideoGridCancelled(VideoGridError):
 
 
 @dataclass(frozen=True)
-class _Segment:
-    """One uninterrupted piece of a recording, on both of its clocks."""
-
-    local_start: float
-    local_end: float
-    experiment_start: float
-
-
-@dataclass(frozen=True)
 class _StreamInfo:
     """The first usable stream of one media kind in an input file."""
 
     index: int
     duration: float
+    # where the stream starts on the container's clock
+    start: float = 0.0
+
+    @property
+    def end(self) -> float:
+        return self.start + self.duration
 
 
 @dataclass(frozen=True)
@@ -79,35 +76,14 @@ class _LabelOverlay:
     alpha: np.ndarray
 
 
-def _segments(timeline: Timeline, duration: float) -> list[_Segment]:
-    """Split ``[0, duration)`` wherever the recording lost content."""
-    losses = sorted(shift.at for shift in timeline.shifts if 0.0 < shift.at < duration)
-    bounds = [0.0, *losses, duration]
-    return [
-        _Segment(start, end, timeline.to_experiment_time(start))
-        for start, end in zip(bounds, bounds[1:])
-    ]
-
-
 def _stream_info(container, stream) -> _StreamInfo | None:
-    """One stream and its duration, when the file offers a usable pair."""
+    """One stream, its duration and its start, when the file offers them."""
     if stream is None:
         return None
-    duration = _stream_duration(container, stream)
-    return _StreamInfo(stream.index, duration) if duration is not None else None
-
-
-def _stream_duration(container, stream) -> float | None:
-    """Duration of one stream, falling back to the whole container."""
-    if stream.duration is not None and stream.time_base is not None:
-        duration = float(stream.duration * stream.time_base)
-        if math.isfinite(duration) and duration > 0:
-            return duration
-    if container.duration is not None:
-        duration = float(container.duration / av.time_base)
-        if math.isfinite(duration) and duration > 0:
-            return duration
-    return None
+    duration = stream_duration(container, stream)
+    if duration is None:
+        return None
+    return _StreamInfo(stream.index, duration, stream_start(container, stream))
 
 
 def _probe_source(data: Video | Audio) -> _Source:
@@ -150,11 +126,12 @@ class _VideoSampler:
         assert source.video is not None
         self.timeline = source.data.timeline
         self.duration = source.video.duration
+        self.start = source.video.start
         self.width, self.height = cell_size
         self.container = av.open(str(source.data.path))
         self.stream = self.container.streams[source.video.index]
         self._frames = iter(self.container.decode(self.stream))
-        self._origin: float | None = None
+        self._origin = container_origin(self.container)
         self._previous: tuple[float, av.VideoFrame] | None = None
         try:
             self._current = self._next_frame()
@@ -180,7 +157,7 @@ class _VideoSampler:
     def _local_time(self, experiment_time: float) -> float | None:
         """Where this moment sits in the recording, if the recording holds it."""
         local_time = self.timeline.to_local_time(experiment_time)
-        if local_time is None or not 0.0 <= local_time < self.duration:
+        if not self.start <= local_time < self.start + self.duration:
             return None
         return local_time
 
@@ -266,15 +243,13 @@ class _SynchronizedAudio:
         self,
         source: _Source,
         output_start: float,
-        output_duration: float,
     ) -> None:
         assert source.audio is not None
         self.container = av.open(str(source.data.path))
         self.stream = self.container.streams[source.audio.index]
         self._frames = self._filtered_frames(
-            _segments(source.data.timeline, source.audio.duration),
-            output_start,
-            output_duration,
+            source.data.timeline.to_experiment_time(source.audio.start) - output_start,
+            source.data.timeline.rate,
         )
         self._fifo = av.AudioFifo()
         self._finished = False
@@ -285,75 +260,38 @@ class _SynchronizedAudio:
 
     def _filtered_frames(
         self,
-        segments: list[_Segment],
-        output_start: float,
-        output_duration: float,
+        delay: float,
+        rate: float = 1.0,
     ) -> Iterator[av.AudioFrame]:
         graph = av.filter.Graph()
         input_filter = graph.add_abuffer(template=self.stream)
-        if len(segments) == 1:
-            branches = [input_filter]
-        else:
-            split = graph.add("asplit", str(len(segments)))
-            input_filter.link_to(split)
-            branches = [split] * len(segments)
-
-        delayed = []
-        for index, (branch, segment) in enumerate(zip(branches, segments)):
-            trim = graph.add(
-                "atrim",
-                f"start={_number(segment.local_start)}:"
-                f"end={_number(segment.local_end)}",
-            )
-            if len(segments) == 1:
-                branch.link_to(trim)
-            else:
-                branch.link_to(trim, output_idx=index)
-            chain = [trim, graph.add("asetpts", "PTS-STARTPTS")]
-            delay_samples = max(
-                0,
-                round((segment.experiment_start - output_start) * _AUDIO_SAMPLE_RATE),
-            )
-            chain.extend(
-                [
-                    graph.add("aresample", str(_AUDIO_SAMPLE_RATE)),
-                    graph.add(
-                        "aformat",
-                        "sample_fmts=fltp:sample_rates="
-                        f"{_AUDIO_SAMPLE_RATE}:channel_layouts=stereo",
-                    ),
-                    graph.add("adelay", f"delays={delay_samples}S:all=1"),
-                ]
-            )
-            _link_chain(chain)
-            delayed.append(chain[-1])
-
-        silence = graph.add("anullsrc", f"r={_AUDIO_SAMPLE_RATE}:cl=stereo")
-        silence_trim = graph.add("atrim", f"duration={_number(output_duration)}")
-        silence_pts = graph.add("asetpts", "PTS-STARTPTS")
-        _link_chain([silence, silence_trim, silence_pts])
-        mix = graph.add(
-            "amix",
-            f"inputs={len(delayed) + 1}:duration=first:"
-            "normalize=0:dropout_transition=0",
-        )
-        silence_pts.link_to(mix, input_idx=0)
-        for index, branch in enumerate(delayed, start=1):
-            branch.link_to(mix, input_idx=index)
-        output_trim = graph.add("atrim", f"duration={_number(output_duration)}")
-        output_pts = graph.add("asetpts", "PTS-STARTPTS")
+        chain = [
+            input_filter,
+            # Rebase the first decoded sample to zero while preserving later
+            # timestamp gaps.
+            graph.add("asetpts", "PTS-STARTPTS"),
+            # Materialise those gaps as silence on the recording's own clock.
+            graph.add(
+                "aresample",
+                f"{_AUDIO_SAMPLE_RATE}:async=1:min_hard_comp=0.001",
+            ),
+            graph.add(
+                "aformat",
+                "sample_fmts=fltp:sample_rates="
+                f"{_AUDIO_SAMPLE_RATE}:channel_layouts=stereo",
+            ),
+        ]
+        if rate != 1.0:
+            chain.append(graph.add("atempo", _number(1.0 / rate)))
+        delay_samples = max(0, round(delay * _AUDIO_SAMPLE_RATE))
+        chain.append(graph.add("adelay", f"delays={delay_samples}S:all=1"))
         sink = graph.add("abuffersink")
-        _link_chain([mix, output_trim, output_pts, sink])
+        chain.append(sink)
+        _link_chain(chain)
         graph.configure()
 
-        origin: float | None = None
         ended = False
         for frame in self.container.decode(self.stream):
-            if frame.pts is not None and frame.time_base is not None:
-                absolute_time = float(frame.pts * frame.time_base)
-                if origin is None:
-                    origin = absolute_time
-                frame.pts = round((absolute_time - origin) / float(frame.time_base))
             input_filter.push(frame)
             while True:
                 try:
@@ -441,7 +379,7 @@ def _render(
         for source in video_sources:
             samplers.append(_VideoSampler(source, cell_size))
         for source in audio_sources:
-            audio_readers.append(_SynchronizedAudio(source, output_start, duration))
+            audio_readers.append(_SynchronizedAudio(source, output_start))
         labels = (
             [_label_overlay(source.data.id, cell_size) for source in video_sources]
             if show_labels
@@ -601,12 +539,14 @@ def construct_video_grid(
             raise VideoGridError(f"input {source.data.id!r} has no usable video stream")
     audio_sources = [source for source in sources if source.audio is not None]
 
-    streams = [
-        (source.data.timeline, source.video.duration) for source in video_sources
-    ] + [(source.data.timeline, source.audio.duration) for source in audio_sources]
-    output_start = min(timeline.to_experiment_time(0.0) for timeline, _ in streams)
+    streams = [(source.data.timeline, source.video) for source in video_sources] + [
+        (source.data.timeline, source.audio) for source in audio_sources
+    ]
+    output_start = min(
+        timeline.to_experiment_time(stream.start) for timeline, stream in streams
+    )
     output_end = max(
-        timeline.to_experiment_time(duration) for timeline, duration in streams
+        timeline.to_experiment_time(stream.end) for timeline, stream in streams
     )
 
     column_count = columns or math.ceil(math.sqrt(len(videos)))

@@ -94,19 +94,22 @@ class _VideoAlignmentControls(QWidget):
         if self.video.timeline.offset == offset:
             return
         shared_timeline_time = (
-            self.viewer.current_time_seconds + self.video.timeline.offset
+            self.video.timeline.to_experiment_time(self.viewer.current_time_seconds)
             if self._preserve_timeline_on_offset_change
             else 0.0
         )
         self.video.timeline.offset = offset
-        video_time = shared_timeline_time - offset
+        video_time = self.video.timeline.to_local_time(shared_timeline_time)
         self.viewer.set_time_seconds(
             video_time, allow_negative=True, show_requested_time=True
         )
         self._show_timeline_state(shared_timeline_time)
 
     def _refresh_timeline_state(self, _frame: object = None) -> None:
-        self._show_timeline_state(self.viewer.current_time_seconds + self.offset())
+        shared_time = (
+            self.viewer.current_time_seconds * self.video.timeline.rate + self.offset()
+        )
+        self._show_timeline_state(shared_time)
 
     def _show_timeline_state(self, shared_timeline_time: float) -> None:
         active = round(shared_timeline_time, 3) != 0.0
@@ -151,7 +154,7 @@ class _VideoAlignmentCard(QWidget):
         # Reset to avoid out of sync errors (when user changes tab before confirming offset or adds new input)
         if self.load_error is None:
             self.viewer.set_time_seconds(
-                -video.timeline.offset,
+                video.timeline.to_local_time(0.0),
                 allow_negative=True,
                 show_requested_time=True,
             )
@@ -309,7 +312,9 @@ class AlignmentTab(BaseTab):
         return True
 
     def _set_offset_from_current_frame(self, source: _VideoAlignmentCard) -> None:
-        offset = round(-source.viewer.current_time_seconds, 3)
+        offset = round(
+            -source.viewer.current_time_seconds * source.video.timeline.rate, 3
+        )
         loaded_cards = [card for card in self.video_cards if card.loaded]
         message = QMessageBox(self)
         message.setWindowTitle("Zero current frame")
@@ -346,7 +351,7 @@ class AlignmentTab(BaseTab):
         for card in self.video_cards:
             if card.loaded:
                 card.viewer.set_time_seconds(
-                    seconds - card.video.timeline.offset,
+                    card.video.timeline.to_local_time(seconds),
                     allow_negative=True,
                     show_requested_time=True,
                 )
@@ -388,13 +393,13 @@ class AlignmentTab(BaseTab):
         primary = self._play_all_primary
         if primary is None:
             return
-        shared_timeline_time = (
-            primary.viewer.playback_time_seconds + primary.video.timeline.offset
+        shared_timeline_time = primary.video.timeline.to_experiment_time(
+            primary.viewer.playback_time_seconds
         )
         for card in self.video_cards:
             if card is not primary:
                 card.viewer.set_time_seconds(
-                    shared_timeline_time - card.video.timeline.offset,
+                    card.video.timeline.to_local_time(shared_timeline_time),
                     allow_negative=True,
                     show_requested_time=True,
                     sync_audio=False,
