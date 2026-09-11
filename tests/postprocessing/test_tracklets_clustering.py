@@ -15,6 +15,26 @@ def _embeddings_df(*rows: tuple[int, np.ndarray | None]) -> pd.DataFrame:
     )
 
 
+def test_aggregate_embeddings_empty_input_or_no_emb_column():
+    # empty input
+    embeddings = _embeddings_df()
+
+    aggregated = clustering._aggregate_embeddings(embeddings, video_id=None)
+
+    assert aggregated == {}
+
+    # no embedding column
+    embeddings = pd.DataFrame(
+        {
+            "frame_idx": [1, 2, 3],
+            "track_id": [1, 2, 3],
+        }
+    )
+
+    with pytest.raises(ValueError):
+        clustering._aggregate_embeddings(embeddings, video_id=None)
+
+
 def test_aggregate_embeddings_averages_per_tracklet_and_skips_missing_rows():
     embeddings = _embeddings_df(
         (1, np.array([1.0, 0.0])),
@@ -521,53 +541,56 @@ def test_cluster_tracklets_from_input_single_video_delegates_to_cluster_tracklet
 
 
 def test_cluster_tracklets_from_input_multi_video_delegates_to_cluster_tracklets():
-    face_embeddings = _embeddings_df(
+    face_embeddings1 = _embeddings_df(
         (1, np.array([1.0, 0.0])),
         (2, np.array([1.0, 0.0])),
     )
-    face_embeddings["video_id"] = ["video1", "video1"]
-    input = clustering.TrackletClusteringInput(
-        track_ids=[("video1", 1), ("video1", 2)],
-        face_embeddings=face_embeddings,
+    input1 = clustering.TrackletClusteringInput(
+        track_ids=[1, 2], face_embeddings=face_embeddings1, video_id="video1"
     )
 
-    result_from_input = clustering.cluster_tracklets_from_input(
-        [input],
+    face_embeddings2 = _embeddings_df(
+        (3, np.array([0.0, 1.0])),
+        (4, np.array([1.0, 0.0])),
+    )
+    body_embeddings2 = _embeddings_df(
+        (3, np.array([0.0, 1.0])),
+        (4, np.array([1.0, 0.0])),
+    )
+    input2 = clustering.TrackletClusteringInput(
+        track_ids=[3, 4],
+        face_embeddings=face_embeddings2,
+        body_embeddings=body_embeddings2,
+        video_id="video2",
+    )
+
+    result = clustering.cluster_tracklets_from_input(
+        [input1, input2],
         face_distance_threshold=0.1,
         body_distance_threshold=0.1,
         min_face_detections=1,
         min_body_detections=2,
     )
-    direct_result = clustering._cluster_tracklets(
-        tracklet_ids=[("video1", 1), ("video1", 2)],
-        face_embeddings=face_embeddings,
-        face_distance_threshold=0.1,
-        body_distance_threshold=0.1,
-        min_face_detections=1,
-        min_body_detections=2,
-    )
 
-    assert (
-        result_from_input.tracklet_id_to_person_id
-        == direct_result.tracklet_id_to_person_id
-    )
-    assert (
-        result_from_input.person_id_to_tracklet_ids
-        == direct_result.person_id_to_tracklet_ids
-    )
-    assert (
-        result_from_input.tracklet_body_embedding
-        == direct_result.tracklet_body_embedding
-    )
-    assert (
-        result_from_input.tracklet_face_embedding.keys()
-        == direct_result.tracklet_face_embedding.keys()
-    )
-    for tracklet_id in result_from_input.tracklet_face_embedding:
-        assert np.allclose(
-            result_from_input.tracklet_face_embedding[tracklet_id],
-            direct_result.tracklet_face_embedding[tracklet_id],
-        )
+    assert result.tracklet_id_to_person_id == {
+        ("video1", 1): 1,
+        ("video1", 2): 1,
+        ("video2", 3): 2,
+        ("video2", 4): 1,
+    }
+
+    assert result.person_id_to_tracklet_ids == {
+        1: [("video1", 1), ("video1", 2), ("video2", 4)],
+        2: [("video2", 3)],
+    }
+
+    assert set(result.tracklet_face_embedding) == {
+        ("video1", 1),
+        ("video1", 2),
+        ("video2", 3),
+        ("video2", 4),
+    }
+    assert set(result.tracklet_body_embedding) == {("video2", 3), ("video2", 4)}
 
 
 def test_cluster_tracklets_from_input_returns_an_empty_result_for_empty_input():

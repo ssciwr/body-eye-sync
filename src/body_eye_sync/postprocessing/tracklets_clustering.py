@@ -730,7 +730,9 @@ def cluster_tracklets_from_input(
         if video_id is None:
             raise ValueError("video_id must be provided for multi-video clustering")
 
-        all_tracklet_ids.add((str(video_id), int(tid)) for tid in video_input.track_ids)
+        all_tracklet_ids.update(
+            (str(video_id), int(tid)) for tid in video_input.track_ids
+        )
 
         if video_input.face_embeddings is not None:
             face_df = video_input.face_embeddings.copy()
