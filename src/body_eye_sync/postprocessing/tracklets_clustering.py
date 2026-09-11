@@ -195,8 +195,6 @@ def _aggregate_embeddings(
 
     for group_key, group in groups:
         emb_array = np.asarray(group[embedding_column].to_list(), dtype=np.float64)
-        if emb_array.size == 0:
-            continue
 
         mean_emb = emb_array.mean(axis=0)
 
