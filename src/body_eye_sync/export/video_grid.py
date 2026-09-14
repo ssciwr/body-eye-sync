@@ -247,22 +247,18 @@ class _SynchronizedAudio:
         assert source.audio is not None
         self.container = av.open(str(source.data.path))
         self.stream = self.container.streams[source.audio.index]
-        self._frames = self._filtered_frames(
-            source.data.timeline.to_experiment_time(source.audio.start) - output_start,
-            source.data.timeline.rate,
-        )
+        self._frames = self._filtered_frames(source.data.timeline.rate)
         self._fifo = av.AudioFifo()
         self._finished = False
+        # leading silence before this recording starts on the container clock:
+        delay = source.data.timeline.to_experiment_time(source.audio.start)
+        self._delay_samples = max(0, round((delay - output_start) * _AUDIO_SAMPLE_RATE))
 
     def close(self) -> None:
         self._frames.close()
         self.container.close()
 
-    def _filtered_frames(
-        self,
-        delay: float,
-        rate: float = 1.0,
-    ) -> Iterator[av.AudioFrame]:
+    def _filtered_frames(self, rate: float = 1.0) -> Iterator[av.AudioFrame]:
         graph = av.filter.Graph()
         input_filter = graph.add_abuffer(template=self.stream)
         chain = [
@@ -275,16 +271,16 @@ class _SynchronizedAudio:
                 "aresample",
                 f"{_AUDIO_SAMPLE_RATE}:async=1:min_hard_comp=0.001",
             ),
+        ]
+        if rate != 1.0:
+            chain.append(graph.add("atempo", _number(1.0 / rate)))
+        chain.append(
             graph.add(
                 "aformat",
                 "sample_fmts=fltp:sample_rates="
                 f"{_AUDIO_SAMPLE_RATE}:channel_layouts=stereo",
-            ),
-        ]
-        if rate != 1.0:
-            chain.append(graph.add("atempo", _number(1.0 / rate)))
-        delay_samples = max(0, round(delay * _AUDIO_SAMPLE_RATE))
-        chain.append(graph.add("adelay", f"delays={delay_samples}S:all=1"))
+            )
+        )
         sink = graph.add("abuffersink")
         chain.append(sink)
         _link_chain(chain)
@@ -314,21 +310,20 @@ class _SynchronizedAudio:
                 return
 
     def read(self, samples: int) -> np.ndarray:
+        silence = min(samples, self._delay_samples)
+        self._delay_samples -= silence
+        samples -= silence
         while self._fifo.samples < samples and not self._finished:
             try:
-                frame = next(self._frames)
-                frame.pts = None
-                self._fifo.write(frame)
+                self._fifo.write(next(self._frames))
             except StopIteration:
                 self._finished = True
-        frame = self._fifo.read(samples, partial=True)
+        frame = self._fifo.read(samples, partial=True) if samples else None
         if frame is None:
             data = np.empty((2, 0), dtype=np.float32)
         else:
             data = frame.to_ndarray().astype(np.float32, copy=False)
-        if data.shape[1] < samples:
-            data = np.pad(data, ((0, 0), (0, samples - data.shape[1])))
-        return data
+        return np.pad(data, ((0, 0), (silence, samples - data.shape[1])))
 
 
 def _compose_frame(
