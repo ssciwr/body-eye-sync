@@ -15,8 +15,14 @@ from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.export.video_grid import (
     OUTPUT_FPS,
     VideoGridCancelled,
+    _SynchronizedAudio,
     construct_video_grid,
 )
+
+AV_NOPTS_VALUE = -(
+    1 << 63
+)  # -9223372036854775808 is the ffmpeg "sentinel" for "no PTS" (not NO OP)
+# https://stackoverflow.com/questions/6044330/ffmpeg-c-what-are-pts-and-dts-what-does-this-code-block-do-in-ffmpeg-c
 
 
 def _encode(container, stream, frame) -> None:
@@ -132,6 +138,28 @@ def _frequency_magnitude(samples: np.ndarray, frequency: int) -> float:
     window = samples[24_000:72_000] * np.hanning(48_000)
     spectrum = np.abs(np.fft.rfft(window))
     return float(spectrum[frequency])
+
+
+def test_synchronized_audio_discards_unavailable_filter_timestamps():
+    reader = object.__new__(
+        _SynchronizedAudio
+    )  # bypass ffmpeg set up / # inject ffmpeg result directly
+
+    frame = _tone(440, 0, 1024)
+    frame.pts = AV_NOPTS_VALUE + 2048
+    # Now test the FIFO reader works
+    reader._fifo, reader._finished, reader._frames = (
+        av.AudioFifo(),
+        False,
+        iter([frame]),
+    )
+    # .. and then outputs without the PTS but with the audio samples, due to the boundary fix:
+    samples = reader.read(1024)
+    assert (
+        samples.shape == (1, 1024)
+        and np.isfinite(samples).all()
+        and np.max(np.abs(samples)) > 0.1
+    )
 
 
 def test_construct_video_grid_synchronizes_25_and_50_fps_video_and_audio(tmp_path):
