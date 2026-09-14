@@ -27,23 +27,6 @@ class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class TimeShiftConfig(_Model):
-    """A stretch of a recording that was never written.
-
-    Some devices stall briefly and carry on without it, so everything after
-    sits earlier on their own clock than it does in the room. ``at`` is where
-    that happens on the recording's own clock and ``seconds`` is how much is
-    missing, which is added to the offset from there on.
-    """
-
-    at: float = Field(
-        description="Where the loss falls on the recording's own clock, in seconds."
-    )
-    seconds: float = Field(
-        gt=0, description="How much content is missing there, in seconds."
-    )
-
-
 class TimelineConfig(_Model):
     """Where one recording sits on the experiment's shared clock."""
 
@@ -54,9 +37,15 @@ class TimelineConfig(_Model):
             "experiment timeline."
         ),
     )
-    shifts: list[TimeShiftConfig] = Field(
-        default_factory=list,
-        description="Content the recording lost partway through, if any.",
+    rate: float = Field(
+        1.0,
+        gt=0,
+        description=(
+            "Experiment seconds per second of this input's own clock. Every "
+            "device counts time on its own crystal, and two of them differ by "
+            "tens of parts per million, which is tens of milliseconds across a "
+            "long recording."
+        ),
     )
 
 

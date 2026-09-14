@@ -1,4 +1,4 @@
-"""Prepare an experiment's inputs for the pipeline, e.g. aligning them and applying timing corrections."""
+"""Prepare an experiment's inputs for the pipeline, e.g. aligning them and correcting their clock rates."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import Video
 from body_eye_sync.preprocessing.alignment import Alignment, align_media
-from body_eye_sync.preprocessing.timing_correction import TimingCorrectionAnalysis
+from body_eye_sync.preprocessing.clock_rate import ClockRateAnalysis
 
 Progress = Callable[[float], bool]
 
@@ -35,41 +35,45 @@ def align_experiment(
     return alignment
 
 
-def apply_timing_corrections(
-    experiment: Experiment, analysis: TimingCorrectionAnalysis
-) -> list[str]:
-    """Write an analysis' corrections onto the inputs, returning the ids changed.
+def apply_clock_rates(experiment: Experiment, analysis: ClockRateAnalysis) -> list[str]:
+    """Write an analysis' findings onto the inputs, returning the ids changed.
 
-    Only inputs that actually need a correction are modified.
+    Significant drift fits replace the whole timeline. Successfully measured
+    inputs without significant drift keep their alignment offset and return to
+    a unit rate, clearing a correction an earlier analysis applied.
     """
     inputs = recordings(experiment)
-    corrected = {
-        name: fit
-        for name, fit in analysis.fits.items()
-        if fit.timeline.corrects_timing and name in inputs
-    }
-    for name, fit in corrected.items():
+    changed = []
+    for name in analysis.points.keys() | analysis.fits.keys():
+        if name not in inputs:
+            continue
         data = inputs[name]
-        data.timeline.offset = fit.timeline.offset
-        data.timeline.shifts = list(fit.timeline.shifts)
-    return list(corrected)
+        fit = analysis.fits.get(name)
+        offset = data.timeline.offset if fit is None else fit.offset
+        rate = 1.0 if fit is None else fit.rate
+        if (data.timeline.offset, data.timeline.rate) == (offset, rate):
+            continue
+        data.timeline.offset = offset
+        data.timeline.rate = rate
+        changed.append(name)
+    return changed
 
 
-def has_timing_corrections(experiment: Experiment) -> bool:
-    """Whether any input carries lost content to clear."""
-    return any(data.timeline.shifts for data in recordings(experiment).values())
+def has_corrected_clock_rates(experiment: Experiment) -> bool:
+    """Whether any input carries a clock-rate correction to clear."""
+    return any(data.timeline.corrects_drift for data in recordings(experiment).values())
 
 
-def clear_timing_corrections(experiment: Experiment) -> list[str]:
-    """Drop every input's gaps, returning the ids changed.
+def clear_clock_rates(experiment: Experiment) -> list[str]:
+    """Drop every input's clock-rate correction, returning the ids changed.
 
     The offsets are left as they are: those say where each recording starts,
     which alignment worked out, and are not this correction's to undo.
     """
     cleared = []
     for name, data in recordings(experiment).items():
-        if not data.timeline.shifts:
+        if not data.timeline.corrects_drift:
             continue
-        data.timeline.shifts = []
+        data.timeline.rate = 1.0
         cleared.append(name)
     return cleared

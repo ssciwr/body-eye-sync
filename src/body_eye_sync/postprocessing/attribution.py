@@ -40,16 +40,6 @@ def _continue(progress: Callable[[float], bool] | None, value: float) -> None:
         raise AttributionCancelled
 
 
-def _to_experiment_times(local_times: np.ndarray, timeline: Timeline) -> np.ndarray:
-    """Move an array of local times onto a recording's experiment clock."""
-    local_times = np.asarray(local_times, dtype=float)
-    return np.fromiter(
-        (timeline.to_experiment_time(time) for time in local_times.flat),
-        dtype=float,
-        count=local_times.size,
-    ).reshape(local_times.shape)
-
-
 def envelope(path: str | Path) -> np.ndarray:
     """How loud a recording is over time, in dB, one value every _HOP_SECONDS ms."""
     samples = load_audio(path, SAMPLE_RATE)
@@ -135,7 +125,7 @@ def measure_levels(
         timeline = timelines.get(name, Timeline())
         local = np.arange(levels.size) * _HOP_SECONDS + _HOP_SECONDS / 2
         measured[name] = (
-            _to_experiment_times(local, timeline),
+            timeline.to_experiment_times(local),
             levels,
         )
     if not measured:
@@ -191,8 +181,8 @@ def _on_experiment_clock(
     columns: tuple[str, str] = ("start", "end"),
 ) -> np.ndarray:
     """A table's start/end columns, moved onto the experiment clock."""
-    return _to_experiment_times(
-        table[list(columns)].to_numpy().ravel(), timeline
+    return timeline.to_experiment_times(
+        table[list(columns)].to_numpy().ravel()
     ).reshape(-1, 2)
 
 

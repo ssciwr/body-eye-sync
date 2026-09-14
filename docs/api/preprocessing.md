@@ -7,9 +7,9 @@ over them.
 
 ::: body_eye_sync.preprocessing.alignment
 
-## Timing Correction
+## Clock Rate
 
-::: body_eye_sync.preprocessing.timing_correction
+::: body_eye_sync.preprocessing.clock_rate
 
 ## Audio
 

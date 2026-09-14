@@ -1,4 +1,4 @@
-"""Timing correction tab: correct gaps on every input timeline."""
+"""Clock rate tab: measure each input's clock rate against the others."""
 
 from __future__ import annotations
 
@@ -25,50 +25,38 @@ from qtpy.QtWidgets import (
 )
 
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.timeline import Shift, Timeline
+from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.experiment.preprocess import (
-    apply_timing_corrections,
-    clear_timing_corrections,
-    has_timing_corrections,
+    apply_clock_rates,
+    clear_clock_rates,
+    has_corrected_clock_rates,
 )
 from body_eye_sync.gui.tabs.base import BaseTab
 from body_eye_sync.gui.widgets.auto_height_table import AutoHeightTable
-from body_eye_sync.preprocessing.timing_correction import (
-    DEFAULT_MIN_SHIFT,
+from body_eye_sync.media import media_duration
+from body_eye_sync.preprocessing.clock_rate import (
     DEFAULT_SEARCH,
     DEFAULT_WINDOW,
+    MIN_DRIFT_PPM,
     SPECTRAL_MIN_QUALITY,
-    TimingCorrectionAnalysis,
-    TimingCorrectionCancelled,
-    analyse_timing_corrections,
-    media_duration,
+    ClockRateAnalysis,
+    ClockRateAnalysisCancelled,
+    analyse_clock_rates,
 )
 
-_ID, _OFFSET, _GAPS = range(3)
-_COLUMNS = ["Id", "Offset", "Gaps"]
+_ID, _OFFSET, _DRIFT = range(3)
+_COLUMNS = ["Id", "Offset", "Clock drift"]
 
-_LABEL = "Analysing timing…"
+_LABEL = "Analysing clock rates…"
 
 
 def _offset_text(offset: float) -> str:
     return f"{offset:+.3f} s"
 
 
-def _gaps_text(shifts: list[Shift]) -> str:
-    return (
-        ", ".join(f"{shift.at:.1f}s: {shift.seconds * 1000:.0f}ms" for shift in shifts)
-        or "0"
-    )
-
-
-def _line_times(duration: float, shifts: list[Shift]) -> np.ndarray:
-    """Local times spanning a recording, with points either side of each gap."""
-    epsilon = max(1e-6, duration * 1e-9)
-    times = [0.0, duration]
-    for shift in shifts:
-        if 0.0 < shift.at < duration:
-            times.extend([max(0.0, shift.at - epsilon), shift.at])
-    return np.asarray(sorted(set(times)))
+def _drift_text(timeline: Timeline) -> str:
+    """One recording's clock rate, as parts per million."""
+    return "0" if not timeline.corrects_drift else f"{timeline.drift_ppm:+.1f} ppm"
 
 
 def _setting_spin(low: float, high: float, value: float) -> QDoubleSpinBox:
@@ -83,7 +71,7 @@ def _setting_spin(low: float, high: float, value: float) -> QDoubleSpinBox:
 
 
 class _Worker(QObject):
-    """Run one timing task without blocking Qt's event loop."""
+    """Run one clock-rate analysis without blocking Qt's event loop."""
 
     progress = Signal(int)
     finished = Signal(object)
@@ -116,13 +104,13 @@ class _Worker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            result = analyse_timing_corrections(
+            result = analyse_clock_rates(
                 self._paths,
                 self._offsets,
                 progress=self._progress,
                 **self._settings,
             )
-        except TimingCorrectionCancelled:
+        except ClockRateAnalysisCancelled:
             self.cancelled.emit()
         except Exception as exc:
             self.failed.emit(str(exc), traceback.format_exc())
@@ -133,30 +121,30 @@ class _Worker(QObject):
                 self.finished.emit(result)
 
 
-class TimingCorrectionTab(BaseTab):
-    """Recalculate and apply offsets and recording gaps."""
+class ClockRateTab(BaseTab):
+    """Recalculate and apply each input's offset and clock rate."""
 
-    title = "Timing correction"
+    title = "Clock rate"
 
     def __init__(self, experiment: Experiment) -> None:
         super().__init__(experiment)
         self._thread: threading.Thread | None = None
         self._worker: _Worker | None = None
-        self._analysis: TimingCorrectionAnalysis | None = None
+        self._analysis: ClockRateAnalysis | None = None
         self._analysis_signature: tuple | None = None
 
         self.table = AutoHeightTable(_COLUMNS)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(
-            _GAPS, QHeaderView.ResizeMode.Stretch
+            _DRIFT, QHeaderView.ResizeMode.Stretch
         )
 
-        self.correct_button = QPushButton("Analyse and correct timing")
+        self.correct_button = QPushButton("Analyse and correct clock rates")
         self.correct_button.clicked.connect(self._start_correction)
         self.clear_button = QPushButton("Clear corrections")
         self.clear_button.setToolTip(
-            "Reset every input's gaps, leaving the offsets alone"
+            "Reset every input's clock rate, leaving the offsets alone"
         )
         self.clear_button.clicked.connect(self._clear_corrections)
         self.window_spin = _setting_spin(2.0, 120.0, DEFAULT_WINDOW)
@@ -167,18 +155,20 @@ class TimingCorrectionTab(BaseTab):
         )
         self.min_quality_spin = _setting_spin(1.0, 30.0, SPECTRAL_MIN_QUALITY)
         self.min_quality_spin.setToolTip(
-            "Quality gate: higher values require a stronger signal to identify a gap."
+            "Quality gate: higher values require a stronger signal to measure a lag."
         )
-        self.min_gap_spin = _setting_spin(10.0, 500.0, 1000 * DEFAULT_MIN_SHIFT)
-        self.min_gap_spin.setDecimals(0)
-        self.min_gap_spin.setSingleStep(10.0)
-        self.min_gap_spin.setToolTip("The smallest allowed gap size in milliseconds.")
+        self.min_drift_spin = _setting_spin(0.5, 50.0, MIN_DRIFT_PPM)
+        self.min_drift_spin.setDecimals(1)
+        self.min_drift_spin.setSingleStep(0.5)
+        self.min_drift_spin.setToolTip(
+            "The smallest clock difference worth correcting, in parts per million."
+        )
         settings_form = QFormLayout()
         settings_form.setContentsMargins(0, 0, 0, 0)
         settings_form.addRow("Window (s)", self.window_spin)
         settings_form.addRow("Search (s)", self.search_spin)
         settings_form.addRow("Min quality", self.min_quality_spin)
-        settings_form.addRow("Min gap (ms)", self.min_gap_spin)
+        settings_form.addRow("Min drift (ppm)", self.min_drift_spin)
         self.settings_widget = QWidget()
         self.settings_widget.setLayout(settings_form)
 
@@ -224,7 +214,7 @@ class TimingCorrectionTab(BaseTab):
                 name,
                 str(data.path),
                 data.timeline.offset,
-                tuple((shift.at, shift.seconds) for shift in data.timeline.shifts),
+                data.timeline.rate,
             )
             for name, data in self._inputs().items()
         )
@@ -258,7 +248,7 @@ class TimingCorrectionTab(BaseTab):
             values = [
                 data.id,
                 _offset_text(data.timeline.offset),
-                _gaps_text(data.timeline.shifts),
+                _drift_text(data.timeline),
             ]
             if data.id in unavailable:
                 values[2] = "Couldn't match"
@@ -275,7 +265,7 @@ class TimingCorrectionTab(BaseTab):
         return self._thread is not None
 
     def _clear_corrections(self) -> None:
-        if self._thread is not None or not clear_timing_corrections(self.experiment):
+        if self._thread is not None or not clear_clock_rates(self.experiment):
             return
         self._analysis = None
         self._analysis_signature = None
@@ -283,7 +273,7 @@ class TimingCorrectionTab(BaseTab):
         self._draw_stored_corrections()
         self._update_buttons(False)
         self.experiment_changed.emit()
-        self.status_message.emit("Timing corrections cleared")
+        self.status_message.emit("Clock-rate corrections cleared")
 
     def _start_correction(self) -> None:
         if self._thread is not None:
@@ -310,27 +300,28 @@ class TimingCorrectionTab(BaseTab):
         self.progress_changed.emit(percent, 100, _LABEL)
 
     @Slot(object)
-    def _on_correction_finished(self, analysis: TimingCorrectionAnalysis) -> None:
-        corrected = apply_timing_corrections(self.experiment, analysis)
+    def _on_correction_finished(self, analysis: ClockRateAnalysis) -> None:
+        changed = apply_clock_rates(self.experiment, analysis)
         self._analysis = analysis
         self._analysis_signature = self._timeline_signature()
         self._refresh_table()
 
-        if corrected:
-            self._draw_corrections(
-                {name: fit.timeline for name, fit in analysis.fits.items()}, analysis
-            )
-            self._show_plot(True)
+        self._draw_corrections(
+            {name: data.timeline for name, data in self._inputs().items()}, analysis
+        )
+        self._show_plot(True)
+        if changed:
             self.experiment_changed.emit()
-            self.status_message.emit(f"Corrected gaps in {len(corrected)} input(s)")
+            self.status_message.emit(
+                f"Updated the clock rate of {len(changed)} input(s)"
+            )
         else:
-            self._draw_stored_corrections()
-            self.status_message.emit("No gaps detected")
+            self.status_message.emit("No clock-rate changes detected")
         self._set_running(False)
 
     def _draw_stored_corrections(self) -> None:
         timelines = {name: data.timeline for name, data in self._inputs().items()}
-        if not any(timeline.corrects_timing for timeline in timelines.values()):
+        if not any(timeline.corrects_drift for timeline in timelines.values()):
             self._show_plot(False)
             return
         self._draw_corrections(timelines)
@@ -339,30 +330,25 @@ class TimingCorrectionTab(BaseTab):
     def _draw_corrections(
         self,
         timelines: dict[str, Timeline],
-        analysis: TimingCorrectionAnalysis | None = None,
+        analysis: ClockRateAnalysis | None = None,
     ) -> None:
         self.figure.clear()
         axis = self.figure.subplots()
         inputs = self._inputs()
         for index, (name, timeline) in enumerate(timelines.items()):
-            if not timeline.corrects_timing or name not in inputs:
+            if name not in inputs:
                 continue
             points = analysis.points.get(name, []) if analysis is not None else []
+            if not points and not timeline.corrects_drift:
+                continue
             if points:
                 measured_experiment = np.asarray([point.time for point in points])
                 measured_offset = np.asarray([point.offset for point in points])
                 local = measured_experiment - measured_offset
             else:
-                duration = media_duration(inputs[name].path)
-                if duration is None:
-                    duration = (
-                        max((shift.at for shift in timeline.shifts), default=3600.0)
-                        + 60.0
-                    )
-                local = _line_times(duration, timeline.shifts)
-            fitted = np.asarray(
-                [timeline.to_experiment_time(float(time)) for time in local]
-            )
+                duration = media_duration(inputs[name].path) or 3600.0
+                local = np.asarray([0.0, duration])
+            fitted = timeline.to_experiment_times(local)
             experiment = measured_experiment if points else fitted
             fitted_offset = fitted - local
             colour = f"C{index}"
@@ -388,10 +374,21 @@ class TimingCorrectionTab(BaseTab):
             label=(
                 f"{analysis.reference} (reference)"
                 if analysis is not None
-                else "No timing correction"
+                else "No clock drift"
             ),
         )
-        axis.set_title("Applied timeline corrections")
+        corrected = any(
+            timeline.corrects_drift
+            for name, timeline in timelines.items()
+            if name in inputs
+        )
+        if analysis is None:
+            title = "Applied clock-rate corrections"
+        elif corrected:
+            title = "Measured offsets and applied clock-rate corrections"
+        else:
+            title = "Measured offsets: no clock-rate correction needed"
+        axis.set_title(title)
         axis.set_xlabel("Experiment time (minutes)")
         axis.set_ylabel("Offset change from recording start (ms)")
         axis.grid(alpha=0.25)
@@ -402,17 +399,17 @@ class TimingCorrectionTab(BaseTab):
     def _on_failed(self, message: str, details: str) -> None:
         dialog = QMessageBox(self)
         dialog.setIcon(QMessageBox.Icon.Critical)
-        dialog.setWindowTitle("Timing correction failed")
+        dialog.setWindowTitle("Clock-rate analysis failed")
         dialog.setText(message)
         dialog.setDetailedText(details)
         dialog.exec()
-        self.status_message.emit("Could not complete timing correction")
+        self.status_message.emit("Could not complete the clock-rate analysis")
         self._draw_stored_corrections()
         self._set_running(False)
 
     @Slot()
     def _on_cancelled(self) -> None:
-        self.status_message.emit("Timing correction cancelled")
+        self.status_message.emit("Clock-rate analysis cancelled")
         self._draw_stored_corrections()
         self._set_running(False)
 
@@ -429,12 +426,12 @@ class TimingCorrectionTab(BaseTab):
             "window": self.window_spin.value(),
             "search": self.search_spin.value(),
             "min_quality": self.min_quality_spin.value(),
-            "min_shift": self.min_gap_spin.value() / 1000.0,
+            "min_drift_ppm": self.min_drift_spin.value(),
         }
 
     def _update_buttons(self, running: bool) -> None:
         self.settings_widget.setEnabled(not running)
         self.correct_button.setEnabled(not running and len(self._inputs()) >= 2)
         self.clear_button.setEnabled(
-            not running and has_timing_corrections(self.experiment)
+            not running and has_corrected_clock_rates(self.experiment)
         )

@@ -15,11 +15,10 @@ from body_eye_sync.experiment.config import (
     ObjectTrackingStep,
     Pipeline,
     TimelineConfig,
-    TimeShiftConfig,
     VideoPipeline,
 )
 from body_eye_sync.experiment.experiment import Experiment
-from body_eye_sync.experiment.timeline import Shift, Timeline
+from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo
 from body_eye_sync.pipeline.transcription import TranscriptSegment, Word
 
@@ -493,35 +492,32 @@ def test_newer_file_version_rejected(tmp_path):
         Experiment.load(tmp_path)
 
 
-def test_time_shifts_survive_a_save_and_load(tmp_path):
+def test_clock_rates_survive_a_save_and_load(tmp_path):
     exp = Experiment(_config(audio=[AudioInput(id="mic1", path="p1.wav")]), tmp_path)
     exp.glasses_videos[0].timeline.offset = 12.5
-    exp.glasses_videos[0].timeline.shifts = [Shift(at=100.0, seconds=0.4)]
+    exp.glasses_videos[0].timeline.rate = 1.0000474
     exp.save()
 
     reloaded = Experiment.load(tmp_path)
 
     video = reloaded.glasses_videos[0]
     assert video.timeline.offset == pytest.approx(12.5)
-    assert [(s.at, s.seconds) for s in video.timeline.shifts] == [(100.0, 0.4)]
+    assert video.timeline.rate == pytest.approx(1.0000474)
     # An input that kept time stores nothing extra.
-    assert reloaded.audio[0].timeline.shifts == []
+    assert reloaded.audio[0].timeline.rate == 1.0
 
 
 def test_an_input_places_its_own_clock_on_the_experiment(tmp_path):
     exp = Experiment(_config(), tmp_path)
     video = exp.glasses_videos[0]
     video.timeline.offset = 20.0
-    video.timeline.shifts = [Shift(at=100.0, seconds=0.4)]
+    video.timeline.rate = 1.0001  # its clock gains 100 ms every 1000 seconds
 
-    # Before the loss only the offset applies; after it, the missing content too.
-    assert video.timeline.to_experiment_time(50.0) == pytest.approx(70.0)
-    assert video.timeline.to_experiment_time(150.0) == pytest.approx(170.4)
-    # And back again.
-    assert video.timeline.to_local_time(170.4) == pytest.approx(150.0)
-    # The experiment ran on through the loss; this video has nothing for it.
-    assert video.timeline.to_local_time(120.2) is None
-    assert video.timeline.unobserved() == [pytest.approx((120.0, 120.4))]
+    assert video.timeline.to_experiment_time(50.0) == pytest.approx(70.005)
+    assert video.timeline.to_experiment_time(1000.0) == pytest.approx(1020.1)
+    assert video.timeline.to_local_time(1020.1) == pytest.approx(1000.0)
+    assert video.timeline.corrects_drift
+    assert video.timeline.drift_ppm == pytest.approx(100.0)
 
 
 def test_an_input_that_kept_time_is_just_its_offset(tmp_path):
@@ -531,9 +527,10 @@ def test_an_input_that_kept_time_is_just_its_offset(tmp_path):
 
     assert video.timeline.to_experiment_time(30.0) == pytest.approx(37.0)
     assert video.timeline.to_local_time(37.0) == pytest.approx(30.0)
-    assert video.timeline.unobserved() == []
+    assert not video.timeline.corrects_drift
+    assert video.timeline.drift_ppm == pytest.approx(0.0)
 
 
-def test_serialised_missing_content_duration_must_be_positive():
+def test_a_serialised_clock_rate_must_be_positive():
     with pytest.raises(ValidationError):
-        TimeShiftConfig(at=10.0, seconds=-0.1)
+        TimelineConfig(rate=0.0)

@@ -10,18 +10,18 @@ from __future__ import annotations
 from body_eye_sync.gui.tabs.alignment import AlignmentTab
 from body_eye_sync.gui.tabs.audio_processing import AudioProcessingTab
 from body_eye_sync.gui.tabs.base import BaseTab, PlaceholderTab
+from body_eye_sync.gui.tabs.clock_rate import ClockRateTab
 from body_eye_sync.gui.tabs.data_export import DataExportTab
 from body_eye_sync.gui.tabs.input_files import InputFilesTab
 from body_eye_sync.gui.tabs.post_processing import PostProcessingTab
 from body_eye_sync.gui.tabs.speech_post_processing import SpeechPostProcessingTab
-from body_eye_sync.gui.tabs.timing_correction import TimingCorrectionTab
 from body_eye_sync.gui.tabs.video_processing import VideoProcessingTab
 
 # The tabs in the order that they should be displayed
 TAB_TYPES: tuple[type[BaseTab], ...] = (
     InputFilesTab,
     AlignmentTab,
-    TimingCorrectionTab,
+    ClockRateTab,
     VideoProcessingTab,
     AudioProcessingTab,
     SpeechPostProcessingTab,
@@ -34,11 +34,11 @@ __all__ = [
     "AlignmentTab",
     "AudioProcessingTab",
     "BaseTab",
+    "ClockRateTab",
     "DataExportTab",
     "InputFilesTab",
     "PlaceholderTab",
     "PostProcessingTab",
     "SpeechPostProcessingTab",
-    "TimingCorrectionTab",
     "VideoProcessingTab",
 ]

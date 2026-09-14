@@ -135,7 +135,7 @@ def test_timeline_is_nested_in_the_serialised_input():
         timeline=TimelineConfig(offset=1.25),
     ).model_dump(mode="json")
 
-    assert stored["timeline"] == {"offset": 1.25, "shifts": []}
+    assert stored["timeline"] == {"offset": 1.25, "rate": 1.0}
     assert "time_offset" not in stored
 
 

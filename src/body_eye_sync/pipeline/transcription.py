@@ -15,11 +15,11 @@ from typing import Iterable, Iterator
 import pandas as pd
 
 from body_eye_sync.pipeline.model_cache import model_cache_dir
-from body_eye_sync.preprocessing.audio import SAMPLE_RATE, load_audio
 from body_eye_sync.pipeline.whisper_model import (
     download_whisper_model,
     resolve_whisper_model,
 )
+from body_eye_sync.preprocessing.audio import SAMPLE_RATE, load_audio
 
 #: Columns of the transcribed segments table, one row per stretch of speech.
 SEGMENT_COLUMNS = ["segment_id", "start", "end", "text"]
@@ -173,7 +173,7 @@ def transcribe(
         download_root=str(model_cache_dir()),
     )
     segments, _ = model.transcribe(
-        str(audio_path),
+        load_audio(audio_path),
         language=language,
         beam_size=beam_size,
         vad_filter=vad_filter,

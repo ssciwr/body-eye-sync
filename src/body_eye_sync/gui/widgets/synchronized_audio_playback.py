@@ -26,7 +26,7 @@ from body_eye_sync.experiment.video import Video
 from body_eye_sync.gui.utils import get_color
 from body_eye_sync.gui.widgets.audio_playback import _loudness_envelope
 from body_eye_sync.gui.widgets.playback_controls import PlaybackControls
-from body_eye_sync.preprocessing.timing_correction import media_duration
+from body_eye_sync.media import media_duration
 
 _RECORDING_COLOR_IDS = (0, 6, 3, 9, 18, 10, 5, 7, 13, 15, 1, 8, 17, 19)
 
@@ -200,7 +200,7 @@ class SynchronizedAudioPlaybackWidget(QWidget):
                 data.id,
                 str(data.path),
                 data.timeline.offset,
-                tuple((shift.at, shift.seconds) for shift in data.timeline.shifts),
+                data.timeline.rate,
             )
             for data in recordings
         )
@@ -308,6 +308,7 @@ class SynchronizedAudioPlaybackWidget(QWidget):
             player = QMediaPlayer(self)
             player.setAudioOutput(output)
             player.setSource(QUrl.fromLocalFile(str(track.path.resolve())))
+            player.setPlaybackRate(1.0 / track.data.timeline.rate)
             track.output = output
             track.player = player
 
