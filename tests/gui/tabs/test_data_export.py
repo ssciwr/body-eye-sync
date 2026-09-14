@@ -10,6 +10,7 @@ from body_eye_sync.experiment.config import (
     FixedVideoInput,
 )
 from body_eye_sync.experiment.experiment import Experiment
+from body_eye_sync.export.layout import LayoutKind
 from body_eye_sync.export.video_grid import VideoGridResult
 from body_eye_sync.gui.tabs.data_export import DataExportTab
 
@@ -125,6 +126,8 @@ def test_export_passes_selection_and_merged_audio_to_backend(
             output,
             {
                 "input_ids": ["room", "microphone"],
+                "layout": LayoutKind.grid,
+                "video_ids": ["room"],
                 "include_merged_audio": True,
                 "overwrite": True,
                 "progress": calls[0][2]["progress"],
@@ -227,3 +230,50 @@ def test_a_failed_annotation_write_does_not_hide_the_video(
     assert output.exists()
     assert "Exported combined video" in messages[-1]
     assert "could not write speech annotations: disk full" in messages[-1]
+
+
+def test_only_the_selected_videos_fill_the_layout(tab):
+    assert tab.layout_editor.slots() == ["room", "side"]
+
+    _item(tab, "room").setCheckState(Qt.CheckState.Unchecked)
+
+    assert tab.layout_editor.slots() == ["side"]
+
+
+def test_the_chosen_layout_and_its_slots_reach_the_export(
+    qtbot, tab, tmp_path, monkeypatch
+):
+    output = tmp_path / "chosen.mp4"
+    tab.layout_editor.set_layout_kind("4+1")
+    monkeypatch.setattr(
+        "body_eye_sync.gui.tabs.data_export.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(output), "MP4 video (*.mp4)"),
+    )
+    calls = []
+
+    def export(experiment, path, **kwargs):
+        calls.append(kwargs)
+        return _result(path)
+
+    monkeypatch.setattr(
+        "body_eye_sync.gui.tabs.data_export.construct_video_grid", export
+    )
+
+    tab.export_button.click()
+    qtbot.waitUntil(lambda: not tab.is_busy())
+
+    assert calls[0]["layout"] is LayoutKind.four_plus_one
+    assert calls[0]["video_ids"] == ["room", "side", None, None, None]
+
+
+def test_a_layout_with_every_slot_emptied_has_nothing_to_export(tab):
+    for box in tab.layout_editor.boxes:
+        box.combo.setCurrentIndex(box.combo.findText("(empty)"))
+
+    assert tab.layout_editor.slots() == [None, None]
+    assert not tab.export_button.isEnabled()
+
+    first = tab.layout_editor.boxes[0]
+    first.combo.setCurrentIndex(first.combo.findText("room"))
+
+    assert tab.export_button.isEnabled()
