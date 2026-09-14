@@ -174,6 +174,8 @@ def test_run_transcription_populates_the_results_and_the_table(qtbot, tab):
     assert tab.transcript_table.item(1, 2).text() == "hi"
     assert tab.summary_label.text() == "3 segment(s), 4 word(s)"
     assert not tab.cancel_button.isVisibleTo(tab)
+    # Attribution compares recordings by loudness, measured here with the transcript.
+    assert not tab.input().loudness.data.empty
 
 
 def test_transcript_segments_are_shown_as_they_arrive(qtbot, tab, monkeypatch):

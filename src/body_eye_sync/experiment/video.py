@@ -13,6 +13,7 @@ from body_eye_sync.experiment.embeddings import (
     read_embeddings,
     write_embeddings,
 )
+from body_eye_sync.experiment.loudness import Loudness
 from body_eye_sync.experiment.speech import Speech
 from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.pipeline.object_tracking import BoundingBox, tracks_to_dataframe
@@ -55,8 +56,8 @@ class Video:
     per frame and folding its columns onto the matching rows in
     :meth:`finish_face_detection`. Body-pose detection follows the same pattern.
 
-    A camera also records audio, so the speech stages can run over this video's
-    own track, with their results stored in :attr:`speech`.
+    A camera also records audio, so the audio stages can run over this video's
+    own track, with their results stored in :attr:`speech` and :attr:`loudness`.
     """
 
     #: The tracked boxes, this input's main result.
@@ -72,6 +73,7 @@ class Video:
         self.video_path = Path(path) if path is not None else None
         self.timeline = timeline if timeline is not None else Timeline()
         self.speech = Speech()
+        self.loudness = Loudness()
         self._has_audio_track = False
         self._audio_track_path: Path | None = None
         # Persistent results.
@@ -274,6 +276,7 @@ class Video:
         self._data = None
         self._rows_by_frame = {}
         self.speech.clear()
+        self.loudness.clear()
         self._tmp_frames = []
         self._tmp_face_frames = []
         self._tmp_pose_frames = []
@@ -284,7 +287,11 @@ class Video:
 
     def has_data(self) -> bool:
         """Whether this video has any completed pipeline results in memory."""
-        return self._data is not None or self.speech.data is not None
+        return (
+            self._data is not None
+            or self.speech.data is not None
+            or self.loudness.data is not None
+        )
 
     def has_results(self, directory: str | Path) -> bool:
         """Whether ``directory`` already holds results for a video."""
@@ -292,7 +299,7 @@ class Video:
 
     def save(self, directory: str | Path) -> None:
         """Write these results into ``directory``, one file per kind of result."""
-        if self._data is None and self.speech.data is None:
+        if not self.has_data():
             raise ValueError("no data to write; run the pipeline first")
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
@@ -312,12 +319,14 @@ class Video:
                 else:
                     write_embeddings(embeddings_path, embeddings)
         self.speech.save(directory)
+        self.loudness.save(directory)
 
     def load(self, directory: str | Path) -> None:
         """Load results written by :meth:`save`, if ``directory`` holds any."""
         directory = Path(directory)
         self.clear()
         self.speech.load(directory)
+        self.loudness.load(directory)
         results_path = directory / self._RESULTS_FILENAME
         if not results_path.exists():
             return

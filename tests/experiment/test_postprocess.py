@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from body_eye_sync.experiment.postprocess import attribute_experiment_speech
+from body_eye_sync.postprocessing.attribution import AttributionCancelled
 from body_eye_sync.experiment.config import (
     ExperimentConfig,
     FixedVideoInput,
@@ -57,6 +58,8 @@ def experiment(tmp_path):
         ),
         tmp_path / "experiment",
     )
+    for video in exp.glasses_videos:
+        video.loudness.measure(video.path)
     # Both microphones heard both speakers, so both transcribed both.
     exp.glasses_videos[0].speech.set_data(
         _transcript((1.0, 4.0, "p1 speaking"), (6.0, 9.0, "p2 as p1 heard them"))
@@ -97,6 +100,7 @@ def test_a_fixed_camera_is_not_attributed_to_anyone(experiment, tmp_path):
     room = experiment.add_fixed_video(
         FixedVideoInput(id="room", path=tmp_path / "room.wav")
     )
+    room.loudness.measure(room.path)
     room.speech.set_data(_transcript((1.0, 9.0, "everything the room heard")))
 
     attribute_experiment_speech(experiment)
@@ -136,3 +140,32 @@ def test_attribution_survives_a_recording_that_started_late(experiment):
 
     assert experiment.speech_turns.data["speaker"].tolist() == ["p1", "p2"]
     assert experiment.speech_turns.data["start"].tolist() == [1.0, 6.0]
+
+
+def test_stored_loudness_comes_back_with_the_experiment(experiment):
+    attribute_experiment_speech(experiment)
+    experiment.save()
+
+    reloaded = Experiment.load(experiment.folder)
+
+    assert reloaded.glasses_videos[0].loudness.data is not None
+    pd.testing.assert_frame_equal(
+        reloaded.glasses_videos[0].loudness.data,
+        experiment.glasses_videos[0].loudness.data,
+    )
+
+
+def test_a_pass_can_be_cancelled_and_leaves_the_turns_alone(experiment):
+    with pytest.raises(AttributionCancelled):
+        attribute_experiment_speech(experiment, progress=lambda value: False)
+
+    assert experiment.speech_turns.data is None
+
+
+def test_progress_is_reported_while_the_turns_are_worked_out(experiment):
+    reported = []
+
+    attribute_experiment_speech(experiment, progress=reported.append)
+
+    assert reported == sorted(reported)
+    assert reported[-1] == 1.0

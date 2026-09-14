@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 from types import SimpleNamespace
@@ -8,17 +9,41 @@ from body_eye_sync.gui.widgets.synchronized_audio_playback import (
 )
 
 
-def _recording(name, rate=1.0):
+def _recording(name, rate=1.0, levels=np.empty(0)):
     return SimpleNamespace(
         id=name,
         path=f"{name}.wav",
+        loudness=SimpleNamespace(levels=levels),
         timeline=SimpleNamespace(
             offset=0.0,
             rate=rate,
             to_experiment_time=lambda local: local * rate,
+            to_experiment_times=lambda local: np.asarray(local) * rate,
             to_local_time=lambda experiment: experiment / rate,
         ),
     )
+
+
+def test_measured_recordings_are_drawn_without_decoding_them(qtbot, monkeypatch):
+    monkeypatch.setattr(
+        "body_eye_sync.gui.widgets.synchronized_audio_playback.media_duration",
+        lambda _path: 10.0,
+    )
+    monkeypatch.setattr(
+        "body_eye_sync.gui.widgets.synchronized_audio_playback._loudness_envelope",
+        lambda *args, **kwargs: pytest.fail("decoded a recording already measured"),
+    )
+    widget = SynchronizedAudioPlaybackWidget()
+    qtbot.addWidget(widget)
+
+    widget.load([_recording("p1", levels=np.array([-60.0, -20.0, -30.0, -50.0]))])
+    widget.show()
+
+    graph = widget._tracks["p1"].row._graph
+    qtbot.waitUntil(lambda: graph._values.size > 0, timeout=5000)
+    assert graph._values.size == 4
+    # Drawn on the experiment clock, across the whole recording.
+    assert graph._times.tolist() == [0.0, 2.5, 5.0, 7.5]
 
 
 def test_active_speakers_include_overlapping_accepted_turns():

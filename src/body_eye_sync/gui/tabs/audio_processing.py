@@ -203,7 +203,7 @@ class AudioProcessingTab(BaseTab):
         if data is None:
             self.audio_player.clear()
         else:
-            self.audio_player.load(data.path)
+            self.audio_player.load(data.path, data.loudness.levels)
         self._refresh_results()
         self._bind_editor_to_pipeline()
         self._update_run_availability()
@@ -392,7 +392,7 @@ class AudioProcessingTab(BaseTab):
         speech.begin_transcription()
         self._begin_run()
 
-        self._worker = TranscriptionWorker(speech, data.path, settings)
+        self._worker = TranscriptionWorker(speech, data.loudness, data.path, settings)
         self._worker.progress.connect(self._on_progress)
         self._worker.new_frame.connect(self._on_new_segment)
         self._worker.finished.connect(self._on_transcription_finished)
