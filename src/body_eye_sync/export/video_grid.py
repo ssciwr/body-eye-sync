@@ -316,7 +316,9 @@ class _SynchronizedAudio:
     def read(self, samples: int) -> np.ndarray:
         while self._fifo.samples < samples and not self._finished:
             try:
-                self._fifo.write(next(self._frames))
+                frame = next(self._frames)
+                frame.pts = None
+                self._fifo.write(frame)
             except StopIteration:
                 self._finished = True
         frame = self._fifo.read(samples, partial=True)
