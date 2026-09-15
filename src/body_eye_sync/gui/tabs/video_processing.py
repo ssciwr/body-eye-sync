@@ -14,9 +14,7 @@ from typing import Callable
 
 from qtpy.QtCore import Qt, Slot
 from qtpy.QtWidgets import (
-    QComboBox,
     QHBoxLayout,
-    QLabel,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -36,7 +34,7 @@ from body_eye_sync.experiment.config import (
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.experiment.video import GlassesVideo, Video
 from body_eye_sync.gui.tabs.base import BaseTab
-from body_eye_sync.gui.widgets import VIDEO_STEPS, PipelineEditor, VideoViewer
+from body_eye_sync.gui.widgets import VIDEO_STEPS, PipelineEditor, VideoSelectionWidget
 from body_eye_sync.gui.workers import (
     BodyPoseWorker,
     FaceDetectionWorker,
@@ -73,21 +71,15 @@ class VideoProcessingTab(BaseTab):
         #: Remaining step types queued by "Run all"; consumed one at a time as
         #: each step finishes, so later steps see earlier steps' results.
         self._pending_steps: list[type] = []
-        #: The experiment's video inputs, in the order the chooser lists them.
-        self._videos: list[Video] = []
-
-        self.video_selector = QComboBox()
-        self.video_selector.currentIndexChanged.connect(self._on_video_selected)
-
-        self.video_viewer = VideoViewer()
+        self.video_panel = VideoSelectionWidget(show_kind=True)
+        self.video_panel.video_selected.connect(self._on_video_selected)
+        self.video_panel.status_message.connect(self.status_message)
+        self.video_selector = self.video_panel.selector
+        self.video_viewer = self.video_panel.viewer
 
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setVisible(False)
         self.cancel_button.clicked.connect(self._cancel_run)
-
-        top_bar = QHBoxLayout()
-        top_bar.addWidget(QLabel("Video:"))
-        top_bar.addWidget(self.video_selector, stretch=1)
 
         bottom_bar = QHBoxLayout()
         bottom_bar.addStretch(1)
@@ -95,8 +87,7 @@ class VideoProcessingTab(BaseTab):
 
         viewer_layout = QVBoxLayout()
         viewer_layout.setContentsMargins(0, 0, 0, 0)
-        viewer_layout.addLayout(top_bar)
-        viewer_layout.addWidget(self.video_viewer, stretch=1)
+        viewer_layout.addWidget(self.video_panel, stretch=1)
         viewer_layout.addLayout(bottom_bar)
         viewer_side = QWidget()
         viewer_side.setLayout(viewer_layout)
@@ -150,28 +141,13 @@ class VideoProcessingTab(BaseTab):
         if self._thread is not None:
             # A run drives the viewer and the video it writes into; leave it be.
             return
-        shown = self.video()
-        self._videos = [*self.experiment.glasses_videos, *self.experiment.fixed_videos]
-        self.video_selector.blockSignals(True)
-        self.video_selector.clear()
-        for video in self._videos:
-            kind = "glasses" if isinstance(video, GlassesVideo) else "fixed"
-            self.video_selector.addItem(f"{video.id} ({kind})")
-        index = next(
-            (i for i, video in enumerate(self._videos) if video is shown),
-            0 if self._videos else -1,
+        self.video_panel.set_videos(
+            [*self.experiment.glasses_videos, *self.experiment.fixed_videos]
         )
-        self.video_selector.setCurrentIndex(index)
-        self.video_selector.blockSignals(False)
-        self.video_selector.setEnabled(bool(self._videos))
-        self._show_selected_video()
 
     def video(self) -> Video | None:
         """The video input being shown, or ``None`` if the experiment has none."""
-        index = self.video_selector.currentIndex()
-        if 0 <= index < len(self._videos):
-            return self._videos[index]
-        return None
+        return self.video_panel.video()
 
     def is_busy(self) -> bool:
         """Whether a pipeline step is currently running."""
@@ -183,24 +159,7 @@ class VideoProcessingTab(BaseTab):
         if self._thread is not None:
             self._thread.join(timeout=5.0)
 
-    def _on_video_selected(self, _index: int) -> None:
-        self._show_selected_video()
-
-    def _show_selected_video(self) -> None:
-        """Load the chosen video into the viewer and bind the editor to it."""
-        video = self.video()
-        # The viewer says what it holds, so a video it could not open is tried
-        # again next time rather than being left blank for good.
-        if video is not self.video_viewer.video:
-            if video is None:
-                self.video_viewer.clear()
-            else:
-                try:
-                    self.video_viewer.load(video)
-                except OSError as exc:
-                    self.video_viewer.clear()
-                    self.status_message.emit(f"Could not open video: {exc}")
-        self.video_viewer.refresh_overlays()
+    def _on_video_selected(self, _video: Video | None) -> None:
         self._bind_editor_to_video()
         self._update_step_availability()
 
@@ -391,7 +350,7 @@ class VideoProcessingTab(BaseTab):
             self.refresh()
             # However it ended, the run changed the video's results.
             self.experiment_changed.emit()
-        self.video_selector.setEnabled(not running and bool(self._videos))
+        self.video_selector.setEnabled(not running and self.video() is not None)
         self.pipeline_editor.setEnabled(not running and self.video() is not None)
         self.video_viewer.enable_controls(not running)
         self.cancel_button.setVisible(running)

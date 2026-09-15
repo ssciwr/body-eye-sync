@@ -52,6 +52,21 @@ outputs/<input-id>/face_embeddings.parquet
 
 Only the best `embeddings_per_track` vectors are kept for each tracklet.
 
+## Identities
+
+The experiment owns a shared table of tracklet identities, available through
+`experiment.identities.data` and saved with the experiment:
+
+```text
+outputs/identities.parquet
+```
+
+| Column | Meaning |
+| --- | --- |
+| `video_id` | Glasses video ID of the recording containing the tracklet |
+| `track_id` | Positive integer track ID within that video |
+| `participant_id` | Glasses video ID of the identified person, or null if the person is unidentified |
+
 ## Speech outputs
 
 ```text

@@ -12,6 +12,7 @@ from body_eye_sync.gui.widgets.synchronized_audio_playback import (
     SynchronizedAudioPlaybackWidget,
 )
 from body_eye_sync.gui.widgets.video_viewer import VideoViewer
+from body_eye_sync.gui.widgets.video_selection import VideoSelectionWidget
 
 __all__ = [
     "SPEECH_STEPS",
@@ -22,4 +23,5 @@ __all__ = [
     "PydanticForm",
     "SynchronizedAudioPlaybackWidget",
     "VideoViewer",
+    "VideoSelectionWidget",
 ]

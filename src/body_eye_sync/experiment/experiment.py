@@ -17,6 +17,7 @@ from body_eye_sync.experiment.config import (
     Pipeline,
     validate_input_id,
 )
+from body_eye_sync.experiment.identities import Identities
 from body_eye_sync.experiment.speech_turns import SpeechTurns
 from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo, Video
@@ -69,12 +70,14 @@ class Experiment:
             for spec in config.audio
         ]
         self.speech_turns = SpeechTurns()
+        self.identities = Identities()
 
     def _load_stored_data(self) -> None:
         """Load any existing outputs owned by this experiment from its folder."""
         for data in self.inputs:
             self._load_results(data)
         self._load_speech_turns()
+        self._load_identities()
 
     @property
     def inputs(self) -> list[Video | Audio]:
@@ -142,6 +145,8 @@ class Experiment:
         for inputs in (self.glasses_videos, self.fixed_videos, self.audio):
             if any(existing is data for existing in inputs):
                 inputs.remove(data)
+                if isinstance(data, GlassesVideo):
+                    self.identities.clear()
                 return
         raise ValueError(f"input {data.id!r} is not in this experiment")
 
@@ -161,6 +166,8 @@ class Experiment:
             except OSError:
                 data.id = old_id
                 raise
+        if isinstance(data, GlassesVideo):
+            self.identities.rename_video(old_id, new_id)
 
     def _check_id(self, input_id: str) -> None:
         """Check an id can name an output directory, and nothing else uses it."""
@@ -222,6 +229,18 @@ class Experiment:
             self.speech_turns.clear()
             logger.warning(
                 "ignoring unreadable speech turns in %s: %s", self.output_dir, exc
+            )
+
+    def _load_identities(self) -> None:
+        """Fill the experiment's identities from its output directory."""
+        if self.folder is None:
+            return
+        try:
+            self.identities.load(self.output_dir)
+        except (OSError, ValueError) as exc:
+            self.identities.clear()
+            logger.warning(
+                "ignoring unreadable identities in %s: %s", self.output_dir, exc
             )
 
     def config(self) -> ExperimentConfig:
@@ -292,3 +311,4 @@ class Experiment:
                 data.save(self.output_dir_for(data))
         if self.speech_turns.has_data():
             self.speech_turns.save(self.output_dir)
+        self.identities.save(self.output_dir)

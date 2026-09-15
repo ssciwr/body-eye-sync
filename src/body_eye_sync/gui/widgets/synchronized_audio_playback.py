@@ -23,15 +23,13 @@ from qtpy.QtWidgets import (
 
 from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.video import Video
-from body_eye_sync.gui.utils import get_color
+from body_eye_sync.gui.utils import recording_colors
 from body_eye_sync.gui.widgets.audio_playback import (
     _loudness_envelope,
     loudness_overview,
 )
 from body_eye_sync.gui.widgets.playback_controls import PlaybackControls
 from body_eye_sync.media import media_duration
-
-_RECORDING_COLOR_IDS = (0, 6, 3, 9, 18, 10, 5, 7, 13, 15, 1, 8, 17, 19)
 
 
 def _time_text(seconds: float) -> str:
@@ -196,14 +194,22 @@ class SynchronizedAudioPlaybackWidget(QWidget):
         track = self._tracks.get(recording_id)
         return None if track is None else QColor(track.color)
 
-    def load(self, recordings: list[Video | Audio]) -> None:
+    def load(
+        self,
+        recordings: list[Video | Audio],
+        *,
+        colors: dict[str, QColor] | None = None,
+    ) -> None:
         """Show ``recordings`` on their shared experiment clock."""
+        if colors is None:
+            colors = recording_colors(data.id for data in recordings)
         signature = tuple(
             (
                 data.id,
                 str(data.path),
                 data.timeline.offset,
                 data.timeline.rate,
+                colors[data.id].name(),
             )
             for data in recordings
         )
@@ -227,8 +233,8 @@ class SynchronizedAudioPlaybackWidget(QWidget):
         )
         self._position = self._start
 
-        for index, (data, duration) in enumerate(measured):
-            color = get_color(_RECORDING_COLOR_IDS[index % len(_RECORDING_COLOR_IDS)])
+        for data, duration in measured:
+            color = colors[data.id]
             row = _TrackRow(data.id, self._start, self._end, color)
             self._rows_layout.addWidget(row)
             self._tracks[data.id] = _Track(

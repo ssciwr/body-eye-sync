@@ -18,6 +18,7 @@ from body_eye_sync.experiment.config import (
     VideoPipeline,
 )
 from body_eye_sync.experiment.experiment import Experiment
+from body_eye_sync.experiment.identities import IDENTITIES_FILENAME, IDENTITY_COLUMNS
 from body_eye_sync.experiment.timeline import Timeline
 from body_eye_sync.experiment.video import FixedVideo, GlassesVideo
 from body_eye_sync.pipeline.transcription import TranscriptSegment, Word
@@ -47,6 +48,102 @@ def _tracks() -> pd.DataFrame:
             "conf": [0.9, 0.9],
         }
     )
+
+
+def _identities() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "video_id": ["cam2", "cam1"],
+            "track_id": [1, 7],
+            "participant_id": ["cam1", None],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "table", [_identities(), pd.DataFrame(columns=IDENTITY_COLUMNS)]
+)
+def test_experiment_identities_round_trip(tmp_path, table):
+    exp = Experiment(
+        _config(fixed_videos=[FixedVideoInput(id="room", path="room.mp4")])
+    )
+    exp.identities.set_data(table)
+    exp.save(tmp_path)
+    loaded = Experiment.load(tmp_path)
+    pd.testing.assert_frame_equal(loaded.identities.data, table)
+    assert loaded.identities.has_data()
+
+
+def test_experiment_without_stored_identities_loads_unprocessed(tmp_path):
+    Experiment(_config(), tmp_path).save()
+    assert Experiment.load(tmp_path).identities.data is None
+
+
+def test_saving_cleared_experiment_identities_removes_stale_results(tmp_path):
+    exp = Experiment(_config(), tmp_path)
+    exp.identities.set_data(_identities())
+    exp.save()
+    exp.identities.clear()
+    exp.save()
+    assert not (exp.output_dir / IDENTITIES_FILENAME).exists()
+    assert Experiment.load(tmp_path).identities.data is None
+
+
+@pytest.mark.parametrize("invalid_parquet", [False, True])
+def test_unreadable_identities_do_not_discard_video_results(
+    tmp_path, caplog, invalid_parquet
+):
+    exp = Experiment(_config(), tmp_path)
+    exp.glasses_videos[0].set_data(_tracks())
+    exp.save()
+    path = exp.output_dir / IDENTITIES_FILENAME
+    if invalid_parquet:
+        pd.DataFrame({"unexpected": [1]}).to_parquet(path)
+    else:
+        path.write_text("not parquet")
+    loaded = Experiment.load(tmp_path)
+    assert loaded.identities.data is None
+    assert loaded.glasses_videos[0].data is not None
+    assert "ignoring unreadable identities" in caplog.text
+
+
+def test_renaming_a_video_updates_identity_references_and_persists_them(tmp_path):
+    exp = Experiment(
+        _config(fixed_videos=[FixedVideoInput(id="room", path="room.mp4")])
+    )
+    exp.identities.set_data(_identities())
+    exp.rename_input(exp.glasses_videos[0], "renamed")
+    exp.save(tmp_path)
+    loaded = Experiment.load(tmp_path)
+    assert loaded.identities.participants == ["renamed"]
+    assert loaded.identities.for_video("renamed")["track_id"].tolist() == [7]
+
+
+def test_removing_a_glasses_video_invalidates_shared_identities(tmp_path):
+    exp = Experiment(
+        _config(fixed_videos=[FixedVideoInput(id="room", path="room.mp4")])
+    )
+    exp.identities.set_data(_identities())
+    exp.save(tmp_path)
+    exp.remove_input(exp.glasses_videos[0])
+    exp.save()
+    assert Experiment.load(tmp_path).identities.data is None
+
+
+def test_removing_a_fixed_video_preserves_glasses_identities():
+    exp = Experiment(
+        _config(fixed_videos=[FixedVideoInput(id="room", path="room.mp4")])
+    )
+    exp.identities.set_data(_identities())
+    exp.remove_input(exp.fixed_videos[0])
+    pd.testing.assert_frame_equal(exp.identities.data, _identities())
+
+
+def test_removing_audio_preserves_video_identities():
+    exp = Experiment(_config(audio=[AudioInput(id="mic", path="mic.wav")]))
+    exp.identities.set_data(_identities())
+    exp.remove_input(exp.audio[0])
+    pd.testing.assert_frame_equal(exp.identities.data, _identities())
 
 
 def test_save_load_round_trips_the_experiment(tmp_path):

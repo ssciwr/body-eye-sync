@@ -13,9 +13,9 @@ uv run body-eye-sync-cli path/to/experiment
 ```
 
 The CLI loads `experiment.yaml`, runs every configured input, and writes one
-Parquet result per input under `outputs/`.
+Parquet result per input under `outputs/`. Existing outputs are skipped by default.
 
-Existing outputs are skipped by default:
+To run the cli on an experiment:
 
 ```bash
 body-eye-sync-cli path/to/experiment

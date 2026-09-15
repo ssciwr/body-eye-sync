@@ -6,7 +6,7 @@ from math import isfinite
 
 import cv2
 from qtpy.QtCore import Qt, QTimer, QUrl, Signal, Slot
-from qtpy.QtGui import QBrush, QFont, QImage, QPainter, QPen, QPixmap
+from qtpy.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap
 from qtpy.QtMultimedia import QAudioOutput, QMediaPlayer
 from qtpy.QtWidgets import (
     QGraphicsEllipseItem,
@@ -75,6 +75,8 @@ class VideoViewer(QWidget):
         # the video being displayed; supplies the boxes to draw per frame
         self._video: Video | None = None
         self.show_overlays = True
+        self.track_labels: dict[int, str] | None = None
+        self.track_colors: dict[int, QColor] | None = None
         self._overlay_items: list[QGraphicsItem] = []
 
         # video display
@@ -471,10 +473,15 @@ class VideoViewer(QWidget):
             self._scene.removeItem(item)
         self._overlay_items.clear()
 
+    def _track_color(self, track_id: int) -> QColor:
+        if self.track_colors is None:
+            return get_color(track_id)
+        return self.track_colors.get(track_id, QColor("grey"))
+
     def _add_rect(self, box: BoundingBox, style: Qt.PenStyle) -> None:
         """Draw ``box`` as a rectangle coloured by its id, in the given pen style."""
         rect = QGraphicsRectItem(box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1)
-        pen = QPen(get_color(box.track_id))
+        pen = QPen(self._track_color(box.track_id))
         pen.setStyle(style)
         # constant on-screen pen width regardless of zoom
         pen.setCosmetic(True)
@@ -486,8 +493,13 @@ class VideoViewer(QWidget):
     def _add_box(self, box: BoundingBox) -> None:
         self._add_rect(box, Qt.PenStyle.SolidLine)
 
-        label = QGraphicsSimpleTextItem(str(box.track_id))
-        label.setBrush(QBrush(get_color(box.track_id)))
+        text = (
+            str(box.track_id)
+            if self.track_labels is None
+            else self.track_labels.get(box.track_id, "Unidentified")
+        )
+        label = QGraphicsSimpleTextItem(text)
+        label.setBrush(QBrush(self._track_color(box.track_id)))
         # constant on-screen label size regardless of zoom
         label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
         label.setPos(box.x1, box.y1)
@@ -498,7 +510,7 @@ class VideoViewer(QWidget):
         # dashed, so the face box reads as distinct from its person box
         self._add_rect(face.box, Qt.PenStyle.DashLine)
 
-        color = get_color(face.box.track_id)
+        color = self._track_color(face.box.track_id)
         for px, py in face.landmarks:
             # a small constant-size dot regardless of zoom, centred on the point
             dot = QGraphicsEllipseItem(-2.0, -2.0, 4.0, 4.0)
@@ -510,7 +522,7 @@ class VideoViewer(QWidget):
             self._overlay_items.append(dot)
 
     def _add_pose(self, pose: BodyPose) -> None:
-        color = get_color(pose.box.track_id)
+        color = self._track_color(pose.box.track_id)
         pen = QPen(color)
         pen.setCosmetic(True)
         pen.setWidth(2)

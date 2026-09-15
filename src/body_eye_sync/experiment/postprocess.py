@@ -10,8 +10,46 @@ from body_eye_sync.postprocessing.attribution import (
     attribute_segments,
     measure_levels,
 )
+from body_eye_sync.postprocessing.tracklets_clustering import cluster_tracklets
 
 logger = logging.getLogger(__name__)
+
+
+def clustering_blocked_reason(experiment: Experiment) -> str | None:
+    """Why the experiment is not ready for tracklet clustering, if anything."""
+    if not experiment.glasses_videos:
+        return "Add glasses videos first, in the Input files tab."
+    for video in experiment.glasses_videos:
+        if video.data is None or "face_score" not in video.data.columns:
+            return f"Run tracking and face detection for {video.id!r} first."
+        if video.data["face_score"].notna().any() and video.face_embeddings is None:
+            return f"Collect face recognition embeddings for {video.id!r} first."
+    return None
+
+
+def cluster_experiment_tracklets(
+    experiment: Experiment,
+    *,
+    debug: bool = False,
+) -> None:
+    """Cluster videos, infer glasses wearers, and store tracklet identities.
+
+    Only glasses videos contribute clustering evidence and receive entries in
+    ``experiment.identities``. Fixed videos are ignored. Face
+    detection must have completed for every glasses video before inferring
+    wearers; an unprocessed recording cannot supply evidence of absence.
+
+    Visibility counts are independent of timeline offsets/rates; gaze processing
+    uses the shared clock.
+    """
+    settings = experiment.pipeline.cluster_post_processing
+    experiment.identities.set_data(
+        cluster_tracklets(
+            experiment.glasses_videos,
+            **settings.model_dump(),
+            debug=debug,
+        )
+    )
 
 
 def attribute_experiment_speech(
