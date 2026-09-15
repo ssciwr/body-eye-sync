@@ -62,7 +62,6 @@ class VideoViewer(QWidget):
 
         self._capture: cv2.VideoCapture | None = None
         self._frame_count = 0
-        self._fps = 25.0
         self._current = 0
         self._preroll_seconds: float | None = None
         self._displayed_time_seconds: float | None = None
@@ -149,8 +148,7 @@ class VideoViewer(QWidget):
         self._video = video
         self._capture = capture
         self._media_player.setSource(QUrl.fromLocalFile(str(video.video_path)))
-        self._fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
-        self._timer.setInterval(max(1, round(1000 / self._fps)))
+        self._timer.setInterval(self._frame_interval_ms())
 
         count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
         for control in (self._slider, self._spinbox):
@@ -181,6 +179,18 @@ class VideoViewer(QWidget):
         self._scene.setSceneRect(0, 0, 0, 0)
         self._set_frame_count(0)
         self.enable_controls(False)
+
+    @property
+    def _fps(self) -> float:
+        """Playback frame rate, falling back to 25 fps."""
+        return (self._video.fps if self._video is not None else 0.0) or 25.0
+
+    def _frame_interval_ms(self) -> int:
+        return max(1, round(1000 / self._fps))
+
+    def _counts_frames(self) -> bool:
+        """Whether the video has a positive frame rate."""
+        return self._video is not None and self._video.fps > 0.0
 
     def set_frame(
         self,
@@ -220,17 +230,13 @@ class VideoViewer(QWidget):
         sync_audio: bool = True,
     ) -> None:
         """Display the frame selected by ``seconds`` in the source video."""
-        if self._fps <= 0.0:
+        if not self._counts_frames():
             self.set_frame(0, sync_audio=sync_audio)
             return
         if allow_negative and seconds < 0.0:
             self._show_preroll_frame(seconds)
             return
-        frame = (
-            int(seconds * self._fps)
-            if show_requested_time
-            else round(seconds * self._fps)
-        )
+        frame = self._video.frame_at(seconds, nearest=not show_requested_time)
         self.set_frame(
             max(0, frame),
             displayed_time_seconds=seconds if show_requested_time else None,
@@ -325,16 +331,16 @@ class VideoViewer(QWidget):
             return self._preroll_seconds
         if self._displayed_time_seconds is not None:
             return self._displayed_time_seconds
-        if self._frame_count == 0 or self._fps <= 0.0:
+        if self._frame_count == 0 or not self._counts_frames():
             return 0.0
-        return self._current / self._fps
+        return self._video.time_of_frame(self._current)
 
     @property
     def current_media_time_seconds(self) -> float:
         """Timestamp of the displayed video frame in the source media."""
-        if self._frame_count == 0 or self._fps <= 0.0 or self._current < 0:
+        if self._frame_count == 0 or self._current < 0 or not self._counts_frames():
             return 0.0
-        return self._current / self._fps
+        return self._video.time_of_frame(self._current)
 
     @property
     def playback_time_seconds(self) -> float:
@@ -443,7 +449,9 @@ class VideoViewer(QWidget):
     # Show the waiting period before a positively-offset video starts.
     def _show_preroll_frame(self, seconds: float) -> None:
         self._preroll_seconds = seconds
-        self._current = min(-1, int(seconds * self._fps))
+        self._current = (
+            min(-1, self._video.frame_at(seconds)) if self._video is not None else -1
+        )
         self._media_player.pause()
         pixmap = QPixmap(self._pixmap_item.pixmap().size())
         pixmap.fill(Qt.GlobalColor.black)
@@ -563,8 +571,10 @@ class VideoViewer(QWidget):
         self.set_frame(target_frame, sync_audio=False)
 
     def _media_frame_index(self) -> int:
-        """Return the frame containing the media player's current position."""
-        return max(0, int(self._media_position_seconds() * self._fps))
+        """Frame containing the media player's position on the container clock."""
+        if not self._counts_frames():
+            return 0
+        return max(0, self._video.frame_at(self._media_position_seconds()))
 
     def _media_position_seconds(self) -> float:
         return self._media_player.position() / 1000
@@ -580,7 +590,7 @@ class VideoViewer(QWidget):
             if self._current >= 0:
                 self._start_media_playback()
             else:
-                self._timer.setInterval(max(1, round(1000 / self._fps)))
+                self._timer.setInterval(self._frame_interval_ms())
             self._timer.start()
         else:
             self._timer.stop()
@@ -596,6 +606,9 @@ class VideoViewer(QWidget):
         label = "Unmute audio" if muted else "Mute audio"
         self._mute_button.setIcon(self.style().standardIcon(icon))
         self._mute_button.setToolTip(label)
+
+    def is_playing(self) -> bool:
+        return self._play_button.isChecked()
 
     def stop(self) -> None:
         self._timer.stop()

@@ -156,10 +156,11 @@ A visual red label appears to warn you when you are previewing frames in a given
 """
 
 
-def test_alignment_offset_preview_survives_adding_input(window, data_dir, qtbot):
-    path = data_dir / "three-people.mp4"
+def test_alignment_offset_preview_survives_adding_input(window, distinct_videos, qtbot):
+    # Distinct files, since one recording can only be one input.
+    paths = distinct_videos(3)
     input_tab = window.tab(InputFilesTab)
-    input_tab.add_fixed_videos([path, path])
+    input_tab.add_fixed_videos(paths[:2])
     alignment_tab = window.tab(AlignmentTab)
     window.tabs.setCurrentWidget(alignment_tab)
     second_card = alignment_tab.video_cards[1]
@@ -174,7 +175,7 @@ def test_alignment_offset_preview_survives_adding_input(window, data_dir, qtbot)
     assert second_card.viewer._time_label.text() == "-30.000 s"  # so far, normal.
 
     window.tabs.setCurrentWidget(input_tab)  # Now we disrupt/change the process
-    input_tab.add_fixed_videos([path])
+    input_tab.add_fixed_videos([paths[2]])
     window.tabs.setCurrentWidget(alignment_tab)
     second_card = alignment_tab.video_cards[1]
     assert second_card.controls.spin.value() == pytest.approx(30.0)

@@ -191,14 +191,8 @@ class DataExportTab(BaseTab):
         self.input_list.blockSignals(False)
         self._update_availability()
 
-    def selected_input_ids(self) -> list[str]:
-        return self._checked_ids()
-
-    def selected_video_ids(self) -> list[str]:
-        """The checked video inputs, in the order the layout offers them."""
-        return self._checked_ids(videos_only=True)
-
-    def _checked_ids(self, videos_only: bool = False) -> list[str]:
+    def selected_input_ids(self, videos_only: bool = False) -> list[str]:
+        """The checked inputs, in list order; optionally only the videos."""
         return [
             item.data(_INPUT_ID_ROLE)
             for index in range(self.input_list.count())
@@ -212,7 +206,7 @@ class DataExportTab(BaseTab):
 
     @Slot()
     def _update_availability(self) -> None:
-        self.layout_editor.set_videos(self.selected_video_ids())
+        self.layout_editor.set_videos(self.selected_input_ids(videos_only=True))
         # There is nothing to export until the layout shows at least one video.
         placed = any(self.layout_editor.slots())
         running = self._thread is not None
