@@ -32,7 +32,8 @@ Clustering strategy
 
 Outputs
 -------
-A dict mapping ``track_id -> person_id`` (1-indexed).  Tracklets that carry
+A :class:`ClusteringResult` maps ``(video_id, track_id)`` to 1-indexed person IDs
+and nullable glasses wearer IDs. Tracklets that carry
 neither a face nor a body embedding are each assigned a unique person ID of
 their own so they are never spuriously merged.
 """
@@ -40,26 +41,27 @@ their own so they are never spuriously merged.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from sklearn.cluster import AgglomerativeClustering
 
-# A local BoxMOT id for single-video cases, or a video-qualified id for
-# cross-video cases.  The video component prevents equal numeric track ids from
-# different recordings from being treated as the same tracklet.
-TrackletId = int | tuple[str, int]
+if TYPE_CHECKING:
+    from body_eye_sync.experiment.video import GlassesVideo
+
+# The video component keeps local track IDs distinct across recordings.
+TrackletId = tuple[str, int]
 
 
 @dataclass
 class ClusteringResult:
     """Container for the outputs of :func:`cluster_tracklets`.
 
-    For a single-video case, ``track_id_to_person_id`` uses integer BoxMOT
-    track ids.  For a multi-video case, its keys are ``(video_id, track_id)``
-    pairs so equal numeric ids from different recordings remain distinct.
+    The public entry point uses ``(video_id, track_id)`` pairs as tracklet keys,
+    so equal numeric IDs from different glasses recordings remain distinct.
 
     Attributes
     ----------
@@ -75,6 +77,12 @@ class ClusteringResult:
     tracklet_body_embedding:
         Representative mean body embedding for each tracklet, or ``None``
         when no valid body embeddings were ever detected for that tracklet.
+    person_face_frame_counts:
+        Face visibility matrix populated by :func:`identify_glasses_wearers`,
+        with person IDs as rows and glasses video IDs as columns.
+    person_id_to_glasses_video_id:
+        Wearer associations populated by :func:`identify_glasses_wearers`,
+        or ``None`` for people without sufficient absence/visibility evidence.
     """
 
     tracklet_id_to_person_id: dict[TrackletId, int] = field(default_factory=dict)
@@ -85,69 +93,68 @@ class ClusteringResult:
     tracklet_body_embedding: dict[TrackletId, np.ndarray | None] = field(
         default_factory=dict
     )
+    person_face_frame_counts: pd.DataFrame = field(default_factory=pd.DataFrame)
+    person_id_to_glasses_video_id: dict[int, str | None] = field(default_factory=dict)
 
 
-@dataclass
-class TrackletClusteringInput:
-    """Convenience container that bundles inputs for one video.
+def identify_glasses_wearers(
+    clustering: ClusteringResult,
+    face_frames_by_video: Mapping[str, pd.DataFrame],
+    min_face_frames: int = 30,
+) -> None:
+    """Associate clustered people with their glasses IDs.
 
-    Attributes
-    ----------
-    track_ids:
-        Ordered set of all BoxMOT track IDs that appear in the video.
-    face_embeddings:
-        Top-K face embeddings per tracklet, as returned by
-        :attr:`~body_eye_sync.experiment.video.Video.face_embeddings`.
-    body_embeddings:
-        Top-K body embeddings per tracklet, as returned by
-        :attr:`~body_eye_sync.experiment.video.Video.body_embeddings`.
-    video_id:
-        Stable id of the video.  It is optional for the single-video
-        helper and required when clustering more than one video together.
+    For each person, count how many frames there are in each glasses video
+    where their face is detected. If a person has zero faces in one video,
+    and at least min_face_frames in all other glasses videos, assign them
+    to that video.
     """
+    if min_face_frames < 1:
+        raise ValueError("min_face_frames must be at least 1")
 
-    track_ids: Sequence[int]
-    face_embeddings: pd.DataFrame | None = None
-    body_embeddings: pd.DataFrame | None = None
-    video_id: str = ""
+    person_ids = sorted(set(clustering.tracklet_id_to_person_id.values()))
+    video_ids = sorted(face_frames_by_video)
+    counts = pd.DataFrame(
+        0,
+        index=pd.Index(person_ids, name="person_id"),
+        columns=pd.Index(video_ids, name="video_id"),
+        dtype=np.int64,
+    )
+    for video_id, frames in face_frames_by_video.items():
+        recognized = {}
+        for tracklet_id, person_id in clustering.tracklet_id_to_person_id.items():
+            embedding = clustering.tracklet_face_embedding.get(tracklet_id)
+            if (
+                tracklet_id[0] == video_id
+                and embedding is not None
+                and np.isfinite(embedding).all()
+                and np.linalg.norm(embedding) > 0
+            ):
+                recognized[tracklet_id[1]] = person_id
+        faces = frames.loc[frames["face_score"].notna(), ["frame", "track_id"]].copy()
+        faces["person_id"] = faces["track_id"].map(recognized)
+        observed = (
+            faces.dropna(subset=["person_id"]).groupby("person_id")["frame"].nunique()
+        )
+        counts.loc[observed.index, video_id] = observed.to_numpy()
+
+    associations: dict[int, str | None] = {person_id: None for person_id in person_ids}
+    if len(video_ids) >= 2:
+        for person_id, row in counts.iterrows():
+            absent = row.index[row == 0]
+            if len(absent) == 1 and (row.drop(absent) >= min_face_frames).all():
+                associations[person_id] = absent[0]
+    clustering.person_face_frame_counts = counts
+    clustering.person_id_to_glasses_video_id = associations
 
 
 def _aggregate_embeddings(
     embeddings: pd.DataFrame | None,
-    video_id: str | None = None,
 ) -> dict[TrackletId, np.ndarray]:
-    """Return one mean L2-normalised embedding per tracklet.
+    """Return one mean L2-normalised embedding per video-qualified tracklet.
 
-    For each tracklet, the top-K embeddings are aggregated into a single
-    representative embedding by taking the mean of the L2-normalised
-    embeddings.  When ``video_id`` is supplied, returned keys are qualified by
-    that id; otherwise the legacy integer keys are retained.
-
-    ``video_id`` optionally scopes the input to a single video.
-        - When the embedding table contains a ``video_id`` column and
-        no specific video is requested, keys are ``(video_id, track_id)`` pairs.
-
-        - When video_id is supplied, the returned keys are ``(video_id, track_id)`` pairs
-
-        - When no video_id is supplied, the returned keys are just ``track_id`` integers.
-
-    Tracklets that never yielded a valid embedding are absent from the returned
-    dict.
-
-    Parameters
-    ----------
-    embeddings:
-        DataFrame of embeddings per tracklet.  The embedding column may be
-        named ``embedding`` (the storage format) or ``face_embedding`` /
-        ``body_embedding``.
-    video_id:
-        Optional video scope.  If the frame already has a ``video_id`` column,
-        only rows for this scope are consumed.
-
-    Returns
-    -------
-    dict[TrackletId, np.ndarray]
-        Tracklet id -> L2-normalised representative embedding.
+    The embedding column can be named ``embedding``, ``face_embedding``, or
+    ``body_embedding``. Rows without an embedding are skipped.
     """
     if embeddings is None or embeddings.empty:
         return {}
@@ -157,7 +164,7 @@ def _aggregate_embeddings(
             column
             for column in ("embedding", "face_embedding", "body_embedding")
             if column in embeddings.columns
-        ),  # get the correct embedding column name from the embeddings DataFrame
+        ),
         None,
     )
     if embedding_column is None:
@@ -166,54 +173,17 @@ def _aggregate_embeddings(
             "or 'body_embedding' column"
         )
 
-    table = embeddings
-
-    if video_id is not None and "video_id" in table.columns:
-        # only consider row for the requested video
-        table = table[table["video_id"].astype(str) == str(video_id)]
-
-    has_video_id_column = "video_id" in table.columns
-
-    if has_video_id_column:
-        dropped_nan_cols = [embedding_column, "video_id"]
-    else:
-        dropped_nan_cols = [embedding_column]
-
-    # drop rows with no embedding
-    table = table.dropna(subset=dropped_nan_cols)
-    if table.empty:
-        return {}
-
-    if video_id is None and has_video_id_column:
-        group_columns = ["video_id", "track_id"]
-    else:
-        group_columns = "track_id"
-
+    table = embeddings.dropna(subset=[embedding_column, "video_id"])
     result: dict[TrackletId, np.ndarray] = {}
-
-    groups = table.groupby(group_columns, sort=False)
-
-    for group_key, group in groups:
+    for (video_id, track_id), group in table.groupby(
+        ["video_id", "track_id"], sort=False
+    ):
         emb_array = np.asarray(group[embedding_column].to_list(), dtype=np.float64)
-
         mean_emb = emb_array.mean(axis=0)
-
         norm_emb = np.linalg.norm(mean_emb)
-
-        # define the key for the result dict
-        if isinstance(group_key, tuple):
-            group_video_id, track_id = group_key
-            key: TrackletId = (str(group_video_id), int(track_id))
-        else:
-            track_id = group_key
-            key: TrackletId = (
-                (str(video_id), int(track_id))
-                if video_id is not None
-                else int(track_id)
-            )
-
-        result[key] = mean_emb / norm_emb if norm_emb > 0 else np.zeros_like(mean_emb)
-
+        result[(str(video_id), int(track_id))] = (
+            mean_emb / norm_emb if norm_emb > 0 else np.zeros_like(mean_emb)
+        )
     return result
 
 
@@ -503,7 +473,6 @@ def _cluster_tracklets(
     min_face_detections: int = 1,
     min_body_detections: int = 3,
     debug: bool = False,
-    video_id: str | None = None,
 ) -> ClusteringResult:
     """Group single/cross-video tracklets into person identities.
 
@@ -514,23 +483,21 @@ def _cluster_tracklets(
     Body evidence is never allowed to merge two distinct face identities,
     given that face embeddings are more reliable than body embeddings.
 
-    In case of clustering across videos, video_id is expected to be present
-    in the face_embeddings and body_embeddings DataFrames, and the returned
-    mappings will use ``(video_id, track_id)`` pairs as keys.
+    Embedding tables and tracklet keys always include the source video ID.
 
     Parameters
     ----------
     tracklet_ids:
         A sequence of tracklet IDs to be clustered.
-        Each ID is either ``track_id`` of a single video or a ``(video_id, track_id)``
+        Each ID is a ``(video_id, track_id)`` pair.
     face_embeddings:
         Per-tracklet face embeddings.  Pass ``None`` to skip face-based
         clustering and use only body embeddings.
-        ``video_id`` is in ``face_embeddings`` if the embeddings are from multiple videos.
+        The table includes ``video_id`` for every row.
     body_embeddings:
         Per-tracklet body-pose embeddings.  Used for tracklets that lack a
         face embedding and as a fallback when *face_embeddings* is ``None``.
-        ``video_id`` is in ``body_embeddings`` if the embeddings are from multiple videos.
+        The table includes ``video_id`` for every row.
     face_distance_threshold:
         Cosine-distance cutoff for face embeddings (default ``0.6``, consistent
         with common ArcFace verification thresholds).
@@ -546,9 +513,6 @@ def _cluster_tracklets(
     debug:
         When ``True``, print per-tracklet embedding statistics and the final
         identity assignment table.
-    video_id:
-        The ID of a specific video to be processed.
-        If ``None``, ``video_id`` in embedding dataframes is used, if any.
 
     Returns
     -------
@@ -566,7 +530,7 @@ def _cluster_tracklets(
     # ------------------------------------------------------------------ faces
     face_emb_map: dict[TrackletId, np.ndarray] = {}
     if face_embeddings is not None:
-        face_emb_map = _aggregate_embeddings(face_embeddings, video_id=video_id)
+        face_emb_map = _aggregate_embeddings(face_embeddings)
 
     face_clusters: dict[int, set[TrackletId]] = {}
     face_tracklet_ids = [
@@ -582,7 +546,7 @@ def _cluster_tracklets(
     # ---------------------------------------------------------------- bodies
     body_emb_map: dict[TrackletId, np.ndarray] = {}
     if body_embeddings is not None:
-        body_emb_map = _aggregate_embeddings(body_embeddings, video_id=video_id)
+        body_emb_map = _aggregate_embeddings(body_embeddings)
 
     # cluster ALL body-capable tracklets, including those that already have
     # face identities. Those face tracklets act as anchors that allow us to
@@ -624,15 +588,10 @@ def _cluster_tracklets(
             tracklet_id_to_person_id[tid] = pid
 
     # tracklets with no embedding at all -> unique person ID each
-    unassigned = [
-        tlid
-        for tlid in tracklet_ids
-        if tlid not in tracklet_id_to_person_id
-        and (video_id is None or not isinstance(tlid, tuple) or tlid[0] == video_id)
-    ]
+    unassigned = [tlid for tlid in tracklet_ids if tlid not in tracklet_id_to_person_id]
     next_pid = max(pid_to_tlids.keys(), default=0) + 1
 
-    for _, tlid in enumerate(sorted(unassigned)):
+    for tlid in sorted(unassigned):
         tracklet_id_to_person_id[tlid] = next_pid
         pid_to_tlids[next_pid] = [tlid]
         next_pid += 1
@@ -658,104 +617,69 @@ def _cluster_tracklets(
     )
 
 
-def cluster_tracklets_from_input(
-    input_data: Sequence[TrackletClusteringInput],
+def cluster_tracklets(
+    glasses_videos: Sequence[GlassesVideo],
     face_distance_threshold: float = 0.6,
     body_distance_threshold: float = 0.15,
     min_face_detections: int = 1,
     min_body_detections: int = 3,
     debug: bool = False,
-):
-    """Cluster tracklets from one or more videos into persistent person IDs.
+    *,
+    min_face_frames: int = 30,
+) -> ClusteringResult:
+    """Cluster glasses videos and associate people with their glasses IDs.
 
-    This function accepts a sequence of :class:`TrackletClusteringInput` instances,
-    one per video.  It merges the results into a single identity mapping across all
-    videos.
-
-    Parameters
-    ----------
-    input_data:
-        Sequence of :class:`TrackletClusteringInput` instances, one per video.
-    face_distance_threshold:
-        Cosine-distance cutoff for face embeddings (default ``0.6``, consistent
-        with common ArcFace verification thresholds).
-    body_distance_threshold:
-        Cosine-distance cutoff for body embeddings (default ``0.15``, consistent
-        with common ArcFace verification thresholds).
-    min_face_detections:
-        Minimum number of face detections required for a tracklet to be considered
-        for face-based clustering (default ``1``).
-    min_body_detections:
-        Minimum number of body detections required for a tracklet to be considered
-        for body-based clustering (default ``3``).
-    debug:
-        If ``True``, print debug information (default ``False``).
+    Read tracks, embeddings, and face observations directly from each video.
+    Tracklet keys are always ``(video_id, track_id)``, including single-video
+    results. Fixed videos are not used. Every glasses video must have completed
+    tracking and face detection, with recognition embeddings retained for faces.
+    The result includes the face-frame matrix and nullable wearer associations.
     """
-    # prepare merged inputs for clustering
-
-    if not input_data:
-        return ClusteringResult(
-            tracklet_id_to_person_id={},
-            person_id_to_tracklet_ids={},
-            tracklet_face_embedding={},
-            tracklet_body_embedding={},
-        )
-
-    if len(input_data) == 1:
-        # single video case
-        single_input = input_data[0]
-        return _cluster_tracklets(
-            video_id=single_input.video_id if single_input.video_id else None,
-            tracklet_ids=(
-                [(single_input.video_id, int(tid)) for tid in single_input.track_ids]
-                if single_input.video_id
-                else single_input.track_ids
-            ),
-            face_embeddings=single_input.face_embeddings,
-            body_embeddings=single_input.body_embeddings,
-            face_distance_threshold=face_distance_threshold,
-            body_distance_threshold=body_distance_threshold,
-            min_face_detections=min_face_detections,
-            min_body_detections=min_body_detections,
-            debug=debug,
-        )
-
-    # multi-video case
-    all_tracklet_ids: set[TrackletId] = set()
-    all_face_embeddings: pd.DataFrame = pd.DataFrame()
-    all_body_embeddings: pd.DataFrame = pd.DataFrame()
-
-    for video_input in input_data:
-        video_id = video_input.video_id
-        if video_id is None:
-            raise ValueError("video_id must be provided for multi-video clustering")
-
-        all_tracklet_ids.update(
-            (str(video_id), int(tid)) for tid in video_input.track_ids
-        )
-
-        if video_input.face_embeddings is not None:
-            face_df = video_input.face_embeddings.copy()
-            face_df["video_id"] = str(video_id)
-            all_face_embeddings = pd.concat(
-                [all_face_embeddings, face_df], ignore_index=True
+    video_ids = [video.id for video in glasses_videos]
+    if any(not video_id for video_id in video_ids) or len(set(video_ids)) != len(
+        video_ids
+    ):
+        raise ValueError("glasses videos must have nonempty, unique IDs")
+    for video in glasses_videos:
+        if video.data is None or "face_score" not in video.data.columns:
+            raise ValueError(f"run tracking and face detection for {video.id!r} first")
+        if video.data["face_score"].notna().any() and video.face_embeddings is None:
+            raise ValueError(
+                f"collect face recognition embeddings for {video.id!r} first"
             )
 
-        if video_input.body_embeddings is not None:
-            body_df = video_input.body_embeddings.copy()
-            body_df["video_id"] = str(video_id)
-            all_body_embeddings = pd.concat(
-                [all_body_embeddings, body_df], ignore_index=True
-            )
-
-    return _cluster_tracklets(
-        video_id=None,
-        tracklet_ids=list(all_tracklet_ids),
-        face_embeddings=all_face_embeddings if not all_face_embeddings.empty else None,
-        body_embeddings=all_body_embeddings if not all_body_embeddings.empty else None,
+    tracklet_ids = sorted(
+        (video.id, int(track_id))
+        for video in glasses_videos
+        for track_id in video.data["track_id"].unique()
+    )
+    face_tables = [
+        video.face_embeddings.assign(video_id=video.id)
+        for video in glasses_videos
+        if video.face_embeddings is not None
+    ]
+    body_tables = [
+        video.body_embeddings.assign(video_id=video.id)
+        for video in glasses_videos
+        if video.body_embeddings is not None
+    ]
+    clustering = _cluster_tracklets(
+        tracklet_ids=tracklet_ids,
+        face_embeddings=pd.concat(face_tables, ignore_index=True)
+        if face_tables
+        else None,
+        body_embeddings=pd.concat(body_tables, ignore_index=True)
+        if body_tables
+        else None,
         face_distance_threshold=face_distance_threshold,
         body_distance_threshold=body_distance_threshold,
         min_face_detections=min_face_detections,
         min_body_detections=min_body_detections,
         debug=debug,
     )
+    identify_glasses_wearers(
+        clustering,
+        {video.id: video.data for video in glasses_videos},
+        min_face_frames=min_face_frames,
+    )
+    return clustering

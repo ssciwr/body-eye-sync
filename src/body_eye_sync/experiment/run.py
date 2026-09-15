@@ -5,7 +5,11 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from body_eye_sync.experiment.postprocess import attribute_experiment_speech
+from body_eye_sync.experiment.postprocess import (
+    attribute_experiment_speech,
+    cluster_experiment_tracklets,
+    clustering_blocked_reason,
+)
 from body_eye_sync.experiment.audio import Audio
 from body_eye_sync.experiment.config import (
     BodyPoseStep,
@@ -53,7 +57,21 @@ def run_experiment(experiment: Experiment, *, force: bool = False) -> dict[str, 
         results[data.id] = directory
 
     attribute_speech(experiment)
+    cluster_identities(experiment)
     return results
+
+
+def cluster_identities(experiment: Experiment) -> None:
+    """Cluster processed glasses videos and write experiment-level identities."""
+    blocked = clustering_blocked_reason(experiment)
+    if blocked is not None:
+        logger.info("skipping clustering: %s", blocked)
+        experiment.identities.clear()
+    else:
+        cluster_experiment_tracklets(experiment)
+    experiment.identities.save(experiment.output_dir)
+    if experiment.identities.has_data():
+        logger.info("wrote identities to %s", experiment.output_dir)
 
 
 def attribute_speech(experiment: Experiment) -> None:

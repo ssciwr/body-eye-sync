@@ -15,6 +15,11 @@ uv run body-eye-sync-cli path/to/experiment
 The CLI loads `experiment.yaml`, runs every configured input, and writes one
 Parquet result per input under `outputs/`.
 
+After the input stages finish, the CLI runs speech attribution and tracklet
+clustering. When all glasses videos have face-detection results and retained
+recognition embeddings, clustering writes `outputs/identities.parquet`. Otherwise
+it logs why clustering was skipped. Fixed videos are ignored by clustering.
+
 Existing outputs are skipped by default:
 
 ```bash

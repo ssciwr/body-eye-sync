@@ -24,7 +24,8 @@ TAB_TITLES = [
     "Clock rate",
     "Video processing",
     "Audio processing",
-    "Speech post processing",
+    "Speech",
+    "Participant identification",
     "Post processing",
     "Data export",
 ]

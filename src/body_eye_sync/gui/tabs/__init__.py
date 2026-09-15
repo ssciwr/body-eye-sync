@@ -11,6 +11,7 @@ from body_eye_sync.gui.tabs.alignment import AlignmentTab
 from body_eye_sync.gui.tabs.audio_processing import AudioProcessingTab
 from body_eye_sync.gui.tabs.base import BaseTab, PlaceholderTab
 from body_eye_sync.gui.tabs.clock_rate import ClockRateTab
+from body_eye_sync.gui.tabs.cluster_post_processing import ClusterPostProcessingTab
 from body_eye_sync.gui.tabs.data_export import DataExportTab
 from body_eye_sync.gui.tabs.input_files import InputFilesTab
 from body_eye_sync.gui.tabs.post_processing import PostProcessingTab
@@ -25,6 +26,7 @@ TAB_TYPES: tuple[type[BaseTab], ...] = (
     VideoProcessingTab,
     AudioProcessingTab,
     SpeechPostProcessingTab,
+    ClusterPostProcessingTab,
     PostProcessingTab,
     DataExportTab,
 )
@@ -35,6 +37,7 @@ __all__ = [
     "AudioProcessingTab",
     "BaseTab",
     "ClockRateTab",
+    "ClusterPostProcessingTab",
     "DataExportTab",
     "InputFilesTab",
     "PlaceholderTab",

@@ -52,6 +52,38 @@ outputs/<input-id>/face_embeddings.parquet
 
 Only the best `embeddings_per_track` vectors are kept for each tracklet.
 
+## Identities
+
+The experiment owns a shared table of tracklet identities, available through
+`experiment.identities.data` and saved with the experiment:
+
+```text
+outputs/identities.parquet
+```
+
+| Column | Meaning |
+| --- | --- |
+| `video_id` | Glasses video ID of the recording containing the tracklet |
+| `track_id` | Positive integer track ID within that video |
+| `participant_id` | Glasses video ID of the identified person, or null if the person is unidentified |
+
+Run `cluster_experiment_tracklets(experiment)` to populate these assignments.
+Clustering settings are edited in the GUI's Participant identification tab and saved
+in `experiment.yaml` under `pipeline.cluster_post_processing`. The GUI and CLI
+both use these settings. The clustering result exposes `person_face_frame_counts`,
+a matrix with person IDs as rows and glasses video IDs as columns, and
+`person_id_to_glasses_video_id` for the inferred wearer associations.
+
+The wearer is the sole recording with zero recognized-face frames, provided
+every other glasses recording has at least `min_face_frames` such frames.
+Ambiguous or weak rows remain unidentified. Counts use distinct source frames
+with detected faces on recognized tracklets, combining all their tracklets;
+the top-K embedding limit does not limit the counts. Fixed videos are ignored
+entirely. Every glasses recording must have
+completed face detection with recognition embeddings retained for detected faces.
+The count matrix is returned for inspection; only the direct identity assignments
+are saved. Frame counts do not use synchronization offsets or rates.
+
 ## Speech outputs
 
 ```text

@@ -326,6 +326,35 @@ class SpeechPostProcessingSettings(_Model):
     )
 
 
+class ClusterPostProcessingSettings(_Model):
+    """How tracklets are clustered and associated with glasses wearers."""
+
+    face_distance_threshold: float = Field(
+        0.6, ge=0, le=2, description="Cosine-distance cutoff for face embeddings."
+    )
+    body_distance_threshold: float = Field(
+        0.15, ge=0, le=2, description="Cosine-distance cutoff for body embeddings."
+    )
+    min_face_detections: int = Field(
+        1,
+        ge=1,
+        description="Minimum number of tracklets with face embeddings for face clustering.",
+    )
+    min_body_detections: int = Field(
+        3,
+        ge=1,
+        description="Minimum number of tracklets with body embeddings for body clustering.",
+    )
+    min_face_frames: int = Field(
+        30,
+        ge=1,
+        description=(
+            "Minimum face frames in every other glasses video to identify a wearer "
+            "whose face is absent from exactly one glasses video."
+        ),
+    )
+
+
 # A pipeline stage for type hints
 StepSpec = Union[
     ObjectTrackingStep,
@@ -370,6 +399,9 @@ class Pipeline(_Model):
     speech: SpeechPipeline | None = Field(default_factory=SpeechPipeline)
     speech_post_processing: SpeechPostProcessingSettings = Field(
         default_factory=SpeechPostProcessingSettings
+    )
+    cluster_post_processing: ClusterPostProcessingSettings = Field(
+        default_factory=ClusterPostProcessingSettings
     )
 
 

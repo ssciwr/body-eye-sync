@@ -4,14 +4,68 @@ from __future__ import annotations
 
 import logging
 
+import pandas as pd
+
 from body_eye_sync.experiment.experiment import Experiment
+from body_eye_sync.experiment.identities import IDENTITY_COLUMNS
 from body_eye_sync.postprocessing.attribution import (
     Progress,
     attribute_segments,
     measure_levels,
 )
+from body_eye_sync.postprocessing.tracklets_clustering import (
+    ClusteringResult,
+    cluster_tracklets,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def clustering_blocked_reason(experiment: Experiment) -> str | None:
+    """Why the experiment is not ready for tracklet clustering, if anything."""
+    if not experiment.glasses_videos:
+        return "Add glasses videos first, in the Input files tab."
+    for video in experiment.glasses_videos:
+        if video.data is None or "face_score" not in video.data.columns:
+            return f"Run tracking and face detection for {video.id!r} first."
+        if video.data["face_score"].notna().any() and video.face_embeddings is None:
+            return f"Collect face recognition embeddings for {video.id!r} first."
+    return None
+
+
+def cluster_experiment_tracklets(
+    experiment: Experiment,
+    *,
+    debug: bool = False,
+) -> ClusteringResult:
+    """Cluster videos, infer glasses wearers, and store tracklet identities.
+
+    Only glasses videos contribute clustering evidence and receive entries in
+    ``experiment.identities``. Fixed videos are ignored. Face
+    detection must have completed for every glasses video before inferring
+    wearers; an unprocessed recording cannot supply evidence of absence.
+
+    Return the clustering result, including the source-frame visibility matrix
+    and person-to-glasses assignments, for inspection. Visibility counts are
+    independent of timeline offsets/rates; gaze processing uses the shared clock.
+    """
+    settings = experiment.pipeline.cluster_post_processing
+    clustering = cluster_tracklets(
+        experiment.glasses_videos,
+        **settings.model_dump(),
+        debug=debug,
+    )
+    identities = pd.DataFrame(
+        [
+            (video_id, track_id, clustering.person_id_to_glasses_video_id[person_id])
+            for (video_id, track_id), person_id in sorted(
+                clustering.tracklet_id_to_person_id.items()
+            )
+        ],
+        columns=IDENTITY_COLUMNS,
+    )
+    experiment.identities.set_data(identities)
+    return clustering
 
 
 def attribute_experiment_speech(

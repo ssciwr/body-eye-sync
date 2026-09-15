@@ -2,7 +2,7 @@
 
 The window is a set of tabs, one per stage of working with an experiment:
 **Input files**, **Alignment**, **Clock rate**, **Video processing**,
-**Audio processing**, **Speech post processing**, **Post processing** and
+**Audio processing**, **Speech**, **Post processing** and
 **Data export**. Post processing does nothing so far.
 
 The title bar names the folder the open experiment is saved to, or says
@@ -86,7 +86,7 @@ The **Audio processing** tab transcribes the speech in every input that carries 
 
 ## Work Out Who Said What
 
-The **Speech post processing** tab turns those transcripts into one table of
+The **Speech** tab turns those transcripts into one table of
 speech turns for the whole experiment, with a speaker against each.
 It uses the loudness of each glasses recording to decide who was speaking at any
 given moment, since the glasses microphone hears its own wearer far louder than anyone else in the room.

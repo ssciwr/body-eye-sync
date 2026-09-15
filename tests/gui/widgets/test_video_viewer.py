@@ -7,6 +7,7 @@ import pytest
 
 from body_eye_sync.experiment.video import Video
 from body_eye_sync.gui.widgets.video_viewer import VideoViewer
+from body_eye_sync.gui.utils import get_color
 
 
 def _video(data_dir, tracklets=None):
@@ -54,6 +55,8 @@ def test_video_viewer_load_clears_stale_overlays(qtbot, data_dir):
     # A video whose first frame has a box draws it on load.
     widget.load(_video(data_dir, _one_box_on_first_frame()))
     assert len(widget._overlay_items) == 2
+    assert widget._overlay_items[1].text() == "1"
+    assert widget._overlay_items[0].pen().color() == get_color(1)
 
     # Loading a video with no object tracking results must drop those overlays.
     widget.load(_video(data_dir))

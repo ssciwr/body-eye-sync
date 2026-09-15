@@ -1,4 +1,4 @@
-"""Speech post processing tab: who spoke when, across the whole experiment."""
+"""Speech tab: who spoke when, across the whole experiment."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from body_eye_sync.experiment.config import SpeechPostProcessingSettings
 from body_eye_sync.experiment.postprocess import attribute_experiment_speech
 from body_eye_sync.experiment.experiment import Experiment
 from body_eye_sync.gui.tabs.base import BaseTab
+from body_eye_sync.gui.utils import recording_colors
 from body_eye_sync.gui.widgets import PydanticForm, SynchronizedAudioPlaybackWidget
 from body_eye_sync.postprocessing.attribution import AttributionCancelled
 
@@ -103,7 +104,7 @@ class _Worker(QObject):
 class SpeechPostProcessingTab(BaseTab):
     """Work out the experiment's speech turns from its glasses recordings."""
 
-    title = "Speech post processing"
+    title = "Speech"
 
     def __init__(self, experiment: Experiment) -> None:
         super().__init__(experiment)
@@ -308,7 +309,10 @@ class SpeechPostProcessingTab(BaseTab):
     def _refresh_audio(self) -> None:
         """Show every synchronized input that carries an audio stream."""
         recordings = [data for data in self.experiment.inputs if data.has_audio_track()]
-        self.audio_player.load(recordings)
+        self.audio_player.load(
+            recordings,
+            colors=recording_colors(data.id for data in self.experiment.inputs),
+        )
         self.audio_player.set_turns(self.experiment.speech_turns.data)
 
     @Slot(int, int)
