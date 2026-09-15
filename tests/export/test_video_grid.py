@@ -160,7 +160,7 @@ def test_construct_video_grid_delays_a_rate_corrected_recording(tmp_path):
     )
     output = tmp_path / "grid.mp4"
 
-    construct_video_grid(experiment, output, columns=2, cell_size=(64, 48))
+    construct_video_grid(experiment, output, cell_size=(64, 48))
 
     blue_audio = _audio_samples(output, 1)
     assert _rms_at(blue_audio, 0.25) < 0.001
