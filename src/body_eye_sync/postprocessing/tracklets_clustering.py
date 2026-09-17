@@ -293,7 +293,8 @@ def _build_identity_mappings(
         clusters[int(label)].add(tracklet_id)
     # convert to 1-indexed person IDs with deterministic ordering
     # here we don't use cluters.keys as the keys can be arbitrary integers
-    return {pid + 1: tlids for pid, tlids in enumerate(sorted(clusters.values()))}
+    ordered_clusters = sorted(clusters.values(), key=lambda tlids: sorted(tlids))
+    return {pid + 1: tlids for pid, tlids in enumerate(ordered_clusters)}
 
 
 def _jaccard_similarity(set_a: set[int], set_b: set[int]) -> float:
@@ -562,6 +563,9 @@ def _cluster_tracklets(
             tracklet_face_embedding={},
             tracklet_body_embedding={},
         )
+
+    # sort tracklet IDs for deterministic output
+    tracklet_ids = sorted(tracklet_ids)
 
     # ------------------------------------------------------------------ faces
     face_emb_map: dict[TrackletId, np.ndarray] = {}
