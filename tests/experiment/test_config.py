@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from body_eye_sync.experiment.config import (
     CURRENT_VERSION,
     AudioInput,
+    ClusterPostProcessingSettings,
     SpeechPipeline,
     SpeechPostProcessingSettings,
     TranscriptionStep,
@@ -107,6 +108,25 @@ def test_speech_post_processing_settings_are_validated():
 
 def test_version_defaults_to_current():
     assert _config().version == CURRENT_VERSION
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"face_distance_threshold": -0.1},
+        {"body_distance_threshold": 2.1},
+        {"min_face_detections": 0},
+        {"min_body_detections": 0},
+    ],
+)
+def test_clustering_settings_reject_invalid_values(values):
+    with pytest.raises(ValidationError):
+        ClusterPostProcessingSettings(**values)
+
+
+def test_existing_experiment_configs_default_to_clustering_settings():
+    config = ExperimentConfig.model_validate({"pipeline": {"speech": None}})
+    assert config.pipeline.cluster_post_processing == ClusterPostProcessingSettings()
 
 
 def test_unknown_keys_are_rejected():

@@ -148,6 +148,27 @@ def test_run_writes_parquet_per_input(tmp_path, stub_pipeline):
     assert data["pose_score"].notna().all()
 
 
+def test_clustering_without_retained_recognition_is_skipped_and_clears_stale_identities(
+    tmp_path, stub_pipeline, caplog
+):
+    video_file = tmp_path / "clip.mp4"
+    video_file.touch()
+    experiment = _experiment(video_file)
+    experiment.identities.set_data(
+        pd.DataFrame(
+            [("cam1", 1, "cam1")],
+            columns=["video_id", "track_id", "participant_id"],
+        )
+    )
+    experiment.save()
+    with caplog.at_level("INFO"):
+        run_experiment(experiment, force=True)
+    assert not experiment.identities.has_data()
+    assert not (experiment.output_dir / "identities.parquet").exists()
+    assert "skipping clustering" in caplog.text
+    assert "recognition embeddings" in caplog.text
+
+
 def test_run_forwards_step_args(tmp_path, stub_pipeline):
     video_file = tmp_path / "clip.mp4"
     video_file.touch()

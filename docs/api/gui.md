@@ -22,6 +22,8 @@
 
 ::: body_eye_sync.gui.tabs.speech_post_processing
 
+::: body_eye_sync.gui.tabs.cluster_post_processing
+
 ::: body_eye_sync.gui.tabs.post_processing
 
 ::: body_eye_sync.gui.tabs.data_export
@@ -33,6 +35,8 @@
 ::: body_eye_sync.gui.widgets.pipeline_editor
 
 ::: body_eye_sync.gui.widgets.video_viewer
+
+::: body_eye_sync.gui.widgets.video_selection
 
 ::: body_eye_sync.gui.widgets.pydantic_form
 
