@@ -186,9 +186,11 @@ def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
     changed = []
     busy = []
     progress = []
+    messages = []
     tab.experiment_changed.connect(lambda: changed.append(True))
     tab.busy_changed.connect(busy.append)
     tab.progress_changed.connect(lambda *values: progress.append(values))
+    tab.status_message.connect(messages.append)
 
     def align(current_experiment, *, progress):
         assert not tab.isEnabled()
@@ -199,7 +201,7 @@ def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
         current_experiment.fixed_videos[0].timeline.offset = 0.125
         current_experiment.fixed_videos[1].timeline.offset = 0.375
         progress(0.5)
-        return SimpleNamespace(offsets={"room1": 0.125, "room2": 0.375})
+        return SimpleNamespace(offsets={"room1": 0.125, "room2": 0.375}, unaligned=[])
 
     monkeypatch.setattr(
         "body_eye_sync.gui.tabs.alignment.align_experiment",
@@ -220,6 +222,7 @@ def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
         "Shared Timeline point 0.375 s",
     ]
     assert changed == [True]
+    assert messages == ["Automatic alignment finished"]
     assert busy == [True, False]
     assert progress == [
         (0, 100, "Aligning recordings…"),
@@ -232,6 +235,43 @@ def test_automatic_alignment_populates_offsets_for_manual_fine_tuning(
     tab.video_cards[1].controls.up_button.click()
 
     assert experiment.fixed_videos[1].timeline.offset == pytest.approx(0.425)
+
+
+def test_failed_automatic_alignment_keeps_offsets_for_manual_adjustment(
+    qtbot, data_dir, monkeypatch
+):
+    path = data_dir / "three-people.mp4"
+    experiment = Experiment(
+        ExperimentConfig(
+            fixed_videos=[
+                FixedVideoInput(id="room1", path=path),
+                FixedVideoInput(id="room2", path=path),
+            ]
+        )
+    )
+    tab = AlignmentTab(experiment)
+    qtbot.addWidget(tab)
+    messages = []
+    tab.status_message.connect(messages.append)
+
+    def align(current_experiment, *, progress):
+        current_experiment.fixed_videos[0].timeline.offset = 0.125
+        current_experiment.fixed_videos[1].timeline.offset = 0.375
+        return SimpleNamespace(
+            offsets={"room1": 0.125, "room2": 0.375}, unaligned=["room3"]
+        )
+
+    monkeypatch.setattr(
+        "body_eye_sync.gui.tabs.alignment.align_experiment",
+        align,
+    )
+
+    tab.align_button.click()
+
+    assert [
+        video.timeline.offset for video in experiment.fixed_videos
+    ] == pytest.approx([0.125, 0.375])
+    assert messages == ["Automatic alignment incomplete; could not align: room3"]
 
 
 def test_automatic_alignment_restores_controls_after_failure(

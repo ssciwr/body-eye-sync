@@ -12,13 +12,10 @@ import numpy as np
 
 from body_eye_sync.preprocessing.audio import audio_samples
 
-ALIGNMENT_TOLERANCE = 0.02
-
 LANDMARK_SAMPLE_RATE = 8000
 LANDMARK_FFT = 512
 LANDMARK_HOP_SAMPLES = 128
 LANDMARK_HOP = LANDMARK_HOP_SAMPLES / LANDMARK_SAMPLE_RATE
-LANDMARK_MIN_VOTES = 7.0
 _LANDMARK_PEAK_BLOCK = 8
 _LANDMARK_PEAKS_PER_BLOCK = 3
 _LANDMARK_TARGETS = 5
@@ -125,9 +122,9 @@ def landmark_offset(
 ) -> tuple[float, float]:
     """How many seconds to add to b's clock to align with a.
 
-    Confidence is the number of independent hash matches agreeing within four
-    landmark frames. Hashes occurring very often are discarded because they describe
-    repetitive tones rather than distinctive acoustic events.
+    Quality is the number of hash matches agreeing within four landmark frames.
+    Hashes occurring very often are discarded because they describe repetitive
+    tones rather than distinctive acoustic events.
     """
     if len(a) == 0 or len(b) == 0:
         return 0.0, 0.0
@@ -173,19 +170,12 @@ class PairOffset:
 
 @dataclass
 class Alignment:
-    """Offsets putting every input on one clock, and how much to trust them."""
+    """Offsets putting connected inputs on one clock."""
 
     # seconds to add to each input's own clock to reach experiment time.
     offsets: dict[str, float]
-    # requested inputs that have no locked path to the reference input.
+    # Requested inputs that were not able to be aligned.
     unaligned: list[str] = field(default_factory=list)
-    # RMS disagreement between the pair measurements and the solved offsets
-    residual: float = 0.0
-
-    @property
-    def ok(self) -> bool:
-        """Whether every input is connected and the locked pairs agree."""
-        return not self.unaligned and self.residual < ALIGNMENT_TOLERANCE
 
 
 def measure_pairs(
@@ -202,119 +192,64 @@ def measure_pairs(
     ]
 
 
-def solve_offsets(
-    ids: list[str],
-    pairs: list[PairOffset],
+def align(
+    envelopes: dict[str, np.ndarray],
     *,
-    min_quality: float = LANDMARK_MIN_VOTES,
-    reference: str | None = None,
+    hop: float = LANDMARK_HOP,
+    pairwise: Callable[
+        [np.ndarray, np.ndarray, float], tuple[float, float]
+    ] = landmark_offset,
 ) -> Alignment:
-    """Least-squares offsets from pair measurements, ignoring ones that failed.
+    """Align inputs using a maximum-quality spanning tree of pair measurements.
 
-    Each locked pair contributes ``offset(b) - offset(a) = lag``, weighted by
-    its quality, and the reference is pinned to zero. With more pairs than
-    unknowns the leftover disagreement becomes :attr:`Alignment.residual`.
+    Start with the input having the greatest sum of pair qualities, then
+    repeatedly attach the unaligned input with the highest-quality pair to any
+    already aligned input.
     """
+    ids = list(envelopes)
     if not ids:
         return Alignment(offsets={})
-    reference = reference or ids[0]
-    if reference not in ids:
-        raise ValueError(f"reference input {reference!r} is not available")
-
-    locked: list[PairOffset] = []
-    for pair in pairs:
-        if pair.quality < min_quality:
+    matched: list[PairOffset] = []
+    for pair in measure_pairs(envelopes, hop, pairwise):
+        if pair.quality <= 0:
             logger.warning(
-                "inputs %r and %r did not lock (quality %.1f); "
+                "inputs %r and %r did not match (quality %.1f); "
                 "they may not overlap in time",
                 pair.a,
                 pair.b,
                 pair.quality,
             )
             continue
-        locked.append(pair)
+        matched.append(pair)
 
-    neighbours = {name: set() for name in ids}
-    for pair in locked:
-        neighbours[pair.a].add(pair.b)
-        neighbours[pair.b].add(pair.a)
-    connected = {reference}
-    frontier = [reference]
-    while frontier:
-        name = frontier.pop()
-        for neighbour in neighbours[name] - connected:
-            connected.add(neighbour)
-            frontier.append(neighbour)
-    solved_ids = [name for name in ids if name in connected]
-    unaligned = [name for name in ids if name not in connected]
-    index = {name: i for i, name in enumerate(solved_ids)}
+    quality = dict.fromkeys(ids, 0.0)
+    for pair in matched:
+        quality[pair.a] += pair.quality
+        quality[pair.b] += pair.quality
+    reference = max(ids, key=quality.__getitem__)
 
-    rows: list[np.ndarray] = []
-    values: list[float] = []
-    weights: list[float] = []
-    for pair in locked:
-        if pair.a not in connected or pair.b not in connected:
-            continue
-        row = np.zeros(len(solved_ids))
-        row[index[pair.b]] = 1.0
-        row[index[pair.a]] = -1.0
-        rows.append(row)
-        values.append(pair.lag)
-        # Weighted least squares multiplies rows by sqrt(weight).
-        weights.append(np.sqrt(pair.quality))
+    offsets = {reference: 0.0}
+    ranked = sorted(matched, key=lambda pair: pair.quality, reverse=True)
+    while len(offsets) < len(ids):
+        crossing = next(
+            (pair for pair in ranked if (pair.a in offsets) != (pair.b in offsets)),
+            None,
+        )
+        if crossing is None:
+            break
+        if crossing.a in offsets:
+            offsets[crossing.b] = offsets[crossing.a] + crossing.lag
+        else:
+            offsets[crossing.a] = offsets[crossing.b] - crossing.lag
 
-    # Pin the reference to zero, weighted so the solve cannot trade it away.
-    pin = np.zeros(len(solved_ids))
-    pin[index[reference]] = 1.0
-    rows.append(pin)
-    values.append(0.0)
-    weights.append(max(weights, default=1.0) * 100)
-
-    design = np.asarray(rows)
-    measured = np.asarray(values)
-    weight = np.asarray(weights)
-    solution, *_ = np.linalg.lstsq(
-        design * weight[:, None], measured * weight, rcond=None
-    )
-    # Residual over the pair equations only; the pin is a constraint, not data.
-    leftover = design[:-1] @ solution - measured[:-1]
-    residual = float(np.sqrt((leftover**2).mean())) if len(leftover) else 0.0
     return Alignment(
-        offsets={name: float(solution[index[name]]) for name in solved_ids},
-        unaligned=unaligned,
-        residual=residual,
-    )
-
-
-def align(
-    envelopes: dict[str, np.ndarray],
-    *,
-    hop: float = LANDMARK_HOP,
-    min_quality: float = LANDMARK_MIN_VOTES,
-    reference: str | None = None,
-    pairwise: Callable[
-        [np.ndarray, np.ndarray, float], tuple[float, float]
-    ] = landmark_offset,
-) -> Alignment:
-    """Solve every input's offset from the envelopes, using all pairs at once.
-
-    ``reference`` is the input left at offset zero, defaulting to the first;
-    which one is chosen only shifts the whole timeline, it does not change the
-    inputs' positions relative to each other.
-    """
-    ids = list(envelopes)
-    return solve_offsets(
-        ids,
-        measure_pairs(envelopes, hop, pairwise),
-        min_quality=min_quality,
-        reference=reference,
+        offsets=offsets, unaligned=[name for name in ids if name not in offsets]
     )
 
 
 def align_media(
     paths: dict[str, str | Path],
     *,
-    reference: str | None = None,
     progress: Callable[[float], bool] | None = None,
 ) -> Alignment:
     """Offsets for a set of recordings, keyed the way the inputs are."""
@@ -329,10 +264,7 @@ def align_media(
         if progress is not None and progress(0.95 * (index + 1) / len(paths)) is False:
             return Alignment(offsets={})
     missing = [name for name in paths if name not in features]
-    if reference is not None and reference not in features:
-        logger.warning("reference input %r has no audio to align on", reference)
-        return Alignment(offsets={}, unaligned=list(paths))
-    result = align(features, reference=reference)
+    result = align(features)
     result.unaligned.extend(name for name in missing if name not in result.unaligned)
     if progress is not None:
         progress(1.0)

@@ -311,6 +311,12 @@ class AlignmentTab(BaseTab):
             result = align_experiment(self.experiment, progress=self._progress)
             if result.offsets:
                 self.experiment_changed.emit()
+            if result.unaligned:
+                recordings = ", ".join(result.unaligned)
+                self.status_message.emit(
+                    f"Automatic alignment incomplete; could not align: {recordings}"
+                )
+            else:
                 self.status_message.emit("Automatic alignment finished")
         finally:
             self.setEnabled(True)

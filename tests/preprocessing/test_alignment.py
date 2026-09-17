@@ -5,13 +5,11 @@ import pytest
 
 from body_eye_sync.preprocessing.alignment import (
     LANDMARK_HOP,
-    LANDMARK_MIN_VOTES,
     PairOffset,
     align,
     align_media,
     landmark_features,
     landmark_offset,
-    solve_offsets,
 )
 from body_eye_sync.preprocessing.audio import SAMPLE_RATE, load_audio
 
@@ -32,29 +30,28 @@ def test_landmarks_vote_for_the_same_offset_despite_distractors():
     lag, votes = landmark_offset(a, b)
 
     assert lag == pytest.approx(200 * LANDMARK_HOP)
-    assert votes > LANDMARK_MIN_VOTES
-
-
-def test_unrelated_long_landmark_tracks_do_not_gain_confidence_from_length():
-    rng = np.random.default_rng(21)
-    count = 135_000
-    a = np.column_stack(
-        (rng.integers(0, 135_000, size=count), rng.integers(0, 1 << 23, size=count))
-    )
-    b = np.column_stack(
-        (rng.integers(0, 135_000, size=count), rng.integers(0, 1 << 23, size=count))
-    )
-
-    _, votes = landmark_offset(a, b)
-
-    assert votes < LANDMARK_MIN_VOTES
+    assert votes > 0
 
 
 def _landmark_recording(hashes, start, end):
     return np.column_stack((np.arange(end - start), hashes[start:end]))
 
 
-def test_align_solves_every_offset_against_a_reference():
+def _align_pairs(ids, pairs):
+    """Run align() with predefined pair measurements."""
+    index = {name: i for i, name in enumerate(ids)}
+    measurements = {
+        (index[pair.a], index[pair.b]): (pair.lag, pair.quality) for pair in pairs
+    }
+    envelopes = {name: np.array([i]) for name, i in index.items()}
+
+    def pairwise(a, b, _hop):
+        return measurements.get((int(a[0]), int(b[0])), (0.0, 0.0))
+
+    return align(envelopes, pairwise=pairwise)
+
+
+def test_align_solves_every_relative_offset():
     rng = np.random.default_rng(3)
     hashes = rng.integers(0, 1 << 30, size=2000)
     features = {
@@ -65,31 +62,16 @@ def test_align_solves_every_offset_against_a_reference():
 
     result = align(features)
 
-    assert result.offsets["a"] == pytest.approx(0.0)
-    assert result.offsets["b"] == pytest.approx(100 * LANDMARK_HOP)
-    assert result.offsets["c"] == pytest.approx(300 * LANDMARK_HOP)
-    assert result.ok
-    assert result.residual < LANDMARK_HOP
-
-
-def test_align_reference_only_shifts_the_whole_timeline():
-    rng = np.random.default_rng(4)
-    hashes = rng.integers(0, 1 << 30, size=2000)
-    features = {
-        "a": _landmark_recording(hashes, 0, 1500),
-        "b": _landmark_recording(hashes, 100, 1700),
-    }
-
-    first = align(features, reference="a")
-    second = align(features, reference="b")
-
-    assert first.offsets["a"] - first.offsets["b"] == pytest.approx(
-        second.offsets["a"] - second.offsets["b"]
+    assert result.offsets["b"] - result.offsets["a"] == pytest.approx(
+        100 * LANDMARK_HOP
     )
-    assert second.offsets["b"] == pytest.approx(0.0)
+    assert result.offsets["c"] - result.offsets["a"] == pytest.approx(
+        300 * LANDMARK_HOP
+    )
+    assert result.unaligned == []
 
 
-def test_align_reports_pairs_that_do_not_lock(caplog):
+def test_align_reports_pairs_that_do_not_match(caplog):
     rng = np.random.default_rng(5)
     hashes = rng.integers(0, 1 << 30, size=1200)
     elsewhere = rng.integers(0, 1 << 30, size=900)
@@ -102,14 +84,14 @@ def test_align_reports_pairs_that_do_not_lock(caplog):
     with caplog.at_level(logging.WARNING):
         result = align(features)
 
-    failed = [r.getMessage() for r in caplog.records if "did not lock" in r.message]
+    failed = [r.getMessage() for r in caplog.records if "did not match" in r.message]
     assert any("'a'" in m and "'elsewhere'" in m for m in failed)
     assert any("'b'" in m and "'elsewhere'" in m for m in failed)
-    assert not result.ok
+    assert result.unaligned == ["elsewhere"]
     assert result.offsets["b"] == pytest.approx(80 * LANDMARK_HOP)
 
 
-def test_solve_offsets_residual_is_zero_when_pairs_agree():
+def test_align_uses_consistent_pairs():
     # a->b 1s and b->c 2s imply a->c 3s; all three measurements are consistent.
     pairs = [
         PairOffset("a", "b", 1.0, 20.0),
@@ -117,54 +99,92 @@ def test_solve_offsets_residual_is_zero_when_pairs_agree():
         PairOffset("a", "c", 3.0, 20.0),
     ]
 
-    result = solve_offsets(["a", "b", "c"], pairs)
+    result = _align_pairs(["a", "b", "c"], pairs)
 
-    assert result.offsets == pytest.approx({"a": 0.0, "b": 1.0, "c": 3.0})
-    assert result.residual == pytest.approx(0.0, abs=1e-9)
-    assert result.ok
-
-
-def test_solve_offsets_residual_exposes_contradictory_pairs():
-    # Same as above, but a->c disagrees with going via b by a full second.
-    pairs = [
-        PairOffset("a", "b", 1.0, 20.0),
-        PairOffset("b", "c", 2.0, 20.0),
-        PairOffset("a", "c", 4.0, 20.0),
-    ]
-
-    result = solve_offsets(["a", "b", "c"], pairs)
-
-    assert result.residual > TEST_HOP
-    assert not result.ok
-
-
-def test_solve_offsets_ignores_pairs_that_did_not_lock():
-    pairs = [
-        PairOffset("a", "b", 1.0, 20.0),
-        PairOffset("a", "c", 99.0, 0.5),  # nonsense, and known to be nonsense
-        PairOffset("b", "c", 2.0, 20.0),
-    ]
-
-    result = solve_offsets(["a", "b", "c"], pairs)
-
-    # The bad measurement is dropped rather than dragging the others off, and
-    # the pairs that did lock still connect every input, so this is a good
-    # alignment rather than a partial one.
     assert result.offsets == pytest.approx({"a": 0.0, "b": 1.0, "c": 3.0})
     assert result.unaligned == []
-    assert result.ok
+
+
+def test_maximum_spanning_tree_ignores_a_weaker_spurious_candidate():
+    # Measurements from the Tobii experiment that exposed the failure. The
+    # final pair is a false lock between two non-overlapping parts of 1404.
+    pairs = [
+        PairOffset("1401", "1402", -74.288, 7914.0),
+        PairOffset("1401", "1403", 71.520, 3311.0),
+        PairOffset("1401", "1404", 144.704, 503.0),
+        PairOffset("1401", "1404_2", 1361.088, 3310.0),
+        PairOffset("1402", "1403", 145.808, 3789.0),
+        PairOffset("1402", "1404", 218.992, 477.0),
+        PairOffset("1402", "1404_2", 1435.376, 3273.0),
+        PairOffset("1403", "1404", 73.200, 1229.0),
+        PairOffset("1403", "1404_2", 1289.552, 3878.0),
+        # A positive-vote candidate, but about 1290 seconds wrong.
+        PairOffset("1404", "1404_2", -73.600, 15.0),
+    ]
+
+    result = _align_pairs(["1401", "1402", "1403", "1404", "1404_2"], pairs)
+
+    assert result.offsets == pytest.approx(
+        {
+            "1402": 0.0,
+            "1401": 74.288,
+            "1403": 145.808,
+            "1404": 219.008,
+            "1404_2": 1435.360,
+        }
+    )
+    assert result.offsets["1404"] - result.offsets["1401"] == pytest.approx(144.720)
+    assert result.unaligned == []
+
+
+def test_align_ignores_a_weaker_pair_outside_the_tree():
+    pairs = [
+        PairOffset("a", "b", 1.0, 20.0),
+        PairOffset("a", "c", 99.0, 0.5),  # weaker contradictory candidate
+        PairOffset("b", "c", 2.0, 20.0),
+    ]
+
+    result = _align_pairs(["a", "b", "c"], pairs)
+
+    # The stronger path wins, so the unused pair cannot move the offsets.
+    assert result.offsets["b"] - result.offsets["a"] == pytest.approx(1.0)
+    assert result.offsets["c"] - result.offsets["a"] == pytest.approx(3.0)
+    assert result.unaligned == []
 
 
 def test_disconnected_inputs_do_not_receive_arbitrary_zero_offsets():
-    result = solve_offsets(["a", "b", "elsewhere"], [PairOffset("a", "b", 1.0, 20.0)])
+    result = _align_pairs(
+        ["a", "b", "elsewhere"],
+        [PairOffset("a", "b", 1.0, 20.0), PairOffset("b", "elsewhere", 0.0, 0.0)],
+    )
 
     assert result.offsets == pytest.approx({"a": 0.0, "b": 1.0})
     assert result.unaligned == ["elsewhere"]
-    assert not result.ok
 
 
 def test_align_of_nothing():
     assert align({}).offsets == {}
+
+
+def test_alignment_can_chain_recordings_when_the_reference_does_not_span_them():
+    """A short reference reaches the final recording through the middle one."""
+    rng = np.random.default_rng(22)
+    hashes = rng.integers(0, 1 << 30, size=3000)
+    features = {
+        "reference": _landmark_recording(hashes, 0, 1000),
+        "middle": _landmark_recording(hashes, 800, 2000),
+        "late": _landmark_recording(hashes, 1800, 3000),
+    }
+
+    result = align(features)
+
+    assert result.offsets["middle"] - result.offsets["reference"] == pytest.approx(
+        800 * LANDMARK_HOP
+    )
+    assert result.offsets["late"] - result.offsets["reference"] == pytest.approx(
+        1800 * LANDMARK_HOP
+    )
+    assert result.unaligned == []
 
 
 def test_landmarks_align_an_overlap_of_only_a_fraction_of_a_second(data_dir):
@@ -184,7 +204,7 @@ def test_landmarks_align_an_overlap_of_only_a_fraction_of_a_second(data_dir):
     )
 
     assert result.offsets["recording"] == pytest.approx(0.0, abs=LANDMARK_HOP)
-    assert result.ok
+    assert result.unaligned == []
 
 
 def test_align_media_skips_inputs_with_no_audio(data_dir, caplog):
@@ -201,7 +221,6 @@ def test_align_media_skips_inputs_with_no_audio(data_dir, caplog):
     assert "silent" not in result.offsets
     assert set(result.offsets) == {"camera", "recording"}
     assert result.unaligned == ["silent"]
-    assert not result.ok
     assert "no audio to align on" in caplog.text
 
 
@@ -219,36 +238,21 @@ def _recordings(data_dir):
 
 
 def test_align_media_recovers_the_offsets_between_recordings(data_dir):
-    result = align_media(_recordings(data_dir), reference="room")
+    result = align_media(_recordings(data_dir))
 
-    assert result.offsets["room"] == pytest.approx(0.0, abs=TEST_HOP)
     for name, started_later in GLASSES.items():
-        assert result.offsets[name] == pytest.approx(started_later, abs=2 * TEST_HOP), (
-            name
-        )
+        relative_offset = result.offsets[name] - result.offsets["room"]
+        assert relative_offset == pytest.approx(started_later, abs=2 * TEST_HOP), name
 
 
 def test_align_media_locks_every_pair_of_the_experiment(data_dir, caplog):
     with caplog.at_level(logging.WARNING):
-        result = align_media(_recordings(data_dir), reference="room")
+        result = align_media(_recordings(data_dir))
 
     # Including glasses against glasses, which share only the quieter copy of
     # each other's speech.
-    assert [r for r in caplog.records if "did not lock" in r.message] == []
-    assert result.residual < TEST_HOP
-    assert result.ok
-
-
-def test_the_reference_only_shifts_the_experiment_timeline(data_dir):
-    paths = _recordings(data_dir)
-
-    room = align_media(paths, reference="room")
-    other = align_media(paths, reference="glasses-3")
-
-    assert other.offsets["glasses-3"] == pytest.approx(0.0, abs=TEST_HOP)
-    for name in paths:
-        gap = room.offsets[name] - room.offsets["glasses-3"]
-        assert other.offsets[name] == pytest.approx(gap, abs=2 * TEST_HOP), name
+    assert [r for r in caplog.records if "did not match" in r.message] == []
+    assert result.unaligned == []
 
 
 def _loudness(media_path):
@@ -284,18 +288,18 @@ def test_landmark_features_are_sparse_and_silent_media_has_none(data_dir):
 
     assert features.ndim == 2
     assert features.shape[1] == 2
-    assert len(features) > LANDMARK_MIN_VOTES
+    assert len(features) > 0
     assert len(landmark_features(data_dir / "three-people.mp4")) == 0
 
 
 def test_align_media_reports_progress(data_dir):
     seen = []
-    result = align_media(_recordings(data_dir), reference="room", progress=seen.append)
+    result = align_media(_recordings(data_dir), progress=seen.append)
 
     assert seen == sorted(seen)  # never goes backwards
     assert 0.0 < seen[0] <= 1.0
     assert seen[-1] == pytest.approx(1.0)
-    assert result.ok  # and the answer is unaffected
+    assert result.unaligned == []  # and the answer is unaffected
 
 
 def test_align_media_gives_up_when_progress_says_to(data_dir):
@@ -305,7 +309,7 @@ def test_align_media_gives_up_when_progress_says_to(data_dir):
         calls.append(fraction)
         return False  # give up on the first report
 
-    result = align_media(_recordings(data_dir), reference="room", progress=stop)
+    result = align_media(_recordings(data_dir), progress=stop)
 
     assert len(calls) == 1
     # Nothing partial: offsets from some of the recordings are not the answer.
