@@ -37,7 +37,7 @@ from body_eye_sync.gui.utils import get_color
 
 _MINIMUM_VIDEO_VIEW_HEIGHT = 80
 _PLAYBACK_POLL_INTERVAL_MS = 10
-_MAX_SEQUENTIAL_FORWARD_FRAMES = 10
+_MAX_SEQUENTIAL_FORWARD_FRAMES = 100
 
 
 class _VideoGraphicsView(QGraphicsView):

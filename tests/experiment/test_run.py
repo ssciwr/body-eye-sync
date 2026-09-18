@@ -156,7 +156,7 @@ def test_run_forwards_step_args(tmp_path, stub_pipeline):
         pipeline=Pipeline(
             glasses_video=_full_pipeline(
                 object_tracking=ObjectTrackingStep(
-                    detector="yolov8m", object_classes=[0, 32]
+                    detector="yolov8m", object_classes=[0, 32], gpu_batch_size=4
                 ),
                 face_detection=FaceDetectionStep(det_thresh=0.7),
                 body_pose=BodyPoseStep(conf=0.4),
@@ -169,6 +169,7 @@ def test_run_forwards_step_args(tmp_path, stub_pipeline):
     tracking, face, pose = (stub_pipeline[k][0] for k in ("tracking", "face", "pose"))
     assert tracking["detector"] == "yolov8m"
     assert tracking["object_classes"] == [0, 32]
+    assert tracking["gpu_batch_size"] == 4
     assert face["det_thresh"] == 0.7
     assert pose["conf"] == 0.4
     # Face/pose passes receive the tracked boxes.

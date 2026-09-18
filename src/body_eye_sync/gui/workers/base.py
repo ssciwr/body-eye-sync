@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import traceback
 from typing import Iterator
 
@@ -16,13 +17,16 @@ class BaseWorker(QObject):
     Subclasses supply the per-run work: :meth:`_items` yields each computed
     frame/result, :meth:`_accumulate` stores one into the target, :meth:`_finalise`
     folds the accumulated results once the run completes, and :meth:`_discard`
-    rolls the target back if the run is cancelled or fails. Each item is emitted
-    via ``new_frame`` so the GUI can show it live, and a step that can say how far
-    through it is reports that as a fraction via ``progress``; ``finished`` (after
-    :meth:`_finalise`) or ``cancelled`` (after :meth:`_discard`) fires once the
-    run ends, and any exception is reported via ``failed`` with a traceback (also
-    after :meth:`_discard`). ``operation_name`` labels the run for the GUI.
+    rolls the target back if the run is cancelled or fails. Items are emitted
+    (at most one every :data:`LIVE_FRAME_INTERVAL_SECS` seconds) via ``new_frame``
+    so the GUI can show them live, and a step that can say how far through it is
+    reports that as a fraction via ``progress``; ``finished`` (after :meth:`_finalise`)
+    or ``cancelled`` (after :meth:`_discard`) fires once the run ends,
+    and any exception is reported via ``failed`` with a traceback (also after :meth:`_discard`).
+    ``operation_name`` labels the run for the GUI.
     """
+
+    LIVE_FRAME_INTERVAL_SECS = 1 / 30
 
     #: Human-readable name of the operation, for the GUI's status/error messages.
     operation_name: str = ""
@@ -43,6 +47,9 @@ class BaseWorker(QObject):
 
     @Slot()
     def run(self) -> None:
+        item = None
+        emitted = True
+        last_emit = -float("inf")
         try:
             for item in self._items():
                 if self._cancel.is_set():
@@ -50,7 +57,11 @@ class BaseWorker(QObject):
                     self.cancelled.emit()
                     return
                 self._accumulate(item)
-                self.new_frame.emit(item)
+                now = time.monotonic()
+                emitted = now - last_emit >= self.LIVE_FRAME_INTERVAL_SECS
+                if emitted:
+                    last_emit = now
+                    self.new_frame.emit(item)
         except Exception as exc:
             self._discard()
             self.failed.emit(str(exc), traceback.format_exc())
@@ -59,6 +70,8 @@ class BaseWorker(QObject):
             self._discard()
             self.cancelled.emit()
         else:
+            if not emitted:
+                self.new_frame.emit(item)
             self._finalise()
             self.finished.emit()
 

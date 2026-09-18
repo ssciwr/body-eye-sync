@@ -160,6 +160,14 @@ class ObjectTrackingStep(_Model):
             "Number of best body-appearance (ReID) embeddings to keep per tracklet"
         ),
     )
+    gpu_batch_size: int = Field(
+        8,
+        ge=1,
+        description=(
+            "Frames per detector/ReID forward pass when running on a GPU. "
+            "Lower this if the GPU runs out of memory. Not used on the CPU."
+        ),
+    )
 
 
 class FaceDetectionStep(_Model):

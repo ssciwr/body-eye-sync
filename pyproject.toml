@@ -46,7 +46,7 @@ license = "AGPL-3.0-only"
 license-files = ["LICENSE.md", "NOTICE.md"]
 description = "Synchronize body and eye tracking data"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
