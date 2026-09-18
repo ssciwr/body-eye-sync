@@ -124,6 +124,7 @@ def _run_object_tracking(
         reid=step.reid,
         tracker=step.tracker,
         object_classes=step.object_classes,
+        gpu_batch_size=step.gpu_batch_size,
     ):
         video.add_object_tracking_frame(frame)
     video.finish_object_tracking()

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Iterator, Sequence
+from itertools import batched
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, Sequence
 
 import numpy as np
 import pandas as pd
@@ -93,6 +94,7 @@ def detect_tracklets(
     tracker: str = "botsort",
     device: str | None = None,
     object_classes: Sequence[int] = (0,),
+    gpu_batch_size: int = 8,
 ) -> Iterator[FrameResult]:
     """Track objects in a video, yielding BoxMOT's per-frame result.
 
@@ -109,11 +111,15 @@ def detect_tracklets(
     ``"mps"``, ``"cpu"``); when ``None`` the fastest available device is chosen
     automatically. The detections sharing a track id form a tracklet, and
     ``conf`` is the per-frame confidence of the object detector.
+
+    On a GPU, the detector and ReID models each run on ``gpu_batch_size``
+    frames per forward pass (the tracker is sequential); on the CPU, where
+    batching is slower, frames are processed one at a time.
     """
     # To get lazy, per-frame results so the GUI can display tracking live,
     # we can't use ``boxmot.Boxmot.track`` as this directly writes to a ``runs/`` directory.
     # So we use these internal ``build_*_from_spec`` imports and pin the boxmot version.
-    from boxmot import track
+    from boxmot.engine.tracking.results import FrameResult
     from boxmot.engine.workflows.support import (
         build_detector_from_spec,
         build_tracker_from_spec,
@@ -122,6 +128,7 @@ def detect_tracklets(
 
     if device is None:
         device = default_device()
+    batch_size = 1 if device == "cpu" else gpu_batch_size
 
     # Pass absolute cache paths so both the Ultralytics detector weights and the
     # BoxMOT ReID weights download into the shared cache, rather than the current
@@ -134,6 +141,48 @@ def detect_tracklets(
         tracker, tracker_runtime, cached_model_path(reid), device=device
     )
 
-    yield from track(
-        str(video_path), detector_runtime, reid_runtime, tracker_runtime, verbose=False
-    )
+    if hasattr(tracker_runtime, "reset"):
+        tracker_runtime.reset()
+
+    detector_runtime.batch_size = batch_size
+    detections = detector_runtime.stream_inference(str(video_path), as_detections=True)
+    frame_idx = 0
+    for batch in batched(detections, batch_size):
+        for detection, embeddings in zip(batch, _reid_embeddings(reid_runtime, batch)):
+            frame_idx += 1
+            tracks = tracker_runtime.update(
+                detection.dets, detection.orig_img, embs=embeddings
+            )
+            yield FrameResult(
+                frame_idx,
+                detection.orig_img,
+                tracks,
+                detection.dets,
+                detection.path,
+                get_drawer=lambda: None,
+                embeddings=embeddings,
+            )
+
+
+def _reid_embeddings(reid: Any, detections: Sequence) -> list[np.ndarray | None]:
+    """ReID embeddings for each frame's detections, batched across frames.
+
+    ``detections`` are BoxMOT ``Detections`` for consecutive frames. Returns one
+    ``(n_i, D)`` array per frame, or ``None`` for every frame if there is no ReID
+    model.
+    """
+    if reid is None:
+        return [None] * len(detections)
+    crops = [crop for d in detections for crop in _box_crops(d.orig_img, d.dets[:, :4])]
+    # process the crops in batches of 32 to avoid high memory use for scenes with lots of people
+    chunks = [reid(chunk) for chunk in batched(crops, 32)]
+    features = np.concatenate(chunks) if chunks else np.empty((0, 0), dtype=np.float32)
+    counts = [len(d.dets) for d in detections]
+    return np.split(features, np.cumsum(counts)[:-1])
+
+
+def _box_crops(img: np.ndarray, xyxy: np.ndarray) -> list[np.ndarray]:
+    """Crop each ``x1, y1, x2, y2`` box out of ``img``, clipped to its bounds."""
+    h, w = img.shape[:2]
+    boxes = np.clip(np.round(xyxy).astype(int), 0, [w, h, w, h])
+    return [img[y1:y2, x1:x2] for x1, y1, x2, y2 in boxes]
