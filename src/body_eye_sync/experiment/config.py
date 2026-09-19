@@ -11,13 +11,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 CURRENT_VERSION = 1
 
 
+#: Characters an input id cannot hold, as it names output paths.
+RESERVED_ID_CHARACTERS = "/\\[]"
+#: Names an input id cannot be, for the same reason.
+RESERVED_IDS = (".", "..")
+
+
 def validate_input_id(input_id: str) -> str:
     """Return an input id, having checked it is safe for generated names."""
     if not input_id:
         raise ValueError("input id cannot be empty")
-    if any(char in input_id for char in ("/", "\\", "[", "]")) or input_id in (
-        ".",
-        "..",
+    if (
+        any(char in input_id for char in RESERVED_ID_CHARACTERS)
+        or input_id in RESERVED_IDS
     ):
         raise ValueError(f"input id cannot contain reserved characters: {input_id!r}")
     return input_id
@@ -71,7 +77,10 @@ class GlassesVideoInput(_Input):
     """Video and gaze data recorded by a participant's glasses-mounted camera."""
 
     gaze_path: Path = Field(
-        description="Gaze samples recorded alongside this video, as a TSV file."
+        description=(
+            "Gaze samples recorded alongside this video: a Tobii Pro Glasses "
+            "recording folder, or a TSV gaze export."
+        )
     )
 
 

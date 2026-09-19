@@ -131,11 +131,7 @@ def offset_curve(
 
 
 def fit_timeline(
-    points: list[OffsetPoint],
-    *,
-    min_drift_ppm: float = MIN_DRIFT_PPM,
-    min_span: float = MIN_DRIFT_SPAN,
-    confidence: float = DRIFT_CONFIDENCE,
+    points: list[OffsetPoint], *, min_drift_ppm: float = MIN_DRIFT_PPM
 ) -> Timeline | None:
     """Fit where a drifting recording starts and how fast its clock runs.
 
@@ -146,16 +142,16 @@ def fit_timeline(
     a few milliseconds, and least squares would follow it.
 
     ``None`` unless the slope clears three separate bars: measured over at least
-    ``min_span`` of recording, so it is not extrapolated across a session from
-    a moment of it; a ``confidence`` interval that excludes no difference at
-    all, so it is not noise; and at least ``min_drift_ppm``, so it is worth
-    correcting.
+    ``MIN_DRIFT_SPAN`` of recording, so it is not extrapolated across a session
+    from a moment of it; a ``DRIFT_CONFIDENCE`` interval that excludes no
+    difference at all, so it is not noise; and at least ``min_drift_ppm``, so
+    it is worth correcting.
     """
     if not points:
         return None
     local = np.asarray([point.time - point.offset for point in points])
     experiment = np.asarray([point.time for point in points])
-    rate = _fitted_rate(local, experiment, min_drift_ppm, min_span, confidence)
+    rate = _fitted_rate(local, experiment, min_drift_ppm)
     if rate is None:
         return None
     # also use the median for the offset to reduce effect of outliers
@@ -164,18 +160,14 @@ def fit_timeline(
 
 
 def _fitted_rate(
-    local: np.ndarray,
-    experiment: np.ndarray,
-    min_drift_ppm: float,
-    min_span: float,
-    confidence: float,
+    local: np.ndarray, experiment: np.ndarray, min_drift_ppm: float
 ) -> float | None:
     """The non-unit clock rate the points support, if any."""
     from scipy.stats import theilslopes
 
-    if len(local) < MIN_DRIFT_POINTS or float(np.ptp(local)) < min_span:
+    if len(local) < MIN_DRIFT_POINTS or float(np.ptp(local)) < MIN_DRIFT_SPAN:
         return None
-    slope, _, low, high = theilslopes(experiment, local, confidence)
+    slope, _, low, high = theilslopes(experiment, local, DRIFT_CONFIDENCE)
     if low <= 1.0 <= high:
         return None
     if abs(float(slope) - 1.0) * 1e6 < min_drift_ppm:

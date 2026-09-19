@@ -30,6 +30,7 @@ dependencies = [
     "onnxruntime>=1.21,<1.27; sys_platform == 'darwin'",
     # 1.21--1.26 targets CUDA 12/cuDNN 9; 1.27+ targets CUDA 13.
     "onnxruntime-gpu>=1.21,<1.27; sys_platform != 'darwin'",
+    "orjson",
     "faster-whisper",
     "tqdm",
     "huggingface-hub",
